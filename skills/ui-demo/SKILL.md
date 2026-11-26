@@ -39,7 +39,7 @@ Also `ffmpeg`, and `npm ci` in `ui/lib/ui` for Llama UI stories. `demo:pr` needs
 
 Scripts get `test` and `expect` from `helpers.ts`. Drive the page with `demo.*` (visible cursor, human timing), assert with `expect`, set the scene with `test.use`:
 
-- `demo.click`, `demo.hover`, `demo.type`, `demo.press`, `demo.scroll`, `demo.pause`, `demo.caption(text)` (a chip under the window), `demo.zoom(target, scale)` (the camera moves onto a small detail and back), `demo.zoomIn(target, scale)` ... `demo.zoomOut()` (the camera stays on it across the actions between).
+- `demo.click`, `demo.hover`, `demo.type`, `demo.press`, `demo.scroll`, `demo.pause`, `demo.caption(text)` (a chip under the window), `demo.zoom(target, scale)` (the camera moves onto a small detail and back), `demo.zoomIn(target, scale)` ... `demo.zoomOut()` (the camera stays on it across the actions between). Zoom on desktop demos, where a detail is small in the frame; a phone's UI already fills a portrait video, so leave phone demos unzoomed unless a detail is too small to read even there.
 - `test.use({ settings: {...} })` seeds UI settings, `startPath: '/#/...'` starts on a route.
 - Fixtures, so no real data or third-party server is needed:
     - **MCP servers:** two fixture servers (Weather, Notes) are always configured; see `demo/fixtures/demo-config.ts`.
