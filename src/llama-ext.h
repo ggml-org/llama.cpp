@@ -143,6 +143,9 @@ LLAMA_API bool llama_batch_ext_set_decision_order(struct llama_batch_ext * batch
 // 0 (default) is the state, k > 0 the k-th question; full attention layers hide other questions from a question
 LLAMA_API bool llama_batch_ext_set_decision_group(struct llama_batch_ext * batch, int32_t idx, int32_t group);
 
+// Reserve storage for n_tokens embedding rows of n_embd floats without adding entries.
+LLAMA_API bool llama_batch_ext_reserve_embd(struct llama_batch_ext * batch, size_t n_tokens, size_t n_embd);
+
 // Label of option i of a decision model ("<arch>.decision.labels"), nullptr past the last one
 LLAMA_API const char * llama_model_decision_label(const struct llama_model * model, uint32_t i);
 
