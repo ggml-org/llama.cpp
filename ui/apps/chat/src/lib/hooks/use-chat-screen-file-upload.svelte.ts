@@ -17,7 +17,7 @@ import { processFilesToChatUploaded } from '#lib/utils/browser-only.ts';
 import {
 	encodeFileLinkPath,
 	filterFilesByModalities,
-	getMediaMimeTypeByExtension,
+	getAttachableMimeTypeByExtension,
 	isFileTypeSupported,
 	isFileTypeSupportedByModel
 } from '#lib/utils/index.ts';
@@ -110,12 +110,12 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 	}
 
 	/**
-	 * A file picked with an `@` mention: an image, audio clip or video the model can take
+	 * A file picked with an `@` mention: an image, audio clip, video or PDF the model can take
 	 * is read from the server and attached like an uploaded one, so the model gets the file
 	 * itself and not only its path. Anything else stays a mention.
 	 */
 	async function handleFileMention(path: string) {
-		const mimeType = getMediaMimeTypeByExtension(path);
+		const mimeType = getAttachableMimeTypeByExtension(path);
 
 		if (!mimeType || !isFileTypeSupportedByModel(path, mimeType, options.capabilities())) return;
 
