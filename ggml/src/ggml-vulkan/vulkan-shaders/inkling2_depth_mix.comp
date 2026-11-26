@@ -10,7 +10,7 @@ layout (binding = 3) writeonly buffer DST   { float data_dst[];   };
 
 #define BLOCK_SIZE 256
 #define MAX_ROWS 16
-#define MAX_SG 16
+#define MAX_SG 64
 layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
 
 layout (push_constant) uniform parameter {
