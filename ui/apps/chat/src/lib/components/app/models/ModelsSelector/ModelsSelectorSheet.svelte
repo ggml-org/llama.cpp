@@ -377,8 +377,8 @@
 		</SheetPages>
 
 		<!-- the reasoning effort, then the search at the sheet's foot, in the chat form's own
-		     surface and shape -->
-		<div class="shrink-0 px-2 pt-2 pb-[max(0.5rem,var(--safe-area-bottom))]">
+		     surface and shape; both keep the lists' gutter -->
+		<div class="flex shrink-0 flex-col gap-3 px-4 pt-2 pb-[max(0.5rem,var(--safe-area-bottom))]">
 			{#if hasEffort}
 				<ModelsSelectorReasoning variant="list" />
 			{/if}

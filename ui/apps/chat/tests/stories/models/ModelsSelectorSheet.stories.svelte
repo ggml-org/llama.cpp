@@ -31,6 +31,7 @@
 	const LLAMA = model('Llama-3.2-3B-Instruct', 'meta');
 	const PHI = model('Phi-4-mini', 'microsoft');
 	const REMOVED_MODEL = 'acme/Removed-7B';
+	const REASONING_ROW_NAME = /^Reasoning/;
 
 	const groups: GroupedModelOptions = {
 		available: [
@@ -45,7 +46,8 @@
 		groups,
 		loadedItems: [QWEN],
 		open: true,
-		quickItems: [QWEN, GEMMA]
+		quickItems: [QWEN, GEMMA],
+		showReasoning: true
 	};
 </script>
 
@@ -59,6 +61,16 @@
 			await screen.findByRole('button', { name: MODELS_SHEET_TEXT.ALL_MODELS })
 		);
 		await screen.findByRole('heading', { name: MODELS_SHEET_TEXT.LOADED });
+	}}
+/>
+
+<!-- the reasoning row opens its levels in place, inside its own inset group -->
+<Story
+	{args}
+	name="Reasoning effort"
+	play={async ({ userEvent }) => {
+		await userEvent.click(await screen.findByRole('button', { name: REASONING_ROW_NAME }));
+		await screen.findByRole('button', { name: /^Off$/ });
 	}}
 />
 
