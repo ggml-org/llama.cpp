@@ -173,10 +173,10 @@ jobs:
             exit 0
           fi
 
-          if ! cache_files=$(.venv-hf/bin/hf buckets list "hf://buckets/ggml-org/cache/llama.cpp" --json | jq -r '
+          if ! cache_files=$(.venv-hf/bin/hf buckets list "hf://buckets/ggml-org/cache/llama.cpp/hip-quality-check-yaml-device-rocm-" --json | jq -r '
             .[]
             | select(.type == "file")
-            | select(.path | startswith("llama.cpp/hip-quality-check-yaml-device-rocm-") and endswith(".tar.gz"))
+            | select(.path | endswith(".tar.gz"))
             | select(try ((.uploaded_at | .[:19]+"Z" | fromdateiso8601) < (now - 30 * 24 * 60 * 60)) catch false)
             | .path
           '); then
