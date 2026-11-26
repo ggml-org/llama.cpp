@@ -26,6 +26,7 @@
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT,
 		SYSTEM_MESSAGE_PLACEHOLDER,
+		UI_DATA_ATTRS,
 		VOICE_EDITOR_SELECTOR
 	} from '#lib/constants/index.ts';
 	import {
@@ -442,6 +443,53 @@
 		return true;
 	}
 
+	// A mention and the attachment it added point at each other: hovering either one dims
+	// the rest of the message and the other attachments
+	let focusedMentionPath = $state<string | null>(null);
+
+	function handleMentionHover(event: MouseEvent) {
+		const target = event.target instanceof Element ? event.target : null;
+		const path =
+			target
+				?.closest(`[${UI_DATA_ATTRS.MENTION_PATH}]`)
+				?.getAttribute(UI_DATA_ATTRS.MENTION_PATH) ?? null;
+		const isAttached = uploadedFiles.some((file) => file.mentionPath === path);
+
+		focusedMentionPath = path && isAttached ? path : null;
+	}
+
+	$effect(() => {
+		const path = focusedMentionPath;
+
+		if (!cardEl || !path) return;
+
+		const active = [...cardEl.querySelectorAll(`[${UI_DATA_ATTRS.MENTION_PATH}]`)].filter(
+			(element) => element.getAttribute(UI_DATA_ATTRS.MENTION_PATH) === path
+		);
+
+		for (const element of active) element.setAttribute(UI_DATA_ATTRS.MENTION_ACTIVE, '');
+
+		return () => {
+			for (const element of active) element.removeAttribute(UI_DATA_ATTRS.MENTION_ACTIVE);
+		};
+	});
+
+	// listened for on the card as a whole: the badges are drawn by the editor
+	$effect(() => {
+		if (!cardEl) return;
+
+		const card = cardEl;
+		const clear = () => (focusedMentionPath = null);
+
+		card.addEventListener('mouseover', handleMentionHover);
+		card.addEventListener('mouseleave', clear);
+
+		return () => {
+			card.removeEventListener('mouseover', handleMentionHover);
+			card.removeEventListener('mouseleave', clear);
+		};
+	});
+
 	function handleFileSelect(files: File[]) {
 		onFilesAdd?.(files);
 	}
@@ -852,6 +900,7 @@
 				'!bg-muted !outline-2 -outline-offset-2 !outline-dashed !outline-border/50 [--glass-edge-focus:transparent] [--glass-edge:transparent]',
 			disabled && 'cursor-not-allowed opacity-60'
 		]}
+		data-mention-focus={focusedMentionPath !== null || undefined}
 		data-single-row={isSingleRow || undefined}
 		data-slot="input-area"
 	>
@@ -1033,3 +1082,25 @@
 	}}
 	preSelectedUri={preSelectedResourceUri}
 />
+
+<style>
+	/* While a mention or the attachment it added is hovered (see handleMentionHover), the
+	   pair stays as it is and the rest of the message and the other attachments step back */
+	.chat-form-surface :global(.cm-content),
+	.chat-form-surface :global([data-mention-path]),
+	.chat-form-surface :global([data-attachment] > *) {
+		transition:
+			color 150ms ease-out,
+			opacity 150ms ease-out;
+	}
+
+	.chat-form-surface[data-mention-focus] :global(.cm-content) {
+		color: color-mix(in oklab, currentColor 40%, transparent);
+	}
+
+	.chat-form-surface[data-mention-focus]
+		:global(.cm-content [data-mention-path]:not([data-mention-active])),
+	.chat-form-surface[data-mention-focus] :global([data-attachment]:not([data-mention-active]) > *) {
+		opacity: 0.4;
+	}
+</style>

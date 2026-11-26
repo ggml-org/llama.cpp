@@ -5,6 +5,7 @@
 		DialogMcpResourcePreview,
 		ScrollCarousel
 	} from '#lib/components/app/index.ts';
+	import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
 	import { ScrollCarouselVariant } from '#lib/enums/index.ts';
 	import { mediaGalleryStore } from '#lib/stores/index.ts';
 	import type { DatabaseMessageExtraMcpResource } from '#lib/types/index.ts';
@@ -95,17 +96,26 @@
 </script>
 
 {#snippet attachmentitem(item: ChatAttachmentDisplayItem)}
-	<ChatAttachmentsListItem
-		{imageClass}
-		{imageHeight}
-		{imageWidth}
-		{item}
-		{limitToSingleRow}
-		{onFileRemove}
-		onMcpResourcePreview={openMcpResourcePreview}
-		onPreview={(i: ChatAttachmentDisplayItem, event?: MouseEvent) => openPreview(i, event)}
-		{readonly}
-	/>
+	<!-- no box of its own: it marks the item, and the file a mention attached, for the chat form -->
+	<div
+		class="contents"
+		{...{
+			[UI_DATA_ATTRS.ATTACHMENT]: '',
+			[UI_DATA_ATTRS.MENTION_PATH]: item.uploadedFile?.mentionPath
+		}}
+	>
+		<ChatAttachmentsListItem
+			{imageClass}
+			{imageHeight}
+			{imageWidth}
+			{item}
+			{limitToSingleRow}
+			{onFileRemove}
+			onMcpResourcePreview={openMcpResourcePreview}
+			onPreview={(i: ChatAttachmentDisplayItem, event?: MouseEvent) => openPreview(i, event)}
+			{readonly}
+		/>
+	</div>
 {/snippet}
 
 {#if displayItems.length > 0 || leading}

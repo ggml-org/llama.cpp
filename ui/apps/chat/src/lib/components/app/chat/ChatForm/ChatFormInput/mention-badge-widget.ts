@@ -5,7 +5,7 @@
 import type { EditorState, Range } from '@codemirror/state';
 import { Decoration, WidgetType } from '@codemirror/view';
 import { codeRanges } from '#lib/components/app/content/MarkdownEditor/markdown-syntax.ts';
-import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+import { SETTINGS_KEYS, UI_DATA_ATTRS } from '#lib/constants/index.ts';
 import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 import { toolsStore } from '#lib/stores/tools.svelte.ts';
 import {
@@ -47,6 +47,7 @@ class MentionBadgeWidget extends WidgetType {
 		const badge = document.createElement('span');
 
 		badge.title = this.decodedPath;
+		badge.setAttribute(UI_DATA_ATTRS.MENTION_PATH, this.decodedPath);
 		badge.className = `${MENTION_BADGE_CLASSNAME} align-middle`;
 
 		const svg = document.createElementNS(MENTION_BADGE_SVG_ATTRIBUTES['xmlns'], 'svg');
