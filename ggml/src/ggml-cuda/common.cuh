@@ -923,18 +923,12 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     const __nv_fp8_e4m3 xf = *reinterpret_cast<const __nv_fp8_e4m3 *>(&bits);
     return static_cast<float>(xf) / 2;
 #else
-    if (x == 0 || (x == 0x7F && x != 0xFF)) { // Convert NaN to 0.0f
-        return 0.0f;
-    }
-    const int exp = (x >> 3) & 0xF;
-    const int man = x & 0x7;
-    float raw;
-    if (exp == 0) {
-        raw = ldexpf((float) man, -9);
-    } else {
-        raw = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
-    }
-    return static_cast<float>(raw / 2);
+    const uint32_t mag = x & 0x7Fu;
+    const uint32_t normal_bits = (mag << 20) + (119u << 23);
+    float normal;
+    memcpy(&normal, &normal_bits, sizeof(float));
+    const float res = (mag < 8u) ? (float) mag * (1.0f / 1024.0f) : normal;
+    return (x == 0x7Fu) ? 0.0f : res;
 #endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
 #endif // defined(GGML_USE_HIP) && defined(CDNA3) && defined(FP8_AVAILABLE) && HIP_VERSION >= 60200000
 }
@@ -945,20 +939,17 @@ static __host__ __device__ __forceinline__ float ggml_cuda_f8_e4m3_to_fp32(uint8
     xf.__x = x;
     return static_cast<float>(xf);
 #else
-    const uint8_t magnitude = x & 0x7F;
-    if (magnitude == 0x7F) {
-        return NAN;
-    }
-
-    const int exp = (magnitude >> 3) & 0x0F;
-    const int man = magnitude & 0x07;
-    float value;
-    if (exp == 0) {
-        value = ldexpf((float) man, -9);
-    } else {
-        value = ldexpf(1.0f + (float) man / 8.0f, exp - 7);
-    }
-    return x & 0x80 ? -value : value;
+    const uint32_t mag = x & 0x7Fu;
+    const uint32_t normal_bits = (mag << 20) + (120u << 23);
+    float normal;
+    memcpy(&normal, &normal_bits, sizeof(float));
+    const float val = (mag < 8u) ? (float) mag * (1.0f / 512.0f) : normal;
+    uint32_t val_bits;
+    memcpy(&val_bits, &val, sizeof(float));
+    val_bits |= uint32_t(x & 0x80u) << 24;
+    float signed_val;
+    memcpy(&signed_val, &val_bits, sizeof(float));
+    return (mag == 0x7Fu) ? NAN : signed_val;
 #endif // defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA)
 }
 
