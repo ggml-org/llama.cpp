@@ -600,6 +600,13 @@ struct llm_tokenizer_bpe : llm_tokenizer {
                     "\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]{2,}[\\r\\n/]*| +(?!\\S)",
                 };
                 break;
+            case LLAMA_VOCAB_PRE_TYPE_FALCON_H1:
+                // tokenizer.json isolates contiguous punctuation first, then applies a Llama-3-like regex
+                regex_exprs = {
+                    "[\\p{P}$+<=>^`|~]+",
+                    "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}{1,3}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+                };
+                break;
             case LLAMA_VOCAB_PRE_TYPE_WHITESPACE:
                 // whitespace pre-tokenizer (jinaai/jina-embeddings-v2-base-zh)
                 regex_exprs = {
@@ -2473,11 +2480,15 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
                 ignore_merges = true;
                 clean_spaces = false;
             } else if (
+                    tokenizer_pre == "falcon-h1") {
+                // tokenizer.json runs Punctuation(Contiguous) before the regex; ignore_merges is false
+                pre_type = LLAMA_VOCAB_PRE_TYPE_FALCON_H1;
+                add_bos = true;
+            } else if (
                     tokenizer_pre == "llama3"   ||
                     tokenizer_pre == "llama-v3" ||
                     tokenizer_pre == "llama-bpe"||
                     tokenizer_pre == "falcon3"  ||
-                    tokenizer_pre == "falcon-h1" ||
                     tokenizer_pre == "midm-2.0" ||
                     tokenizer_pre == "jina-v5-nano") {
                 pre_type = LLAMA_VOCAB_PRE_TYPE_LLAMA3;
