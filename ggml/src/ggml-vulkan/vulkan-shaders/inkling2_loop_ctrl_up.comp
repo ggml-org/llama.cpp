@@ -1,0 +1,62 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+
+layout (binding = 0) readonly  buffer CUR  { float data_cur[];  };
+layout (binding = 1) readonly  buffer MSG  { float data_msg[];  };
+layout (binding = 2) readonly  buffer GATE { float data_gate[]; };
+layout (binding = 3) readonly  buffer WG   { float data_wg[];   };
+layout (binding = 4) readonly  buffer WF   { float data_wf[];   };
+layout (binding = 5) writeonly buffer DST  { float data_dst[];  };
+
+layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint32_t cur_off, msg_off, gate_off, wg_off, wf_off, dst_off;
+    uint32_t n, rank, cur_s1, msg_s1, gate_s1, wg_s1, wf_s1, dst_s1;
+} p;
+
+shared vec2 s_gf[8][32];
+
+void main() {
+    const uint32_t lane = gl_LocalInvocationID.x;
+    const uint32_t row  = gl_LocalInvocationID.y;
+    const uint32_t i    = gl_WorkGroupID.x * 8u + row;
+    const uint32_t t    = gl_WorkGroupID.y;
+
+    float g = 0.0f;
+    float f = 0.0f;
+    if (i < p.n) {
+        const uint32_t gb  = p.gate_off + t * p.gate_s1;
+        const uint32_t wgb = p.wg_off   + i * p.wg_s1;
+        const uint32_t wfb = p.wf_off   + i * p.wf_s1;
+        for (uint32_t k = lane; k < p.rank; k += 32u) {
+            const float x = data_gate[gb + k];
+            g += data_wg[wgb + k] * x;
+            f += data_wf[wfb + k] * x;
+        }
+    }
+
+    vec2 gf;
+    if (gl_SubgroupSize == 32u) {
+        gf = subgroupAdd(vec2(g, f));
+    } else {
+        s_gf[row][lane] = vec2(g, f);
+        barrier();
+        [[unroll]] for (uint32_t s = 16u; s > 0u; s >>= 1u) {
+            if (lane < s) {
+                s_gf[row][lane] += s_gf[row][lane + s];
+            }
+            barrier();
+        }
+        gf = s_gf[row][0];
+    }
+
+    if (lane == 0u && i < p.n) {
+        const float c = data_cur[p.cur_off + t * p.cur_s1 + i];
+        const float m = data_msg[p.msg_off + t * p.msg_s1 + i];
+        const float a = c - tanh(gf.y) * c;
+        data_dst[p.dst_off + t * p.dst_s1 + i] = a + tanh(gf.x) * m;
+    }
+}

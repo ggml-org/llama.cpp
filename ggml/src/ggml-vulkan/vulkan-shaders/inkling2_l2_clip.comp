@@ -1,0 +1,69 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+
+layout (binding = 0) readonly  buffer X { float data_x[]; };
+layout (binding = 1) readonly  buffer W { float data_w[]; };
+layout (binding = 2) readonly  buffer F { float data_f[]; };
+layout (binding = 3) writeonly buffer D { float data_d[]; };
+
+#define BLOCK_SIZE 256
+#define MAX_SG 16
+layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint32_t ncols, nrows, nchannels, nsamples;
+    uint32_t x_off, w_off, f_off, d_off;
+    uint32_t s1, s2, s3;
+    uint32_t ws1, ws2, ws3;
+    uint32_t fs2, fs3;
+    uint32_t flags; // bit0=has_w, bit1=has_f
+    float eps, scale, bias;
+} p;
+
+shared float s_sg[MAX_SG];
+
+void main() {
+    const uint32_t row = gl_WorkGroupID.x;
+    const uint32_t tid = gl_LocalInvocationID.x;
+    if (row >= p.nrows) {
+        return;
+    }
+    const bool has_w = (p.flags & 1u) != 0u;
+    const bool has_f = (p.flags & 2u) != 0u;
+
+    for (uint32_t sample_idx = gl_WorkGroupID.z; sample_idx < p.nsamples; sample_idx += gl_NumWorkGroups.z) {
+        for (uint32_t ch = gl_WorkGroupID.y; ch < p.nchannels; ch += gl_NumWorkGroups.y) {
+            const uint32_t xb = p.x_off + sample_idx * p.s3 + ch * p.s2 + row * p.s1;
+            const uint32_t wb = p.w_off + sample_idx * p.ws3 + ch * p.ws2 + row * p.ws1;
+            const uint32_t db = p.d_off + ((sample_idx * p.nchannels + ch) * p.nrows + row) * p.ncols;
+
+            float tmp = 0.0f;
+            for (uint32_t col = tid; col < p.ncols; col += BLOCK_SIZE) {
+                const float xi = has_w ? (data_x[xb + col] * data_w[wb + col]) : data_x[xb + col];
+                tmp += xi * xi;
+            }
+            float sg_sum = subgroupAdd(tmp);
+            if (gl_SubgroupInvocationID == 0u) {
+                s_sg[gl_SubgroupID] = sg_sum;
+            }
+            barrier();
+
+            float tot = 0.0f;
+            for (uint32_t sg = 0u; sg < gl_NumSubgroups; ++sg) {
+                tot += s_sg[sg];
+            }
+
+            const float l2 = inversesqrt(max(tot, p.eps * p.eps));
+            const float fc = has_f ? data_f[p.f_off + sample_idx * p.fs3 + ch * p.fs2] : 1.0f;
+
+            for (uint32_t col = tid; col < p.ncols; col += BLOCK_SIZE) {
+                const float xi = has_w ? (data_x[xb + col] * data_w[wb + col]) : data_x[xb + col];
+                const float yi = p.scale * (l2 * xi) + p.bias;
+                data_d[db + col] = has_f ? (yi * fc) : yi;
+            }
+            barrier();
+        }
+    }
+}

@@ -1,0 +1,102 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_control_flow_attributes : enable
+
+layout (binding = 0) readonly  buffer PAST  { float data_past[];  };
+layout (binding = 1) readonly  buffer CUR   { float data_cur[];   };
+layout (binding = 2) readonly  buffer W     { float data_w[];     };
+layout (binding = 3) readonly  buffer DYN   { float data_dyn[];   };
+layout (binding = 4) readonly  buffer RES   { float data_res[];   };
+layout (binding = 5) writeonly buffer DST   { float data_dst[];   };
+layout (binding = 6) writeonly buffer STATE { float data_state[]; };
+
+#define MAX_K 8
+layout(local_size_x = 128, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint32_t past_off, cur_off, w_off, dyn_off, res_off, dst_off, state_off;
+    uint32_t past_s1, past_s2, dyn_s1;
+    uint32_t state_slot_s, state_ch_s, state_seq_s;
+    uint32_t C, K, Ts, S, kw, run, n_heads, flags; // bit0=has_dyn, bit1=has_res
+    float scale, bias;
+} p;
+
+void main() {
+    const uint32_t c = gl_GlobalInvocationID.x;
+    if (c >= p.C) {
+        return;
+    }
+
+    const int K  = int(p.K);
+    const int K1 = K - 1;
+    const bool has_dyn = (p.flags & 1u) != 0u;
+    const bool has_res = (p.flags & 2u) != 0u;
+
+    float w[MAX_K];
+    [[unroll]] for (int m = 0; m < MAX_K; ++m) {
+        w[m] = (m >= MAX_K - K) ? data_w[p.w_off + c * p.K + uint32_t(m - (MAX_K - K))] : 0.0f;
+    }
+
+    const uint32_t n_runs = (p.Ts + p.run - 1u) / p.run;
+    const uint32_t total_runs = p.S * n_runs;
+    const uint32_t head_idx = has_dyn ? (c / (p.C / p.n_heads)) : 0u;
+
+    for (uint32_t r = gl_WorkGroupID.y; r < total_runs; r += gl_NumWorkGroups.y) {
+        const uint32_t s  = r / n_runs;
+        const int t0 = int((r - s * n_runs) * p.run);
+        const int t1 = min(t0 + int(p.run), int(p.Ts));
+
+        const uint32_t pc = p.past_off + c * p.past_s1 + s * p.past_s2;
+        const uint32_t xc = p.cur_off + s * p.Ts * p.C + c;
+
+        float x[MAX_K];
+        [[unroll]] for (int m = 0; m < MAX_K - 1; ++m) {
+            const int j = t0 + m - (MAX_K - K);
+            if (j < 0) {
+                x[m] = 0.0f;
+            } else if (j < K1) {
+                x[m] = data_past[pc + uint32_t(j)];
+            } else {
+                x[m] = data_cur[xc + uint32_t(j - K1) * p.C];
+            }
+        }
+
+        for (int ts = t0; ts < t1; ++ts) {
+            const uint32_t t = s * p.Ts + uint32_t(ts);
+            x[MAX_K - 1] = data_cur[xc + uint32_t(ts) * p.C];
+
+            float y = 0.0f;
+            [[unroll]] for (int m = 0; m < MAX_K; ++m) {
+                y += x[m] * w[m];
+            }
+
+            if (has_dyn) {
+                const uint32_t db = p.dyn_off + t * p.dyn_s1 + head_idx * p.K;
+                [[unroll]] for (int lag = 0; lag < MAX_K; ++lag) {
+                    if (lag < K) {
+                        y += x[MAX_K - 1 - lag] * data_dyn[db + uint32_t(lag)];
+                    }
+                }
+            }
+
+            float o = p.scale * (x[MAX_K - 1] + y) + p.bias;
+            if (has_res) {
+                o += data_res[p.res_off + t * p.C + c];
+            }
+            data_dst[p.dst_off + t * p.C + c] = o;
+
+            [[unroll]] for (int m = 0; m < MAX_K - 1; ++m) {
+                x[m] = x[m + 1];
+            }
+
+            if (ts >= int(p.Ts) - int(p.kw)) {
+                const uint32_t sb = p.state_off + uint32_t(int(p.Ts) - 1 - ts) * p.state_slot_s + c * p.state_ch_s + s * p.state_seq_s;
+                [[unroll]] for (int m = 0; m < MAX_K - 1; ++m) {
+                    if (m >= MAX_K - K) {
+                        data_state[sb + uint32_t(m - (MAX_K - K))] = x[m];
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,38 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+
+layout (binding = 0) readonly  buffer G { float data_g[]; };
+layout (binding = 1) readonly  buffer U { float data_u[]; };
+layout (binding = 2) writeonly buffer D { float data_d[]; };
+
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint32_t ne0, ne1, ne2, nrows;
+    uint32_t g_off, u_off, d_off;
+    uint32_t g_s1, g_s2, g_s3;
+    uint32_t u_s1, u_s2, u_s3;
+    float s0, b0, s1, b1, s2, b2, s3, b3;
+} p;
+
+void main() {
+    const uint32_t i0 = gl_GlobalInvocationID.x;
+    if (i0 >= p.ne0) {
+        return;
+    }
+
+    for (uint32_t row = gl_WorkGroupID.y; row < p.nrows; row += gl_NumWorkGroups.y) {
+        const uint32_t i1 = row % p.ne1;
+        const uint32_t i2 = (row / p.ne1) % p.ne2;
+        const uint32_t i3 = row / (p.ne1 * p.ne2);
+
+        const float g = data_g[p.g_off + i3 * p.g_s3 + i2 * p.g_s2 + i1 * p.g_s1 + i0];
+        const float u = data_u[p.u_off + i3 * p.u_s3 + i2 * p.u_s2 + i1 * p.u_s1 + i0];
+
+        const float act = p.s1 * tanh(p.s0 * g + p.b0) + p.b1;
+        const float sig = 1.0f / (1.0f + exp(-g));
+        const float lin = p.s3 * tanh(p.s2 * u + p.b2) + p.b3;
+
+        data_d[p.d_off + row * p.ne0 + i0] = (act * sig) * lin;
+    }
+}

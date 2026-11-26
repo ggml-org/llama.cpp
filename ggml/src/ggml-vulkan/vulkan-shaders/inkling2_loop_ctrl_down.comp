@@ -1,0 +1,57 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+
+layout (binding = 0) readonly  buffer CUR  { float data_cur[];  };
+layout (binding = 1) readonly  buffer MSG  { float data_msg[];  };
+layout (binding = 2) readonly  buffer W    { float data_w[];    };
+layout (binding = 3) writeonly buffer GATE { float data_gate[]; };
+
+#define BLOCK_SIZE 256
+#define MAX_SG 16
+layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint32_t cur_off, msg_off, w_off, gate_off;
+    uint32_t n, cur_s1, msg_s1, w_s1, gate_s1;
+    float eps;
+} p;
+
+shared vec4 s_sg[MAX_SG];
+
+void main() {
+    const uint32_t r   = gl_WorkGroupID.x;
+    const uint32_t t   = gl_WorkGroupID.y;
+    const uint32_t tid = gl_LocalInvocationID.x;
+
+    const uint32_t cb = p.cur_off + t * p.cur_s1;
+    const uint32_t mb = p.msg_off + t * p.msg_s1;
+    const uint32_t wb = p.w_off   + r * p.w_s1;
+
+    vec4 acc = vec4(0.0f);
+    for (uint32_t i = tid; i < p.n; i += BLOCK_SIZE) {
+        const float c = data_cur[cb + i];
+        const float m = data_msg[mb + i];
+        acc.x += c * c;
+        acc.y += m * m;
+        acc.z += data_w[wb + i] * c;
+        acc.w += data_w[wb + p.n + i] * m;
+    }
+
+    vec4 sg_sum = subgroupAdd(acc);
+    if (gl_SubgroupInvocationID == 0u) {
+        s_sg[gl_SubgroupID] = sg_sum;
+    }
+    barrier();
+
+    if (tid == 0u) {
+        vec4 tot = vec4(0.0f);
+        for (uint32_t sg = 0u; sg < gl_NumSubgroups; ++sg) {
+            tot += s_sg[sg];
+        }
+        data_gate[p.gate_off + t * p.gate_s1 + r] =
+            inversesqrt(tot.x / float(p.n) + p.eps) * tot.z +
+            inversesqrt(tot.y / float(p.n) + p.eps) * tot.w;
+    }
+}

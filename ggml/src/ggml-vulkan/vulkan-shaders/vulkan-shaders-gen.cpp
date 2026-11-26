@@ -1112,6 +1112,13 @@ void process_shaders() {
     string_to_spv("snake_f16",  "snake.comp", {{"DATA_A_F16", "1"},  {"A_TYPE", "float16_t"}, {"D_TYPE", "float16_t"}});
     string_to_spv("snake_bf16", "snake.comp", {{"DATA_A_BF16", "1"}, {"DATA_D_BF16", "1"}, {"A_TYPE", "uint16_t"},  {"D_TYPE", "uint16_t"}});
 
+    string_to_spv("inkling2_situ_f32",           "inkling2_situ.comp",           {});
+    string_to_spv("inkling2_l2_clip_f32",        "inkling2_l2_clip.comp",        {});
+    string_to_spv("inkling2_short_conv_f32",     "inkling2_short_conv.comp",     {});
+    string_to_spv("inkling2_depth_mix_f32",      "inkling2_depth_mix.comp",      {});
+    string_to_spv("inkling2_loop_ctrl_down_f32", "inkling2_loop_ctrl_down.comp", {});
+    string_to_spv("inkling2_loop_ctrl_up_f32",   "inkling2_loop_ctrl_up.comp",   {});
+
     string_to_spv("pool1d_f32", "pool1d.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("pool2d_f32", "pool2d.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}}));
     string_to_spv("pool2d_subgroup_f32", "pool2d.comp", merge_maps(base_dict, {{"A_TYPE", "float"}, {"D_TYPE", "float"}, {"USE_SUBGROUP", "1"}}));

@@ -1,0 +1,113 @@
+#version 450
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+
+layout (binding = 0) readonly  buffer STACK { float data_stack[]; };
+layout (binding = 1) readonly  buffer CUR   { float data_cur[];   };
+layout (binding = 2) readonly  buffer QUERY { float data_query[]; };
+layout (binding = 3) writeonly buffer DST   { float data_dst[];   };
+
+#define BLOCK_SIZE 256
+#define MAX_ROWS 16
+#define MAX_SG 16
+layout(local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout (push_constant) uniform parameter {
+    uint32_t stack_off, cur_off, query_off, dst_off;
+    uint32_t n, B, Q, T;
+    uint32_t stack_s1, stack_s2, cur_s1, query_s1;
+    uint32_t norm_cur;
+    float eps, scale;
+} p;
+
+shared float s_sg[MAX_SG][MAX_ROWS + 2];
+
+void main() {
+    const uint32_t q   = gl_WorkGroupID.x;
+    const uint32_t t   = gl_WorkGroupID.y;
+    const uint32_t tid = gl_LocalInvocationID.x;
+    if (q >= p.Q || t >= p.T) {
+        return;
+    }
+
+    const uint32_t qb = p.query_off + q * p.query_s1;
+    const uint32_t sb = p.stack_off + t * p.stack_s2;
+    const uint32_t cb = p.cur_off   + t * p.cur_s1;
+
+    float acc[MAX_ROWS + 2];
+    [[unroll]] for (uint32_t r = 0u; r < MAX_ROWS + 2u; ++r) {
+        acc[r] = 0.0f;
+    }
+
+    for (uint32_t i = tid; i < p.n; i += BLOCK_SIZE) {
+        const float qi = data_query[qb + i];
+        [[unroll]] for (uint32_t r = 0u; r < MAX_ROWS; ++r) {
+            if (r < p.B) {
+                acc[r] += data_stack[sb + r * p.stack_s1 + i] * qi;
+            }
+        }
+        const float xi = data_cur[cb + i];
+        acc[MAX_ROWS]      += xi * qi;
+        acc[MAX_ROWS + 1u] += xi * xi;
+    }
+
+    // Subgroup reduction into shared memory — only ONE barrier for ALL rows!
+    [[unroll]] for (uint32_t r = 0u; r < MAX_ROWS + 2u; ++r) {
+        if (r < p.B || r >= MAX_ROWS) {
+            float v = subgroupAdd(acc[r]);
+            if (gl_SubgroupInvocationID == 0u) {
+                s_sg[gl_SubgroupID][r] = v;
+            }
+        }
+    }
+    barrier();
+
+    const uint32_t n_sg = gl_NumSubgroups;
+    [[unroll]] for (uint32_t r = 0u; r < MAX_ROWS + 2u; ++r) {
+        if (r < p.B || r >= MAX_ROWS) {
+            float tot = 0.0f;
+            for (uint32_t sg = 0u; sg < n_sg; ++sg) {
+                tot += s_sg[sg][r];
+            }
+            acc[r] = tot;
+        }
+    }
+
+    const float sc = (p.norm_cur != 0u) ? inversesqrt(acc[MAX_ROWS + 1u] / float(p.n) + p.eps) : 1.0f;
+
+    float mx = p.scale * (sc * acc[MAX_ROWS]);
+    [[unroll]] for (uint32_t r = 0u; r < MAX_ROWS; ++r) {
+        if (r < p.B) {
+            acc[r] = p.scale * acc[r];
+            mx = max(mx, acc[r]);
+        }
+    }
+
+    float p_cur = exp(p.scale * (sc * acc[MAX_ROWS]) - mx);
+    float sum = 0.0f;
+    [[unroll]] for (uint32_t r = 0u; r < MAX_ROWS; ++r) {
+        if (r < p.B) {
+            acc[r] = exp(acc[r] - mx);
+            sum += acc[r];
+        }
+    }
+    sum += p_cur;
+
+    const float inv = 1.0f / sum;
+    [[unroll]] for (uint32_t r = 0u; r < MAX_ROWS; ++r) {
+        acc[r] *= inv;
+    }
+    p_cur *= inv * sc;
+
+    for (uint32_t i = tid; i < p.n; i += BLOCK_SIZE) {
+        float o = 0.0f;
+        [[unroll]] for (uint32_t r = 0u; r < MAX_ROWS; ++r) {
+            if (r < p.B) {
+                o += acc[r] * data_stack[sb + r * p.stack_s1 + i];
+            }
+        }
+        o += p_cur * data_cur[cb + i];
+        data_dst[p.dst_off + (t * p.n + i) * p.Q + q] = o;
+    }
+}

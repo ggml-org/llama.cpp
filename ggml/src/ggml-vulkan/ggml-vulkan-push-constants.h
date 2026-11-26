@@ -1255,3 +1255,54 @@ static vk_op_binary_push_constants ggml_vk_rms_norm_push_constants(
     };
 }
 
+struct vk_op_inkling2_situ_push_constants {
+    uint32_t ne0, ne1, ne2, nrows;
+    uint32_t g_off, u_off, d_off;
+    uint32_t g_s1, g_s2, g_s3;
+    uint32_t u_s1, u_s2, u_s3;
+    float s0, b0, s1, b1, s2, b2, s3, b3;
+};
+static_assert(sizeof(vk_op_inkling2_situ_push_constants) <= 128, "situ push constants > 128");
+
+struct vk_op_inkling2_l2_clip_push_constants {
+    uint32_t ncols, nrows, nchannels, nsamples;
+    uint32_t x_off, w_off, f_off, d_off;
+    uint32_t s1, s2, s3;
+    uint32_t ws1, ws2, ws3;
+    uint32_t fs2, fs3;
+    uint32_t flags;
+    float eps, scale, bias;
+};
+static_assert(sizeof(vk_op_inkling2_l2_clip_push_constants) <= 128, "l2_clip push constants > 128");
+
+struct vk_op_inkling2_short_conv_push_constants {
+    uint32_t past_off, cur_off, w_off, dyn_off, res_off, dst_off, state_off;
+    uint32_t past_s1, past_s2, dyn_s1;
+    uint32_t state_slot_s, state_ch_s, state_seq_s;
+    uint32_t C, K, Ts, S, kw, run, n_heads, flags;
+    float scale, bias;
+};
+static_assert(sizeof(vk_op_inkling2_short_conv_push_constants) <= 128, "short_conv push constants > 128");
+
+struct vk_op_inkling2_depth_mix_push_constants {
+    uint32_t stack_off, cur_off, query_off, dst_off;
+    uint32_t n, B, Q, T;
+    uint32_t stack_s1, stack_s2, cur_s1, query_s1;
+    uint32_t norm_cur;
+    float eps, scale;
+};
+static_assert(sizeof(vk_op_inkling2_depth_mix_push_constants) <= 128, "depth_mix push constants > 128");
+
+struct vk_op_inkling2_loop_ctrl_down_push_constants {
+    uint32_t cur_off, msg_off, w_off, gate_off;
+    uint32_t n, cur_s1, msg_s1, w_s1, gate_s1;
+    float eps;
+};
+static_assert(sizeof(vk_op_inkling2_loop_ctrl_down_push_constants) <= 128, "loop_ctrl_down push constants > 128");
+
+struct vk_op_inkling2_loop_ctrl_up_push_constants {
+    uint32_t cur_off, msg_off, gate_off, wg_off, wf_off, dst_off;
+    uint32_t n, rank, cur_s1, msg_s1, gate_s1, wg_s1, wf_s1, dst_s1;
+};
+static_assert(sizeof(vk_op_inkling2_loop_ctrl_up_push_constants) <= 128, "loop_ctrl_up push constants > 128");
+

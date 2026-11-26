@@ -1006,6 +1006,12 @@ struct vk_device_struct {
     vk_pipeline pipeline_snake_f32;
     vk_pipeline pipeline_snake_f16;
     vk_pipeline pipeline_snake_bf16;
+    vk_pipeline pipeline_inkling2_situ_f32;
+    vk_pipeline pipeline_inkling2_l2_clip_f32;
+    vk_pipeline pipeline_inkling2_short_conv_f32;
+    vk_pipeline pipeline_inkling2_depth_mix_f32;
+    vk_pipeline pipeline_inkling2_loop_ctrl_down_f32;
+    vk_pipeline pipeline_inkling2_loop_ctrl_up_f32;
     vk_pipeline pipeline_pool1d_f32;
     vk_pipeline pipeline_pool2d_f32;
     vk_pipeline pipeline_pool2d_subgroup_f32;
@@ -1362,13 +1368,33 @@ struct ggml_backend_vk_context {
     // Bitmask of which fused ops need to write an intermediate value to memory.
     // Bit 'i' means nodes[start_of_fusion + i] writes to memory.
     // If there's no fusion, bit 0 is still set.
-    int fused_ops_write_mask {};
+    uint64_t fused_ops_write_mask {};
     topk_moe_mode fused_topk_moe_mode {};
     bool fused_topk_moe_scale {};
     // QSA indexer gather+add+top_k fused into one radix-select
     bool fused_topk_qsa {};
     bool fused_hc_post_gate {};
     rms_norm_mode fused_rms_norm_mode {RMS_NORM_COUNT};
+    // Inkling 2 fused chain mode: 0=none, 1=situ, 2=l2_clip, 3=depth_mix, 4=loop_ctrl, 5=short_conv
+    int fused_inkling2_mode {};
+    // Cached tensors/params for matched Inkling 2 short_conv
+    struct {
+        const ggml_tensor * past {};
+        const ggml_tensor * cur {};
+        const ggml_tensor * w {};
+        const ggml_tensor * dyn {};
+        const ggml_tensor * resid {};
+        const ggml_tensor * cell {};
+        ggml_tensor * dst {};
+        int64_t kw {};
+        int64_t run {};
+        int64_t n_heads {};
+        int64_t slot_s {};
+        int64_t ch_s {};
+        int64_t seq_s {};
+        float scale {};
+        float bias {};
+    } fused_inkling2_conv;
 
     // for GGML_VK_PERF_LOGGER
     std::unique_ptr<vk_perf_logger> perf_logger;
