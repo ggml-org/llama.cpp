@@ -1401,6 +1401,86 @@ static void xmx_mul_mat_ncols(const void *    vx,
 
 #endif // GGML_SYCL_MMVQ_HAS_XMX
 
+// ---------------------------------------------------------------------------
+// IQ3_S, SOA reorder layout produced by reorder_qw_iq3_s:
+//   [qs: nb*(QK_K/4)] [qh: nb*(QK_K/32)] [signs: nb*(QK_K/8)] [d, scales: nb*(2+IQ3S_N_SCALE)]
+// with nb = nrows*num_blocks_per_row. The grid is staged in local memory.
+// ---------------------------------------------------------------------------
+template <> struct esimd_reorder_q_traits<GGML_TYPE_IQ3_S> {
+    static constexpr int SLM_WORDS = 512;
+
+    struct ptrs {
+        const uint8_t * qs;
+        const uint8_t * qh;
+        const uint8_t * signs;
+        const uint8_t * meta;
+    };
+
+    static ESIMD_INLINE ptrs make_ptrs(const void * vx, size_t nb) {
+        const uint8_t * qs    = (const uint8_t *) vx;
+        const uint8_t * qh    = qs + nb * (QK_K / 4);
+        const uint8_t * signs = qh + nb * (QK_K / 32);
+        return { qs, qh, signs, signs + nb * (QK_K / 8) };
+    }
+
+    static ESIMD_INLINE void stage(sycl::local_accessor<float, 1> lmem, int tid) {
+        using namespace sycl::ext::intel::esimd;
+        constexpr int n = SLM_WORDS / GGML_SYCL_DMMV_ESIMD_WG_SIZE;
+        block_store<float, n>(lmem, tid * n * sizeof(float), block_load<float, n>((const float *) iq3s_grid + tid * n));
+    }
+
+    static ESIMD_INLINE void mac(sycl::local_accessor<float, 1>              lmem,
+                                 const ptrs &                                p,
+                                 size_t                                      bi,
+                                 sycl::ext::intel::esimd::simd<float, 256> & y_vec,
+                                 sycl::ext::intel::esimd::simd<float, 32> &  acc) {
+        using namespace sycl::ext::intel::esimd;
+
+        simd<uint8_t, QK_K / 4>  qs    = block_load<uint8_t, QK_K / 4>(p.qs + bi * (QK_K / 4));
+        simd<uint8_t, QK_K / 32> qh    = block_load<uint8_t, QK_K / 32>(p.qh + bi * (QK_K / 32));
+        simd<uint8_t, QK_K / 8>  signs = block_load<uint8_t, QK_K / 8>(p.signs + bi * (QK_K / 8));
+
+        // grid g takes bit g of qh as its 9th index bit, weight i is negated by bit i of signs
+        simd<uint16_t, QK_K / 4> g    = simd<uint16_t, QK_K / 4>(0, 1);
+        simd<uint16_t, QK_K / 4> hi   = (qh.replicate_vs_w_hs<QK_K / 32, 1, 8, 0>(0) >> (g & 7)) & 1;
+        simd<uint32_t, QK_K / 4> idx  = convert<uint32_t>(qs) | (convert<uint32_t>(hi) << 8);
+        simd<float, QK_K / 4>    grid = gather<float, QK_K / 4>(lmem, idx * sizeof(uint32_t));
+
+        simd<uint16_t, QK_K> i   = simd<uint16_t, QK_K>(0, 1);
+        simd<uint16_t, QK_K> neg = (signs.replicate_vs_w_hs<QK_K / 8, 1, 8, 0>(0) >> (i & 7)) & 1;
+        simd<float, QK_K>    w   = convert<float>(grid.bit_cast_view<uint8_t>().read());
+        w.merge(-w, neg != 0);
+
+        const uint8_t *   meta = p.meta + bi * (sizeof(ggml_half) + IQ3S_N_SCALE);
+        const float       d    = (float) *(const sycl::half *) meta;
+        simd<uint8_t, IQ3S_N_SCALE> sb =
+            block_load<uint8_t, IQ3S_N_SCALE>(meta + sizeof(ggml_half), overaligned_tag<2>{});
+        simd<uint16_t, 8> sc;
+        sc.select<4, 2>(0)   = sb & 0x0F;
+        sc.select<4, 2>(1)   = sb >> 4;
+        simd<float, 8> scale = (convert<float>(sc) * 2.0f + 1.0f) * d;
+#pragma unroll
+        for (int s = 0; s < 8; ++s) {
+            acc += y_vec.select<32, 1>(32 * s) * w.select<32, 1>(32 * s) * (float) scale[s];
+        }
+    }
+
+    static ESIMD_INLINE void mac_pair(sycl::local_accessor<float, 1>              lmem,
+                                      const ptrs &                                pa,
+                                      size_t                                      bia,
+                                      const ptrs &                                pb,
+                                      size_t                                      bib,
+                                      bool                                        has_b,
+                                      sycl::ext::intel::esimd::simd<float, 256> & y_vec,
+                                      sycl::ext::intel::esimd::simd<float, 32> &  acc_a,
+                                      sycl::ext::intel::esimd::simd<float, 32> &  acc_b) {
+        mac(lmem, pa, bia, y_vec, acc_a);
+        if (has_b) {
+            mac(lmem, pb, bib, y_vec, acc_b);
+        }
+    }
+};
+
 } // namespace ggml_sycl_esimd
 
 #endif // GGML_SYCL_ESIMD_HPP
