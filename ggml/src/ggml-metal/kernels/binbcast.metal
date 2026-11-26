@@ -205,7 +205,6 @@ kernel void kernel_add_id(
     }
 }
 
-// applies the weight scale of ggml_mul_mat_ext / ggml_mul_mat_id_ext to the mat-mul result in place
 kernel void kernel_mul_mat_scale(
         constant ggml_metal_kargs_mul_mat_scale & args,
         device const char * scale,
@@ -222,7 +221,6 @@ kernel void kernel_mul_mat_scale(
 
     if (args.use_ids) {
         const int32_t expert = *((device const int32_t *) (ids + i1*args.ids_nb0 + i2*args.ids_nb1));
-        // a skipped slot has no expert, its row stays zero
         if (expert < 0) {
             return;
         }

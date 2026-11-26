@@ -296,8 +296,8 @@ typedef struct {
     uint64_t nb1;
     uint64_t nb2;
     uint64_t nb3;
-    uint64_t s_nb0;   // stride of the scale per output channel, 0 for one value per row
-    uint64_t s_nb1;   // stride of the scale per expert, used when ids select the expert
+    uint64_t s_nb0;
+    uint64_t s_nb1;
     uint64_t ids_nb0;
     uint64_t ids_nb1;
     int32_t  use_ids;

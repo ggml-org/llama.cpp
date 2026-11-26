@@ -3220,8 +3220,6 @@ int ggml_metal_op_add_id(ggml_metal_op_t ctx, int idx) {
     return 1;
 }
 
-// multiplies the mat-mul result in place by the weight scale of ggml_mul_mat_ext / ggml_mul_mat_id_ext
-// the activation scale needs nothing: the activations are not quantized with it, so it cancels out
 int ggml_metal_op_mul_mat_scale(ggml_metal_op_t ctx, int idx) {
     ggml_tensor * op = ctx->node(idx);
 
@@ -3240,7 +3238,6 @@ int ggml_metal_op_mul_mat_scale(ggml_metal_op_t ctx, int idx) {
     const ggml_tensor * src0 = op->src[0];
     const ggml_tensor * ids  = op->op == GGML_OP_MUL_MAT_ID ? op->src[2] : nullptr;
 
-    // per-expert scales are [n_expert] or [n_out, n_expert], selected through ids
     const bool per_channel_expert = ids && scale->ne[0] == op->ne[0] && scale->ne[1] == src0->ne[2];
     const bool per_expert         = ids && (ggml_nelements(scale) == src0->ne[2] || per_channel_expert);
     const bool per_channel        = per_expert ? per_channel_expert : scale->ne[0] == op->ne[0] && ggml_nelements(scale) > 1;
@@ -3258,7 +3255,6 @@ int ggml_metal_op_mul_mat_scale(ggml_metal_op_t ctx, int idx) {
         /*.use_ids =*/ per_expert,
     };
 
-    // the scale is applied to the result of the mat-mul encoded just before
     ggml_metal_op_concurrency_reset(ctx);
 
     auto pipeline = ggml_metal_library_get_pipeline_mul_mat_scale(lib);

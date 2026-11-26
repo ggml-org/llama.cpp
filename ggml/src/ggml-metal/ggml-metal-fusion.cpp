@@ -793,7 +793,6 @@ static bool ggml_metal_fusion_check_mul_mat_add(
     const ggml_tensor * mm  = nodes[0];
     const ggml_tensor * add = nodes[1];
 
-    // the weight scale applies to the mat-mul result, before the residual
     if (ggml_get_src_scale(mm, 0) != nullptr) {
         return false;
     }
