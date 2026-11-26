@@ -33,7 +33,7 @@ export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[]
 		},
 		{
 			action: ChatFormCommandAction.COMPACT,
-			description: 'Summarize the conversation to free up context',
+			description: 'Summarize to free up context',
 			disabled: !options.canCompact(),
 			keywords: ['summarize', 'context'],
 			name: 'compact'
