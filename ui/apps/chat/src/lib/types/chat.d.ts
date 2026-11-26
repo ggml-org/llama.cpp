@@ -265,6 +265,8 @@ export interface ChatFormCommand {
 	keywords?: string[];
 	action: ChatFormCommandAction;
 	disabled: boolean;
+	/** Takes an argument after a space (`/cwd ~/git`); the others end at their name. */
+	takesArgument?: boolean;
 }
 
 /**

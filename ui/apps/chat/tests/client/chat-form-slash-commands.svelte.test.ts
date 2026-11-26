@@ -1,7 +1,8 @@
 // Guards the slash-command dispatch contract: commands dispatch only on
 // explicit selection (Enter/click in the picker), never mid-typing.
-// Typing `/model is broken` is prose until the command is picked - the
-// buffer must survive; only an actual selection consumes the token.
+// Typing `/model is broken` is prose: `/model` takes no argument, so the
+// words after it close the picker and the buffer survives; only an actual
+// selection consumes the token.
 
 import ChatFormPickersHarness from './components/ChatFormPickersHarness.svelte';
 import { tick } from 'svelte';
@@ -22,8 +23,7 @@ describe('slash command dispatch', () => {
 		expect(screen.component.getValue()).toBe('/model is broken');
 		expect(screen.component.getCalls()).not.toContain('openModelSelector');
 		expect(screen.component.getCalls().some((c) => c.startsWith('setValue:'))).toBe(false);
-		expect(pickers.isCommandPickerOpen).toBe(true);
-		expect(pickers.commandQuery).toBe('model');
+		expect(pickers.isCommandPickerOpen).toBe(false);
 	});
 
 	it('dispatches /model on explicit selection and consumes the token', async () => {
@@ -31,7 +31,7 @@ describe('slash command dispatch', () => {
 
 		await tick();
 
-		screen.component.type('/model is broken');
+		screen.component.type('/model');
 		await tick();
 
 		const pickers = screen.component.getPickers();
@@ -277,6 +277,30 @@ describe('/cwd command in the chat input', () => {
 
 		expect(screen.component.getValue()).toBe('fix the build');
 		expect(pickers.isWorkingDirectoryPickerOpen).toBe(false);
+	});
+
+	it('closes when its command is deleted, whatever else the message says', async () => {
+		const screen = render(ChatFormPickersHarness, {
+			cwd: '/home/me/git',
+			serverHome: '/home/me'
+		});
+
+		await tick();
+
+		const pickers = screen.component.getPickers();
+
+		screen.component.typeAt('why does /cwd break|');
+		pickers.handleWorkingDirectoryOpen();
+		await tick();
+
+		expect(screen.component.getValue()).toBe('why does /cwd break /cwd ~/git');
+
+		// deleting ` /cwd ~/git` shifts the text by as much as the other `/cwd` is away
+		screen.component.typeAt('why does /cwd break|');
+		await tick();
+
+		expect(pickers.isWorkingDirectoryPickerOpen).toBe(false);
+		expect(screen.component.getValue()).toBe('why does /cwd break');
 	});
 
 	it('completes a typed /cw command where it is, on selection', async () => {

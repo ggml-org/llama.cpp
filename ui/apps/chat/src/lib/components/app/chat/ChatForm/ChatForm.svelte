@@ -701,10 +701,14 @@
 
 	/** Sends the message; dictated text that is still being refined is sent refined. */
 	async function submit() {
-		// sending closes the directory picker first, so its `/cwd` line is not sent as text
-		if (pickers.isWorkingDirectoryPickerOpen) pickers.handleWorkingDirectoryClose();
-
 		if (!canSubmit || disabled || hasLoadingAttachments || isSendWaiting) return;
+
+		// sending closes the directory picker first, so its `/cwd` command is not sent as text
+		if (pickers.isWorkingDirectoryPickerOpen) {
+			pickers.handleWorkingDirectoryClose();
+
+			if (!canSubmit) return;
+		}
 
 		if (voice.isRefining) {
 			isSendWaiting = true;

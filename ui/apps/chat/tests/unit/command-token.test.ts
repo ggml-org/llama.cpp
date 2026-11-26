@@ -9,7 +9,8 @@ import {
 } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
-const COMMANDS = ['prompt', 'cwd', 'model', 'compact', 'system-message'];
+// the commands that take an argument
+const COMMANDS = ['prompt', 'cwd'];
 
 /** The token with the caret at `|` in `text`. */
 function tokenAt(text: string, commands: readonly string[] = COMMANDS) {
@@ -59,6 +60,12 @@ describe('findCommandToken', () => {
 	it('ends the argument at two spaces or a new line', () => {
 		expect(tokenAt('/cwd docs  more|')).toBeNull();
 		expect(tokenAt('/cwd docs\nmore|')).toBeNull();
+	});
+
+	it('leaves the words after a command without an argument to the message', () => {
+		expect(tokenAt('/model is broken|')).toBeNull();
+		expect(tokenAt('please use /m the small one|')).toBeNull();
+		expect(tokenAt('please use /m|')).toEqual({ args: '', end: 13, name: 'm', start: 11 });
 	});
 
 	it('takes no argument for an unknown name', () => {
@@ -121,12 +128,16 @@ describe('the /cwd command', () => {
 	});
 
 	it('is found again after an edit elsewhere', () => {
-		expect(locateCwdCommand('so, fix /cwd docs now', 4, 'docs')).toEqual({
+		expect(locateCwdCommand('so, fix /cwd docs now', 4, 'docs', 4)).toEqual({
 			end: 17,
 			query: 'docs',
 			start: 8
 		});
 		expect(locateCwdCommand('fix the build', 4, 'docs')).toBeNull();
+	});
+
+	it('is looked for only where it was or where the edit moved it', () => {
+		expect(locateCwdCommand('why does /cwd break', 20, '~/git', -6)).toBeNull();
 	});
 
 	it('reads its path to two spaces or the end of the line when it changed', () => {

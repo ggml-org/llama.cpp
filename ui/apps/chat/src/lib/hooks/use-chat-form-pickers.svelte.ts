@@ -78,9 +78,10 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	let mentionDismissedSnapshot: MentionDismissSnapshot | null = null;
 	// Same dismissal contract for the `/`-command token.
 	let commandDismissedSnapshot: CommandDismissSnapshot | null = null;
-	// Where the open working directory picker's `/cwd` command is, and its path as last
-	// typed: an edit elsewhere in the message moves it, and it is found again from these
-	let cwdCommand: { start: number; query: string } | null = null;
+	// Where the open working directory picker's `/cwd` command is, its path as last typed,
+	// and the input's length then: an edit elsewhere in the message moves it by the
+	// change in length if it was made before it
+	let cwdCommand: { start: number; query: string; length: number } | null = null;
 
 	// Fall back to the server home so the picker still finds matches
 	// before a cwd is set.
@@ -94,13 +95,28 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			showModelSelector: opts.getShowModelSelector()
 		})
 	);
-	const commandNames = $derived(availableCommands.map((command) => command.name));
+	// only the commands that take an argument read the words after them
+	const commandNames = $derived(
+		availableCommands.filter((command) => command.takesArgument).map((command) => command.name)
+	);
 	const caretOf = (value: string) => opts.getCaretOffset() ?? value.length;
 	const commandAt = (value: string) => findCommandToken(value, caretOf(value), commandNames);
 
 	/** The open picker's `/cwd` command where it now is, or null when it was edited away. */
 	function currentCwdCommand(value = opts.getValue()) {
-		return cwdCommand ? locateCwdCommand(value, cwdCommand.start, cwdCommand.query) : null;
+		if (!cwdCommand) return null;
+
+		const { length, query, start } = cwdCommand;
+		const shift = value.length - length;
+		const caret = opts.getCaretOffset();
+		// an edit made before the command leaves the caret before it too
+		const isEditBefore = caret === undefined || caret <= start + shift;
+
+		return locateCwdCommand(value, start, query, isEditBefore ? shift : 0);
+	}
+
+	function trackCwdCommand(start: number, query: string, value: string) {
+		cwdCommand = { length: value.length, query, start };
 	}
 
 	function setValueAndCaret(value: string, caret: number) {
@@ -146,7 +162,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				const next = replaceWithCwdCommand(opts.getValue(), token, query);
 
 				isWorkingDirectoryInline = opts.editsCwdInline();
-				cwdCommand = { query, start: next.start };
+				trackCwdCommand(next.start, query, next.value);
 				setValueAndCaret(next.value, next.caret);
 				workingDirectoryQuery = query;
 				isWorkingDirectoryPickerOpen = true;
@@ -177,13 +193,16 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			isCommandPickerOpen = false;
 			commandQuery = '';
 
+			// the path as typed when the caret is in the command, not in another `/cwd` the
+			// message names
+			const tracked = currentCwdCommand(value);
 			const located =
-				command?.name === CWD_COMMAND_NAME
+				tracked && command?.name === CWD_COMMAND_NAME && command.start === tracked.start
 					? { query: command.args, start: command.start }
-					: currentCwdCommand(value);
+					: tracked;
 
 			if (located) {
-				cwdCommand = { query: located.query, start: located.start };
+				trackCwdCommand(located.start, located.query, value);
 				workingDirectoryQuery = located.query.trim();
 			} else {
 				isWorkingDirectoryPickerOpen = false;
@@ -357,13 +376,13 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 			const located = currentCwdCommand(value);
 
 			if (located) {
-				cwdCommand = { query: located.query, start: located.start };
+				trackCwdCommand(located.start, located.query, value);
 				workingDirectoryQuery = located.query.trim();
 				queueMicrotask(() => opts.setCaretOffset(located.end));
 			} else {
 				const next = insertCwdCommand(value, caretOf(value), seed);
 
-				cwdCommand = { query: seed, start: next.start };
+				trackCwdCommand(next.start, seed, next.value);
 				workingDirectoryQuery = seed;
 				setValueAndCaret(next.value, next.caret);
 			}
@@ -396,7 +415,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 
 		const next = replaceWithCwdCommand(opts.getValue(), located, query);
 
-		cwdCommand = { query, start: next.start };
+		trackCwdCommand(next.start, query, next.value);
 		opts.setValue(next.value);
 	});
 

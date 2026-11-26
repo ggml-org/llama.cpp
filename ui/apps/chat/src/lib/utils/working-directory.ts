@@ -216,9 +216,11 @@ function rankScore(path: string, query: string): number {
 	return RANK_OTHER;
 }
 
-/** True when the path is, or sits inside, a hidden folder (`.config/llama`). */
+/** True when the path is, or sits inside, a hidden folder (`.config/llama`, `git\\.cache`). */
 export function isHiddenPath(path: string): boolean {
-	return path.split(PATH_SEPARATOR).some((segment) => segment.startsWith(HIDDEN_NAME_PREFIX));
+	return toPosixSeparators(path)
+		.split(PATH_SEPARATOR)
+		.some((segment) => segment.startsWith(HIDDEN_NAME_PREFIX));
 }
 
 /**

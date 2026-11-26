@@ -219,6 +219,7 @@ async function runFuzzyFolderSearch(
 	const close = new Map<string, GlobEntry>();
 
 	let base = '';
+	let error: string | undefined;
 
 	for (const maxDepth of depths) {
 		const results = await Promise.all(
@@ -228,6 +229,10 @@ async function runFuzzyFolderSearch(
 		);
 
 		base = results.find((res) => !res.error)?.base ?? base;
+		// a walk whose every glob failed reports why, rather than finding nothing
+		error = results.every((res) => res.error) ? results[0]?.error : undefined;
+
+		if (error) break;
 
 		for (const entry of results.flatMap((res) => res.entries)) {
 			if (fuzzyDistance(lastPathSegment(entry.path), args.rankQuery) <= SEARCH.FUZZY_MAX_EDITS) {
@@ -237,6 +242,8 @@ async function runFuzzyFolderSearch(
 
 		if (close.size > 0) break;
 	}
+
+	if (error && close.size === 0) return { args, base, entries: [], error };
 
 	const entries = rankEntries([...close.values()], args.rankQuery);
 

@@ -56,10 +56,12 @@ function wordEnd(value: string, cursor: number): number {
  * The slash command the caret is in, anywhere in the input: a `/` at the input's start or
  * after whitespace, then the command's name, as in `fix this /cwd ~/git`.
  *
- * A known command (one of `commands`, or the start of one's name) takes an argument after
- * a space, single spaces included (`/cwd ~/My Documents`); like an `@` mention, two spaces or a new line end it.
- * So a path in the argument (`/cwd /usr/lo`) is not taken for a command of its own, unless
- * it names one. After the caret the token runs to the end of the word.
+ * A command that takes an argument (one of `commands`, or the start of one's name) takes
+ * it after a space, single spaces included (`/cwd ~/My Documents`); like an `@` mention,
+ * two spaces or a new line end it. So a path in the argument (`/cwd /usr/lo`) is not taken
+ * for a command of its own, unless it names one. Any other command ends at its name: the
+ * words after `/model` are the message's. After the caret the token runs to the end of the
+ * word.
  */
 export function findCommandToken(
 	value: string,
@@ -84,7 +86,7 @@ export function findCommandToken(
 		break;
 	}
 
-	// a known command further back on the run, with the caret in its argument
+	// a command that takes an argument further back on the run, with the caret in it
 	let withArgs: CommandToken | null = null;
 
 	for (let i = cursor - 1; i >= from; i--) {
@@ -200,31 +202,25 @@ export function insertCwdCommand(
 }
 
 /**
- * Finds the `/cwd` command again after an edit somewhere else: at `start` if it is still
- * there, or the nearest one. Its argument is `query` when the text still reads so, or else
- * runs to two spaces or the end of the line. Null when the command is gone.
+ * Finds the `/cwd` command again after an edit somewhere else: at `start` if the edit was
+ * after it, or moved by `shift` (the change in the input's length) if it was before. Its
+ * argument is `query` when the text still reads so, or else runs to two spaces or the end
+ * of the line. Null when the command is gone, even if the message names `/cwd` elsewhere.
  */
 export function locateCwdCommand(
 	value: string,
 	start: number,
-	query: string
+	query: string,
+	shift = 0
 ): { start: number; end: number; query: string } | null {
 	const isCwdAt = (index: number) =>
 		startsCommand(value, index) &&
 		value.startsWith(CWD_COMMAND_PREFIX.trimEnd(), index) &&
 		(index + CWD_COMMAND_PREFIX.length - 1 === value.length ||
 			isWhitespace(value[index + CWD_COMMAND_PREFIX.length - 1]));
+	const found = [start, start + shift].find(isCwdAt);
 
-	let found = -1;
-
-	for (let distance = 0; distance <= value.length; distance++) {
-		if (isCwdAt(start - distance)) found = start - distance;
-		else if (isCwdAt(start + distance)) found = start + distance;
-
-		if (found !== -1) break;
-	}
-
-	if (found === -1) return null;
+	if (found === undefined) return null;
 
 	const argsStart = Math.min(found + CWD_COMMAND_PREFIX.length, value.length);
 

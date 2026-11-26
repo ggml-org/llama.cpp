@@ -16,14 +16,16 @@ export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[]
 			action: ChatFormCommandAction.PROMPT,
 			description: 'Insert an MCP prompt',
 			disabled: !options.hasPrompts(),
-			name: 'prompt'
+			name: 'prompt',
+			takesArgument: true
 		},
 		{
 			action: ChatFormCommandAction.CWD,
 			description: SET_WORKING_DIRECTORY_LABEL,
 			disabled: !options.hasCwdTools(),
 			keywords: ['current working directory'],
-			name: CWD_COMMAND_NAME
+			name: CWD_COMMAND_NAME,
+			takesArgument: true
 		},
 		{
 			action: ChatFormCommandAction.MODEL,
