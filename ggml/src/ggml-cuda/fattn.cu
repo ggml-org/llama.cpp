@@ -749,12 +749,15 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         gqa_ratio_eff *= 2;
     }
 
+    // the tile kernel for DKQ=576 only has the ncols2 = 4 and 16 variants
+    const best_fattn_kernel tile_kernel = Q->ne[0] == 576 && gqa_ratio % 4 != 0 ? BEST_FATTN_KERNEL_NONE : BEST_FATTN_KERNEL_TILE;
+
     if (volta_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
         if (can_use_vector_kernel && Q->ne[1] * gqa_ratio_eff <= 2) {
             return BEST_FATTN_KERNEL_VEC;
         }
         if (Q->ne[1] * gqa_ratio_eff <= 16) {
-            return BEST_FATTN_KERNEL_TILE; // On Volta tensor cores are only faster for sufficiently large matrices.
+            return tile_kernel; // On Volta tensor cores are only faster for sufficiently large matrices.
         }
         return BEST_FATTN_KERNEL_MMA_F16;
     }
@@ -800,7 +803,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
             }
         }
     }
-    return BEST_FATTN_KERNEL_TILE;
+    return tile_kernel;
 }
 
 size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * dst) {
