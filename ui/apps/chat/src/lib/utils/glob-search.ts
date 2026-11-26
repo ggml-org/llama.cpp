@@ -123,7 +123,9 @@ export async function runGlobSearchWithChildren(
 		return { ...direct, base: deep.base, entries: ranked.map((e) => toEntryResult(e, deep.base)) };
 	}
 
-	if (!query.includes(PATH_SEPARATOR)) return search(query);
+	if (!query.includes(PATH_SEPARATOR)) {
+		return searchByName(query, scopePath, searchDepth, limit, signal, options);
+	}
 
 	// A relative path (`ui/lib/voi`) is also followed from the scope itself: the
 	// server's glob matches it only below some other folder, never at the top.
@@ -251,6 +253,65 @@ async function runFuzzyFolderSearch(
 }
 
 /**
+ * A plain name (`llama`) looked up anywhere under the scope, nearest first: the
+ * shallow walk answers at once and `onPartial` gets its results while the deeper
+ * one runs. The deeper results go below them, so the list does not reshuffle,
+ * and hidden entries go last of all.
+ */
+async function searchByName(
+	query: string,
+	scopePath: string,
+	searchDepth: number,
+	limit: number,
+	signal: AbortSignal,
+	options: GlobSearchChildOptions
+): Promise<GlobSearchChildResult> {
+	const { entersExactNearFolder = false, onPartial, type = GlobSearchType.ALL } = options;
+	const args = buildGlobSearchArgs(query, scopePath, Math.min(searchDepth, SEARCH.SHALLOW_DEPTH));
+	// started alongside the shallow search and read after it: a failure here (the search
+	// being cancelled, say) must not go unhandled, and costs only the deeper results
+	const deepSearch =
+		searchDepth > SEARCH.SHALLOW_DEPTH
+			? runGlobSearch({ ...args, maxDepth: searchDepth }, type, limit, signal).catch(
+					(): GlobSearchResult => ({ base: '', entries: [] })
+				)
+			: null;
+	const shallow = await runGlobSearch(args, type, limit, signal);
+
+	if (shallow.error) return { args, base: shallow.base, entries: [], error: shallow.error };
+
+	const near = rankEntries(shallow.entries, query);
+	const collect = (ranked: GlobEntry[]) => {
+		const result = {
+			args,
+			base: shallow.base,
+			entries: ranked.map((e) => toEntryResult(e, shallow.base))
+		};
+
+		// only a near folder is entered on an exact name: a deeper namesake is just a result
+		return entersExactNearFolder
+			? withExactDirChildren(result, near, query, type, limit, SEARCH.PATH_NAV_MAX_DEPTH, signal)
+			: result;
+	};
+
+	if (!deepSearch) return collect(near);
+
+	if (near.length > 0) onPartial?.(await collect(near));
+
+	const deep = await deepSearch;
+	const nearPaths = new Set(near.map((entry) => entry.path));
+	const far = rankEntries(
+		deep.entries.filter((entry) => !nearPaths.has(entry.path)),
+		query
+	);
+	const isRegular = (entry: GlobEntry) =>
+		query.startsWith(HIDDEN_NAME_PREFIX) || !isHiddenPath(entry.path);
+	const found = [...near, ...far];
+
+	return collect([...found.filter(isRegular), ...found.filter((entry) => !isRegular(entry))]);
+}
+
+/**
  * The working-directory picker's search. A query with a path in it (`git/llama`,
  * `~/git`, `/usr/lo`) navigates: it matches the last segment among the parent's
  * children. A plain name (`llama`) is looked up anywhere under home, nearest
@@ -283,56 +344,13 @@ export async function runFolderSearch(
 		return runFuzzyFolderSearch(res.args, [SEARCH.PATH_NAV_MAX_DEPTH], signal);
 	}
 
-	const args = buildGlobSearchArgs(query, scope, SEARCH.SHALLOW_DEPTH);
-	// started alongside the shallow search and read after it: a failure here (the search
-	// being cancelled, say) must not go unhandled, and costs only the deeper results
-	const deepSearch = runGlobSearch(
-		{ ...args, maxDepth: SEARCH.MAX_DEPTH },
-		type,
-		SEARCH.LIMIT,
-		signal
-	).catch((): GlobSearchResult => ({ base: '', entries: [] }));
-	const shallow = await runGlobSearch(args, type, SEARCH.LIMIT, signal);
+	const found = await searchByName(query, scope, SEARCH.MAX_DEPTH, SEARCH.LIMIT, signal, {
+		entersExactNearFolder: true,
+		onPartial,
+		type
+	});
 
-	if (shallow.error) return { args, base: shallow.base, entries: [], error: shallow.error };
+	if (found.error || found.entries.length > 0) return found;
 
-	const near = rankEntries(shallow.entries, query);
-	// only a near folder is entered on an exact name: a deeper namesake is just a result
-	const collect = (ranked: GlobEntry[], base: string) => {
-		const result = { args, base, entries: ranked.map((e) => toEntryResult(e, base)) };
-
-		return withExactDirChildren(
-			result,
-			near,
-			query,
-			type,
-			SEARCH.LIMIT,
-			SEARCH.PATH_NAV_MAX_DEPTH,
-			signal
-		);
-	};
-
-	if (near.length > 0) onPartial?.(await collect(near, shallow.base));
-
-	const deep = await deepSearch;
-	const nearPaths = new Set(near.map((entry) => entry.path));
-	// deeper folders go below the near ones, so the list does not reshuffle when they arrive
-	const far = rankEntries(
-		deep.entries.filter((entry) => !nearPaths.has(entry.path)),
-		query
-	);
-
-	if (near.length + far.length === 0) {
-		return runFuzzyFolderSearch(args, [SEARCH.SHALLOW_DEPTH, SEARCH.FUZZY_MAX_DEPTH], signal);
-	}
-
-	// hidden folders go last, below even the deeper regular ones
-	const isRegular = (entry: GlobEntry) =>
-		query.startsWith(HIDDEN_NAME_PREFIX) || !isHiddenPath(entry.path);
-	const found = [...near, ...far];
-
-	return collect(
-		[...found.filter(isRegular), ...found.filter((entry) => !isRegular(entry))],
-		shallow.base
-	);
+	return runFuzzyFolderSearch(found.args, [SEARCH.SHALLOW_DEPTH, SEARCH.FUZZY_MAX_DEPTH], signal);
 }

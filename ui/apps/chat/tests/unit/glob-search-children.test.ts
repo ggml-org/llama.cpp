@@ -28,7 +28,7 @@ describe('runGlobSearchWithChildren', () => {
 		const res = await runGlobSearchWithChildren(
 			'note',
 			'/Users/rootA',
-			3,
+			2,
 			50,
 			new AbortController().signal
 		);
@@ -112,7 +112,7 @@ describe('runGlobSearchWithChildren', () => {
 		const res = await runGlobSearchWithChildren(
 			'src',
 			'/Users/rootE',
-			3,
+			2,
 			50,
 			new AbortController().signal
 		);
@@ -120,6 +120,46 @@ describe('runGlobSearchWithChildren', () => {
 		expect(res.error).toBe('boom');
 		expect(res.entries).toEqual([]);
 		expect(mockExecute).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('runGlobSearchWithChildren with a plain name', () => {
+	it('hands over the nearest matches first and lists the deeper ones below them', async () => {
+		const scope = '/Users/rootStaged';
+
+		mockExecute.mockImplementation(async (_tool, params) => {
+			const { max_depth: maxDepth } = params as { max_depth: number };
+
+			return maxDepth === 2
+				? { base: scope, entries: [{ path: 'Desktop/Screen Recording.mov', type: 'file' }] }
+				: {
+						base: scope,
+						entries: [
+							{ path: 'git/app/src/screen', type: 'dir' },
+							{ path: 'Desktop/Screen Recording.mov', type: 'file' }
+						]
+					};
+		});
+
+		const partial = vi.fn();
+		const res = await runGlobSearchWithChildren(
+			'screen',
+			scope,
+			4,
+			50,
+			new AbortController().signal,
+			{
+				onPartial: partial
+			}
+		);
+
+		expect(partial.mock.calls[0][0].entries.map((e: { path: string }) => e.path)).toEqual([
+			`${scope}/Desktop/Screen Recording.mov`
+		]);
+		expect(res.entries.map((e) => e.path)).toEqual([
+			`${scope}/Desktop/Screen Recording.mov`,
+			`${scope}/git/app/src/screen`
+		]);
 	});
 });
 
