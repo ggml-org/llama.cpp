@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, jinja_str_or_json, logger
 
 
-@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
+@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel")
 @ModelBase.example("BAAI/bge-small-en-v1.5", "dangvantuan/sentence-camembert-base")
 class BertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BERT
@@ -23,9 +23,10 @@ class BertModel(TextModel):
         super().__init__(*args, **kwargs)
         self.vocab_size = None
 
-        if cls_out_labels := self.hparams.get("id2label"):
+        cls_out_labels = self.hparams.get("id2label")
+        # Keep default labels for BERT classifiers because the runtime uses their count for the output width.
+        if cls_out_labels and self.hf_arch != "BertForSequenceClassification":
             if len(cls_out_labels) == 2 and cls_out_labels[0] == "LABEL_0":
-                # Remove dummy labels added by AutoConfig
                 cls_out_labels = None
         self.cls_out_labels = cls_out_labels
 
@@ -79,7 +80,6 @@ class BertModel(TextModel):
         if name.endswith(".beta"):
             name = name[:-5] + ".bias"
 
-        # we are only using BERT for embeddings so we don't need the pooling layer
         if name in ("embeddings.position_ids", "pooler.dense.weight", "pooler.dense.bias"):
             return None
 
@@ -93,7 +93,6 @@ class BertModel(TextModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if self.cls_out_labels:
-            # For BertForSequenceClassification (direct projection layer)
             if name == "classifier.weight":
                 name = "classifier.out_proj.weight"
 
@@ -239,6 +238,26 @@ class BertModel(TextModel):
 
         special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
+
+
+@ModelBase.register("BertForSequenceClassification")
+@ModelBase.example("cross-encoder/ms-marco-MiniLM-L-12-v2")
+class BertForSequenceClassification(BertModel):
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        if name.removeprefix("bert.") in ("pooler.dense.weight", "pooler.dense.bias"):
+            name = "classifier.dense." + name.rsplit(".", 1)[-1]
+        elif name in ("classifier.weight", "classifier.bias"):
+            name = "classifier.out_proj." + name.rsplit(".", 1)[-1]
+
+        return super().filter_tensors((name, gen))
+
+    def set_gguf_parameters(self):
+        if "classifier.dense.weight" in self.model_tensors:
+            self.hparams = {**self.hparams, "classifier_activation": "tanh"}
+        super().set_gguf_parameters()
 
 
 @ModelBase.register("DistilBertModel", "DistilBertForMaskedLM", "DistilBertForSequenceClassification")
