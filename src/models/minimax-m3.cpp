@@ -24,7 +24,11 @@ void llama_model_minimax_m3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_INDEXER_BLOCK_SIZE,    hparams.indexer_block_size);
     ml.get_key(LLM_KV_ATTENTION_INDEXER_LOCAL_BLOCKS,  hparams.indexer_local_blocks);
 
-    // BC for MiniMax-M3 GGUFs without indexer_types metadata: leading dense layers have no indexer
+    // Default used only until tensors are loaded below: older MiniMax-M3 GGUFs
+    // omit indexer weights on the leading dense layers and also omit
+    // attention.indexer.types. MiniMax-M3.1-Flash (e.g. Unsloth) also omits
+    // that key, but *does* ship indexer tensors on those dense-lead layers.
+    // load_arch_tensors() reconciles this against the tensors that are present.
     for (uint32_t il = 0; il < hparams.n_layer(); ++il) {
         hparams.is_indexer_full_impl[il] = il >= hparams.n_layer_dense_lead;
     }
@@ -87,12 +91,18 @@ void llama_model_minimax_m3::load_arch_tensors(llama_model_loader &) {
             layer.ffn_up_shexp   = create_tensor(tn(LLM_TENSOR_FFN_UP_SHEXP,   "weight", i), {n_embd, n_ff_exp * n_expert_shared}, 0);
         }
 
-        if (hparams.is_indexer_full(i)) {
-            layer.index_q_proj = create_tensor(tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), {n_embd, hparams.indexer_n_head * hparams.indexer_head_size}, 0);
-            layer.index_k_proj = create_tensor(tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), {n_embd, hparams.indexer_head_size}, 0);
-            layer.index_q_norm = create_tensor(tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), {hparams.indexer_head_size}, 0);
-            layer.index_k_norm = create_tensor(tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), {hparams.indexer_head_size}, 0);
-        }
+        // Load indexer weights whenever they exist in the GGUF, then derive
+        // is_indexer_full from that. Gating the create on the default
+        // "no indexer on dense-lead layers" (used when attention.indexer.types
+        // is absent) skipped 4 tensors on each of the 3 leading dense layers
+        // and failed Unsloth MiniMax-M3.1-Flash GGUFs with
+        // "expected 1191, got 1179". Optional so older MiniMax-M3 files,
+        // which truly omit those tensors, still load.
+        layer.index_q_proj = create_tensor(tn(LLM_TENSOR_INDEXER_Q_PROJ, "weight", i), {n_embd, hparams.indexer_n_head * hparams.indexer_head_size}, TENSOR_NOT_REQUIRED);
+        layer.index_k_proj = create_tensor(tn(LLM_TENSOR_INDEXER_K_PROJ, "weight", i), {n_embd, hparams.indexer_head_size}, TENSOR_NOT_REQUIRED);
+        layer.index_q_norm = create_tensor(tn(LLM_TENSOR_INDEXER_Q_NORM, "weight", i), {hparams.indexer_head_size}, TENSOR_NOT_REQUIRED);
+        layer.index_k_norm = create_tensor(tn(LLM_TENSOR_INDEXER_K_NORM, "weight", i), {hparams.indexer_head_size}, TENSOR_NOT_REQUIRED);
+        hparams.is_indexer_full_impl[i] = layer.index_q_proj != nullptr;
     }
 }
 
