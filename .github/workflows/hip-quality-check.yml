@@ -64,6 +64,7 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         id: master_sha
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git rev-parse --verify HEAD^2 > /dev/null
           baseline_sha=$(git rev-parse HEAD^1)
           pr_sha=$(git rev-parse HEAD)
