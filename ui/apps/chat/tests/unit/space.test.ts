@@ -1,8 +1,9 @@
 import {
+	isPrunable,
+	isSpaceOf,
 	parseSpaceArgs,
-	pullRequestsState,
+	pullRequestsDone,
 	readSpaceSource,
-	sourceTag,
 	spaceCard,
 	spaceName
 } from '../../scripts/space.ts';
@@ -57,12 +58,7 @@ describe('spaceCard', () => {
 	});
 
 	it('carries the tag the script knows its Spaces by', () => {
-		expect(card).toContain('tags:\n  - llama-ui-preview\n  - llama-ui-src-');
-	});
-
-	it('carries the source tag only when it knows the repository', () => {
-		expect(card).toContain(`  - ${sourceTag('alice/llama.cpp', 'feat/voice-mode')}`);
-		expect(spaceCard({ branch: 'x', repo: '', sha })).not.toContain('llama-ui-src-');
+		expect(card).toContain('tags:\n  - llama-ui-preview\n');
 	});
 
 	it('names the llama-server the preview talks to', () => {
@@ -86,25 +82,56 @@ describe('spaceCard', () => {
 	});
 });
 
-describe('sourceTag', () => {
-	it('is what the upstream workflow computes: sha1 of "<repo, lowercase>:<branch>"', () => {
-		// printf '%s:%s' alice/llama.cpp feat/voice-mode | sha1sum | cut -c1-12
-		expect(sourceTag('Alice/llama.cpp', 'feat/voice-mode')).toBe('llama-ui-src-5e796d415769');
+describe('isSpaceOf', () => {
+	const built = { branch: 'feat/x', repo: 'alice/llama.cpp' };
+	const repos = ['ggml-org/llama.cpp', 'Alice/llama.cpp'];
+
+	it('tells the Space of a branch from one that only shares its name', () => {
+		expect(isSpaceOf(built, 'feat/x', repos)).toBe(true);
+		expect(isSpaceOf(built, 'feat-x', repos)).toBe(false);
+		expect(isSpaceOf(built, 'feat/x', ['bob/llama.cpp'])).toBe(false);
 	});
 
-	it('keeps the branch as it is', () => {
-		expect(sourceTag('alice/llama.cpp', 'Feat/X')).not.toBe(sourceTag('alice/llama.cpp', 'feat/x'));
+	it('takes a repository it does not know for the same one', () => {
+		expect(isSpaceOf(built, 'feat/x', [])).toBe(true);
+		expect(isSpaceOf({ branch: 'feat/x', repo: '' }, 'feat/x', repos)).toBe(true);
 	});
 });
 
-describe('pullRequestsState', () => {
-	it('keeps a preview while a pull request is open, or when there is none', () => {
-		expect(pullRequestsState([])).toBe('none');
-		expect(pullRequestsState([{ state: 'closed' }, { state: 'open' }])).toBe('open');
+describe('isPrunable', () => {
+	const source = { branch: 'feat/x', repo: 'alice/llama.cpp', sha: '0' };
+
+	it('takes a Space named after its branch, built from this repository', () => {
+		expect(isPrunable('alice/llama-ui-feat-x', 'alice', source, 'Alice/llama.cpp')).toBe(true);
 	});
 
-	it('lets it go once every pull request is closed or merged', () => {
-		expect(pullRequestsState([{ state: 'closed' }, { state: 'closed' }])).toBe('done');
+	it('leaves a Space named by hand, of another repository, or without a source', () => {
+		expect(isPrunable('alice/llama-chat', 'alice', source, 'alice/llama.cpp')).toBe(false);
+		expect(isPrunable('alice/llama-ui-feat-x', 'alice', source, 'bob/llama.cpp')).toBe(false);
+		expect(isPrunable('alice/llama-ui-feat-x', 'alice', source, '')).toBe(false);
+		expect(isPrunable('alice/llama-ui-feat-x', 'alice', null, 'alice/llama.cpp')).toBe(false);
+	});
+});
+
+describe('pullRequestsDone', () => {
+	const deployedAt = '2026-01-02T00:00:00Z';
+	const closedBefore = { closed_at: '2026-01-01T00:00:00Z', state: 'closed' };
+	const closedAfter = { closed_at: '2026-01-03T00:00:00Z', state: 'closed' };
+
+	it('keeps a preview while a pull request is open, or when there is none', () => {
+		expect(pullRequestsDone([], deployedAt)).toBe(false);
+		expect(pullRequestsDone([closedAfter, { closed_at: null, state: 'open' }], deployedAt)).toBe(
+			false
+		);
+	});
+
+	it('lets it go once a pull request closed after its last deploy', () => {
+		expect(pullRequestsDone([closedBefore, closedAfter], deployedAt)).toBe(true);
+	});
+
+	it('keeps one deployed again after its pull request closed, or of an unknown age', () => {
+		expect(pullRequestsDone([closedBefore], deployedAt)).toBe(false);
+		expect(pullRequestsDone([closedAfter], undefined)).toBe(false);
 	});
 });
 
@@ -125,6 +152,7 @@ describe('parseSpaceArgs', () => {
 			parseSpaceArgs(['--server', 'https://llm.example.com', '--upstream', 'alice/llama.cpp'])
 		).toMatchObject({ server: 'https://llm.example.com', upstream: 'alice/llama.cpp' });
 		expect(() => parseSpaceArgs(['--server', 'localhost:9931'])).toThrow();
+		expect(() => parseSpaceArgs(['--server', ''])).toThrow();
 		expect(() => parseSpaceArgs(['--upstream', 'llama.cpp'])).toThrow();
 	});
 

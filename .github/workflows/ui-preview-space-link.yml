@@ -2,9 +2,10 @@ name: UI Preview Space link
 
 # Links a pull request to the preview Space its author deployed from their fork (see ui-preview-space.yml),
 # as a GitHub deployment with a "View deployment" button, and retires the link when the pull request closes.
-# ggml-org hosts nothing and holds no Hugging Face token: the Space is on the author's own account. This
-# workflow only looks it up on the public Hub API, by the tag that names the fork and branch it was built
-# from, so a private Space gets no link. It never checks out the pull request's code.
+# ggml-org hosts nothing and holds no Hugging Face token: the Space is on the author's own account.
+# The fork records each deploy as a deployment on the fork itself, which only who can push there can do.
+# This workflow reads that record, so nobody else can pass their Space for the preview of a pull request.
+# It never checks out the pull request's code, and takes the link's address from the Hub, not from the fork.
 
 on:
   pull_request_target:
@@ -22,88 +23,84 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-env:
-  GH_TOKEN: ${{ github.token }}
-  REPO: ${{ github.repository }}
-  PR: ${{ github.event.pull_request.number }}
-  ENVIRONMENT: Llama Chat preview
-
 jobs:
   link:
     name: Link the preview Space
-    if: github.event.action != 'closed'
+    # a fork has no pull requests to link
+    if: github.repository == 'ggml-org/llama.cpp'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 15
 
     steps:
-      - name: Find the Space and link it
+      - name: Link the Space of this commit, or retire the link
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          ACTION: ${{ github.event.action }}
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # the environment scripts/space.ts records a deploy in, and the one of the link
+          ENVIRONMENT: Llama Chat preview
+        # with pipefail: a failed call fails the step
+        shell: bash
         run: |
-          # the tag scripts/space.ts gives a Space: sha1 of "<fork, lowercase>:<branch>"
-          repo=$(printf '%s' "$HEAD_REPO" | tr '[:upper:]' '[:lower:]')
-          tag="llama-ui-src-$(printf '%s:%s' "$repo" "$HEAD_REF" | sha1sum | cut -c1-12)"
-          short="${HEAD_SHA:0:10}"
-          id='' title=''
+          environment=$(jq -rn --arg e "$ENVIRONMENT" '$e|@uri')
+          # the links of this pull request, to list them without the others
+          task="deploy:pr-$PR"
 
-          # the fork deploys on the same push, so wait for it to reach this commit
-          for attempt in $(seq 1 30); do
-            id=$(curl -fsS "https://huggingface.co/api/spaces?filter=$tag&sort=lastModified&direction=-1&limit=5" \
-              | jq -r '[.[] | select(.tags | index("llama-ui-preview"))][0].id // empty' || true)
+          # the Space of the newest deploy the fork recorded for this branch, at this commit if $1 is "sha=..."
+          recorded() {
+            gh api "repos/$HEAD_REPO/deployments?environment=$environment&per_page=100&$1" 2>/dev/null \
+              | jq -r --arg branch "$HEAD_REF" '[.[] | select((.payload | type) == "object" and .payload.branch == $branch)][0].payload.space // empty' 2>/dev/null || true
+          }
 
-            if [ -n "$id" ]; then
-              title=$(curl -fsS "https://huggingface.co/api/spaces/$id/commits/main" | jq -r '.[0].title // empty' || true)
-              [[ "$title" == *"$short"* ]] && break
+          # a deployment of ggml-org itself is this workflow's own link, not a record of a deploy
+          if [ "$ACTION" != closed ] && [ -n "$HEAD_REPO" ] && [ "$HEAD_REPO" != "$REPO" ]; then
+            space=$(recorded "sha=$HEAD_SHA")
+
+            # the fork deploys on the same push: wait for it, unless the branch has no preview at all
+            if [ -z "$space" ] && [ -n "$(recorded '')" ]; then
+              for attempt in $(seq 1 10); do
+                sleep 60
+                space=$(recorded "sha=$HEAD_SHA")
+                [ -z "$space" ] || break
+              done
             fi
 
-            sleep 30
-          done
+            if [[ ! "$space" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+              echo "$HEAD_REPO recorded no preview of $HEAD_REF at $HEAD_SHA: nothing to link"
+              exit 0
+            fi
 
-          if [ -z "$id" ]; then
-            echo "No public preview Space for $HEAD_REPO:$HEAD_REF (tag $tag): nothing to link"
-            exit 0
+            # a private or deleted Space does not answer, and gets no link
+            url=$(curl -fsS "https://huggingface.co/api/spaces/$space" \
+              | jq -r 'select(.sdk == "static" and (.tags | index("llama-ui-preview"))) | .host // empty' || true)
+
+            if [[ ! "$url" =~ ^https://[a-z0-9-]+\.static\.hf\.space$ ]]; then
+              echo "$space is not a public preview Space: nothing to link"
+              exit 0
+            fi
+
+            description="Preview of ${HEAD_SHA:0:10} on $space"
+            deployment=$(jq -n --arg ref "$HEAD_SHA" --arg env "$ENVIRONMENT" --arg desc "$description" --arg task "$task" \
+              '{ref: $ref, task: $task, environment: $env, description: $desc, auto_merge: false, required_contexts: [],
+                transient_environment: true, production_environment: false}' \
+              | gh api "repos/$REPO/deployments" --input - --jq .id)
+
+            jq -n --arg url "$url" --arg desc "$description" \
+              '{state: "success", environment_url: $url, description: $desc, auto_inactive: false}' \
+              | gh api "repos/$REPO/deployments/$deployment/statuses" --input - >/dev/null
+
+            echo "Linked $url"
           fi
 
-          url=$(curl -fsS "https://huggingface.co/api/spaces/$id" | jq -r '.host // empty' || true)
-          url="${url:-https://huggingface.co/spaces/$id}"
-
-          if [[ "$title" == *"$short"* ]]; then
-            description="Preview of $short on $id"
-          else
-            description="Preview on $id, not yet at $short"
-          fi
-
-          deployment=$(jq -n --arg ref "$HEAD_SHA" --arg env "$ENVIRONMENT" --arg desc "$description" --argjson pr "$PR" \
-            '{ref: $ref, environment: $env, description: $desc, auto_merge: false, required_contexts: [],
-              transient_environment: true, production_environment: false, payload: {pr: $pr}}' \
-            | gh api "repos/$REPO/deployments" --input - --jq .id)
-
-          # the earlier deployments of this pull request give way to this one
-          gh api "repos/$REPO/deployments?environment=$(jq -rn --arg e "$ENVIRONMENT" '$e|@uri')&per_page=100" \
-            --jq ".[] | select(.payload.pr == $PR and .id != $deployment) | .id" \
-            | while read -r old; do
-                gh api "repos/$REPO/deployments/$old/statuses" -f state=inactive >/dev/null
-              done
-
-          jq -n --arg url "$url" --arg desc "$description" \
-            '{state: "success", environment_url: $url, description: $desc, auto_inactive: false}' \
-            | gh api "repos/$REPO/deployments/$deployment/statuses" --input - >/dev/null
-
-          echo "Linked $url"
-
-  unlink:
-    name: Retire the preview link
-    if: github.event.action == 'closed'
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Mark the deployments of this pull request inactive
-        run: |
+          # the earlier links of this pull request give way to the new one, and all of them once it closes;
           # the author's fork deletes the Space itself, within the hour
-          gh api "repos/$REPO/deployments?environment=$(jq -rn --arg e "$ENVIRONMENT" '$e|@uri')&per_page=100" \
-            --jq ".[] | select(.payload.pr == $PR) | .id" \
-            | while read -r id; do
-                gh api "repos/$REPO/deployments/$id/statuses" -f state=inactive >/dev/null
-              done
+          if [ -n "${deployment:-}" ] || [ "$ACTION" = closed ]; then
+            gh api --paginate "repos/$REPO/deployments?environment=$environment&task=$task&per_page=100" --jq '.[].id' \
+              | while read -r old; do
+                  [ "$old" = "${deployment:-}" ] || gh api "repos/$REPO/deployments/$old/statuses" -f state=inactive >/dev/null
+                done
+          fi

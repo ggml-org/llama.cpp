@@ -3,6 +3,7 @@ name: UI Preview Space
 # Puts the Llama Chat build of a branch on a static Hugging Face Space, so a UI change can be tried from a link.
 # Opt-in: it runs only in a repository that sets the UI_PREVIEW_SPACE_OWNER variable (a Hugging Face user or organization)
 # and the HF_TOKEN secret, which is how a fork turns it on.
+# A deploy is also recorded as a deployment on the fork: ui-preview-space-link.yml links a pull request to its preview by that.
 # A push redeploys only a branch that already has a Space: create one with `npm run space` in ui/apps/chat, or run this workflow by hand on the branch.
 # Every hour it deletes the Spaces whose branch is gone, or whose pull request to ggml-org/llama.cpp is closed or merged
 # (a fork does not see that pull request close). Scheduled runs use this file on the fork's default branch.
@@ -33,28 +34,27 @@ cache-mode: none
 permissions:
   contents: read
 
-# only the newest push of a branch matters
+# only the newest push of a branch matters, and its deletion stops a deploy of it
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.ref || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'delete' && github.event.ref_type == 'branch' && format('refs/heads/{0}', github.event.ref) || github.ref }}
   cancel-in-progress: true
 
 env:
-  HF_TOKEN: ${{ secrets.HF_TOKEN }}
   UI_PREVIEW_SPACE_OWNER: ${{ vars.UI_PREVIEW_SPACE_OWNER }}
 
 jobs:
-  deploy:
-    name: Deploy the branch to its Space
+  find:
+    name: Look for the Space of the branch
     if: vars.UI_PREVIEW_SPACE_OWNER != '' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
-
-    defaults:
-      run:
-        working-directory: ui/apps/chat
+    outputs:
+      exists: ${{ steps.space.outputs.exists }}
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -64,24 +64,86 @@ jobs:
 
       - name: Look for the Space of this branch
         id: space
+        working-directory: ui/apps/chat
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: node scripts/space.ts status
 
-      - name: Install dependencies
-        if: steps.space.outputs.exists == 'true' || github.event_name == 'workflow_dispatch'
-        run: npm ci
+  # runs the branch's code and its npm dependencies: this job gets no secret and no token that can write
+  build:
+    name: Build the branch
+    needs: find
+    if: needs.find.outputs.exists == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Build
+        working-directory: ui/apps/chat
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upload the build
+        uses: actions/upload-artifact@v7
+        with:
+          name: ui-preview-dist
+          path: ui/apps/chat/dist
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  # holds the tokens, and runs no npm dependency: scripts/space.ts uses Node.js alone
+  deploy:
+    name: Deploy the build to its Space
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # records the deploy on this repository
+      deployments: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Download the build
+        uses: actions/download-artifact@v8
+        with:
+          name: ui-preview-dist
+          path: ui/apps/chat/dist
 
       - name: Install Hugging Face Hub CLI
-        if: steps.space.outputs.exists == 'true' || github.event_name == 'workflow_dispatch'
         run: |
           python3 -m venv "$RUNNER_TEMP/hf"
           "$RUNNER_TEMP/hf/bin/pip" install -U huggingface_hub==1.28.0
           echo "$RUNNER_TEMP/hf/bin" >> "$GITHUB_PATH"
 
-      - name: Build and deploy
-        if: steps.space.outputs.exists == 'true' || github.event_name == 'workflow_dispatch'
+      - name: Deploy
+        working-directory: ui/apps/chat
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
           VISIBILITY: ${{ inputs.visibility || 'public' }}
-        run: node scripts/space.ts deploy --visibility "$VISIBILITY"
+        run: node scripts/space.ts deploy --built --visibility "$VISIBILITY"
 
   remove:
     name: Delete the Space of a deleted branch
@@ -91,6 +153,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -107,6 +171,7 @@ jobs:
       - name: Delete the Space
         working-directory: ui/apps/chat
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           BRANCH: ${{ github.event.ref }}
         run: node scripts/space.ts rm --branch "$BRANCH"
 
@@ -118,6 +183,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -134,6 +201,7 @@ jobs:
       - name: Delete the Spaces no longer wanted
         working-directory: ui/apps/chat
         env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
           # reads pull requests of ggml-org/llama.cpp, which are public
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/space.ts prune --remote origin --yes
