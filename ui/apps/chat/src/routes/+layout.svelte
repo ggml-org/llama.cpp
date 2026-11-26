@@ -1,7 +1,17 @@
 <script lang="ts">
 	import '../app.css';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
-	import { GlassKey, MenuIcon, SidebarNavigation } from '#lib/components/app/index.ts';
+	import {
+		DialogConfirmation,
+		DialogConversationSelection,
+		DialogImportConversationPreview,
+		DialogImportConversationsResult,
+		DialogSettingsImportPreview,
+		DropImportOverlay,
+		GlassKey,
+		MenuIcon,
+		SidebarNavigation
+	} from '#lib/components/app/index.ts';
 	import { PwaMetaTags, PwaRefreshAlert } from '#lib/components/pwa/index.ts';
 	import {
 		BOX_BORDER,
@@ -15,6 +25,7 @@
 		SETTINGS_KEYS,
 		TOOLTIP_DELAY_DURATION
 	} from '#lib/constants/index.ts';
+	import { useDropImport } from '#lib/hooks/use-drop-import.svelte.ts';
 	import { useKeyboardShortcuts } from '#lib/hooks/use-keyboard-shortcuts.svelte.ts';
 	import { usePwa } from '#lib/hooks/use-pwa.svelte.ts';
 	import { useSidebarReveal } from '#lib/hooks/use-sidebar-reveal.svelte.ts';
@@ -152,6 +163,9 @@
 		uiStore.rememberModelsReturnRoute();
 	});
 
+	// Global drag-and-drop import (works on any route)
+	const dropImport = useDropImport();
+
 	// Global keyboard shortcuts
 	const { handleKeydown } = useKeyboardShortcuts({
 		editActiveConversation: () => chatSidebar?.editActiveConversation?.(),
@@ -280,7 +294,7 @@
 
 	// Background MCP server health checks on app load.
 	// Health-check every configured server with a URL - including disabled ones -
-	// so the /mcp-servers page can display health metadata for servers that are
+	// so the MCP servers dialog can display health metadata for servers that are
 	// currently turned off. Disabled servers never get promoted to active
 	// connections (see runHealthCheck), so their tools/prompts/resources stay
 	// out of the chat-side stores.
@@ -289,6 +303,13 @@
 	// every other card back through skeleton state.
 	$effect(() => {
 		if (!browser) return;
+
+		// Enable MCP off: no server is checked or connected, open connections close
+		if (!mcpStore.isFeatureEnabled) {
+			untrack(() => void mcpStore.shutdown());
+
+			return;
+		}
 
 		const mcpServers = mcpStore.getServers();
 		const serversWithUrls = mcpServers.filter((s) => s.url.trim());
@@ -318,7 +339,13 @@
 </svelte:head>
 
 <svelte:window bind:innerHeight bind:innerWidth onkeydown={handleKeydown} />
-<svelte:document onvisibilitychange={handleVisibilityChange} />
+<svelte:document
+	ondragenter={dropImport.dragHandlers.dragenter}
+	ondragleave={dropImport.dragHandlers.dragleave}
+	ondragover={dropImport.dragHandlers.dragover}
+	ondrop={dropImport.dragHandlers.drop}
+	onvisibilitychange={handleVisibilityChange}
+/>
 
 <Tooltip.Provider delayDuration={TOOLTIP_DELAY_DURATION}>
 	<!-- clip, not hide: the page slid aside for the phone sidebar must not widen the document,
@@ -441,6 +468,55 @@
 	<ModeWatcher />
 
 	<Toaster closeButton richColors />
+
+	{#if dropImport.isDragOver}
+		<DropImportOverlay />
+	{/if}
+
+	<DialogConversationSelection
+		bind:open={dropImport.ui.showSelection}
+		conversations={dropImport.ui.availableConversations}
+		messageCountMap={dropImport.ui.selectionMessageCountMap}
+		mode="import"
+		onCancel={dropImport.cancelSelection}
+		onConfirm={dropImport.handleSelectionConfirm}
+	/>
+
+	<DialogSettingsImportPreview
+		bind:open={dropImport.ui.showSettingsPreview}
+		diff={dropImport.ui.settingsDiff}
+		onCancel={dropImport.cancelSettingsImport}
+		onConfirm={dropImport.confirmSettingsImport}
+	/>
+
+	<DialogImportConversationPreview
+		bind:open={dropImport.ui.showPreview}
+		messages={dropImport.ui.previewData?.messages}
+		onCancel={dropImport.cancelPreview}
+		onConfirm={dropImport.confirmImportSingle}
+	/>
+
+	<DialogConfirmation
+		bind:open={dropImport.ui.showOpenImported}
+		cancelText="Not now"
+		confirmText="Open"
+		description={dropImport.ui.openImported?.alreadyInLibrary
+			? `"${dropImport.ui.openImported.conv.name}" was already in your library. Open it now?`
+			: `"${dropImport.ui.openImported?.conv.name ?? ''}" is now in your library. Open it now?`}
+		onCancel={dropImport.cancelOpenImported}
+		onConfirm={dropImport.confirmOpenImported}
+		title={dropImport.ui.openImported?.alreadyInLibrary
+			? 'Already in your library'
+			: 'Conversation imported'}
+	/>
+
+	<DialogImportConversationsResult
+		bind:open={dropImport.ui.showOpenBulk}
+		conversations={dropImport.ui.importedConversations}
+		messageCountMap={dropImport.ui.bulkMessageCountMap}
+		onClose={dropImport.cancelBulk}
+		onOpen={dropImport.openConversation}
+	/>
 
 	<!-- a debug tool, kept with the tests and loaded on demand, so it stays out of the production bundle -->
 	{#if import.meta.env.DEV && import.meta.env.VITE_DEBUG}

@@ -310,6 +310,13 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // Engram gate is an elementwise weight (ggml_mul), not a matmul operand
     quantize &= name.find("engram_gate.weight") == std::string::npos;
 
+    // hy_v4_flash: these are ggml_add operands
+    if (arch == LLM_ARCH_HY_V4_FLASH) {
+        quantize &= name.find("engram_kv_b.weight")            == std::string::npos;
+        quantize &= name.find("engram_hc_scale.weight")        == std::string::npos;
+        quantize &= name.find("indexer_compressor_ape.weight") == std::string::npos;
+    }
+
     // these are very small (e.g. 4x4)
     quantize &= name.find("altup")  == std::string::npos;
     quantize &= name.find("laurel") == std::string::npos;
@@ -398,6 +405,15 @@ static bool tensor_allows_quantization(const llama_model_quantize_params * param
     // (the 1D hc_*_base / hc_*_scale tensors are already excluded by the n_dims < 2 rule)
     if (arch == LLM_ARCH_XING4_0) {
         quantize &= name.find("hc_") == std::string::npos;
+    }
+
+    // raon1_mini: mHC selectors and small RDA gate projections
+    if (arch == LLM_ARCH_RAON1_MINI) {
+        quantize &= name.find("hc_")             == std::string::npos;
+        quantize &= name.find("ssm_f_a.weight")  == std::string::npos;
+        quantize &= name.find("ssm_f_b.weight")  == std::string::npos;
+        quantize &= name.find("ssm_beta.weight") == std::string::npos;
+        quantize &= name.find("ssm_rda.weight")  == std::string::npos;
     }
 
     // the decision head of vllm-decision2 is small and computed in F32
@@ -493,6 +509,10 @@ static ggml_type tensor_type_fallback(quantize_state_impl & qs, const ggml_tenso
     return fallback_type;
 }
 
+static double bits_per_weight(ggml_type t) {
+    return 8.0 * ggml_type_size(t) / ggml_blck_size(t);
+}
+
 // select the target tensor type based on tensor category, ftype, and model arch
 static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type new_type, const ggml_tensor * tensor, llama_ftype ftype, tensor_category category) {
     const std::string name = ggml_get_name(tensor);
@@ -531,11 +551,19 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         }
     }
 
+    // raon1_mini: at Q6_K and Q8_0, where the floors below do not apply, keep the MLA latent projections at source precision:
+    // quantizing them costs +5.8% mean KL in Q8_0 for 44 MB. --pure and --tensor-type bypass this, as for the floors
+    if (arch == LLM_ARCH_RAON1_MINI && (ftype == LLAMA_FTYPE_MOSTLY_Q6_K || ftype == LLAMA_FTYPE_MOSTLY_Q8_0) && (
+        name.find("attn_kv_a_mqa.weight") != std::string::npos ||
+        name.find("attn_k_b.weight")      != std::string::npos ||
+        name.find("attn_v_b.weight")      != std::string::npos)) {
+        return tensor->type;
+    }
+
     // bumping to q8_0 is preferred since these tensors are not really big
     // TODO: nemotron 3 super shares ffn_latent and afmoe, bailingmoe3, dots3note, hy-v4, kimi-k3 and laguna share attn_gate.
     //       Widening the guard is likely a win there too, but it changes their files, so it wants a perplexity comparison per architecture first.
     if (arch == LLM_ARCH_MUSE_SPARK && (category == TENSOR_CATEGORY_FFN_LATENT || category == TENSOR_CATEGORY_ATTENTION_GATE)) {
-        auto bits_per_weight = [](ggml_type t) { return 8.0 * ggml_type_size(t) / ggml_blck_size(t); };
         if (ggml_is_quantized(new_type) && bits_per_weight(new_type) < bits_per_weight(GGML_TYPE_Q8_0)) { new_type = GGML_TYPE_Q8_0; }
     }
 
@@ -715,6 +743,34 @@ static ggml_type llama_tensor_get_type_impl(quantize_state_impl & qs, ggml_type 
         if (ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS && i_layer >= n_layer / 8 && i_layer < 7 * n_layer / 8) { new_type = GGML_TYPE_IQ3_XXS; }
 
         ++qs.i_ffn_up;
+    }
+
+    // raon1_mini: the dense attention projections and the shared expert carry most of the low-bit loss, attn_output and attn_gate most of all
+    // only raise to a floor, after the counters above are updated, so the rest of the mixture does not change
+    if (arch == LLM_ARCH_RAON1_MINI && ggml_is_quantized(new_type)) {
+        const bool k_4_5 = ftype == LLAMA_FTYPE_MOSTLY_Q4_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q4_K_M ||
+                           ftype == LLAMA_FTYPE_MOSTLY_Q5_K_S || ftype == LLAMA_FTYPE_MOSTLY_Q5_K_M;
+        // IQ4_XS/NL and the 1-3 bit K and IQ mixtures (not Q2_0, TQ1_0, TQ2_0 or Q1_0)
+        const bool low   = ftype == LLAMA_FTYPE_MOSTLY_IQ4_XS  || ftype == LLAMA_FTYPE_MOSTLY_IQ4_NL ||
+                           ftype == LLAMA_FTYPE_MOSTLY_Q3_K_S  || ftype == LLAMA_FTYPE_MOSTLY_Q3_K_M || ftype == LLAMA_FTYPE_MOSTLY_Q3_K_L ||
+                           ftype == LLAMA_FTYPE_MOSTLY_IQ3_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ3_S  ||
+                           ftype == LLAMA_FTYPE_MOSTLY_IQ3_M   || ftype == LLAMA_FTYPE_MOSTLY_Q2_K   || ftype == LLAMA_FTYPE_MOSTLY_Q2_K_S ||
+                           ftype == LLAMA_FTYPE_MOSTLY_IQ2_XXS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_XS || ftype == LLAMA_FTYPE_MOSTLY_IQ2_S  ||
+                           ftype == LLAMA_FTYPE_MOSTLY_IQ2_M   || ftype == LLAMA_FTYPE_MOSTLY_IQ1_S  || ftype == LLAMA_FTYPE_MOSTLY_IQ1_M;
+        ggml_type floor_type = GGML_TYPE_COUNT;
+        if (category == TENSOR_CATEGORY_ATTENTION_OUTPUT || category == TENSOR_CATEGORY_ATTENTION_GATE) {
+            floor_type = k_4_5 ? GGML_TYPE_Q8_0 : low ? GGML_TYPE_Q6_K : GGML_TYPE_COUNT;
+        } else if (name.find("attn_q_a.weight") != std::string::npos || name.find("attn_q_b.weight")      != std::string::npos ||
+                   name.find("attn_k_b.weight") != std::string::npos || name.find("attn_kv_a_mqa.weight") != std::string::npos ||
+                   name.find("attn_v_b.weight") != std::string::npos || name.find("_shexp.weight")        != std::string::npos) {
+            floor_type = k_4_5 || low ? GGML_TYPE_Q6_K : GGML_TYPE_COUNT;
+        } else if (category == TENSOR_CATEGORY_ATTENTION_Q || category == TENSOR_CATEGORY_ATTENTION_K ||
+                   category == TENSOR_CATEGORY_ATTENTION_V || name.find("ssm_g.weight") != std::string::npos) {
+            floor_type = k_4_5 ? GGML_TYPE_Q6_K : GGML_TYPE_COUNT;
+        }
+        if (floor_type != GGML_TYPE_COUNT && bits_per_weight(new_type) < bits_per_weight(floor_type)) {
+            new_type = floor_type;
+        }
     }
 
     return new_type;
@@ -909,7 +965,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
     };
 
     static constexpr double EPSILON = 1e-12;
-    static constexpr double INFINITE = std::numeric_limits<double>::infinity();
+    static constexpr double LQ_INFINITE = std::numeric_limits<double>::infinity();
     static constexpr uint64_t STATE_MAGIC = 0x4250572d5632; // "BPW-V2"
     static constexpr uint64_t HASH_MAGIC = 0xeabada55cafed00d;
     static constexpr float ffn_down_boost = 6.0f;
@@ -1467,7 +1523,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
                 const double rsn = (* ptr_row_sq_norm)[row_idx];
                 const double m_norm = rsn > EPSILON ? w_err / rsn : 0.0;
-                slice_mse_norm.push_back(std::isfinite(m_norm) ? m_norm : INFINITE);
+                slice_mse_norm.push_back(std::isfinite(m_norm) ? m_norm : LQ_INFINITE);
 
                 off += (size_t)n_per_row;
             }
@@ -1673,7 +1729,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         constexpr float eps_norm = 1e-8f;
         constexpr float eps_eig = EPSILON;
         constexpr int jacobi_sweeps = 20;
-        if (total_rows_sampled < 1 || n_per_row < 1) { return INFINITE; }
+        if (total_rows_sampled < 1 || n_per_row < 1) { return LQ_INFINITE; }
 
         const int64_t m = total_rows_sampled;
         const int64_t n = n_per_row;
@@ -1824,7 +1880,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         }
 
         const int64_t valid_m = (int64_t)norm_matrix.size() / n;
-        if (valid_m < 2) { return INFINITE; }
+        if (valid_m < 2) { return LQ_INFINITE; }
         const bool hmt_direct = valid_m >= target_rank;
         const bool hmt_transpose = !hmt_direct && n >= target_rank;
 
@@ -1834,10 +1890,10 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
 
         // Estimate the condition number (kappa)
         auto condition_number = [&](const std::vector<float> & eigenvalues) -> float {
-            if ((int64_t)eigenvalues.size() < k) { return INFINITE; }
+            if ((int64_t)eigenvalues.size() < k) { return LQ_INFINITE; }
             const float sigma_max = std::sqrt(std::max(0.0f, eigenvalues[0]));
             const float sigma_min = std::sqrt(std::max(0.0f, eigenvalues[k - 1]));
-            if (sigma_min <= eps_eig) { return INFINITE; }
+            if (sigma_min <= eps_eig) { return LQ_INFINITE; }
 
             return sigma_max / sigma_min;
         };
@@ -2381,7 +2437,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 [](const auto & a, const auto &b) { return a.bytes == b.bytes; }), candidates.end());
 
             std::vector<type_scores> hull;
-            double min_err = INFINITE;
+            double min_err = LQ_INFINITE;
             for(const auto & c : candidates) {
                 if (c.error < min_err) {
                     min_err = c.error;
@@ -2734,8 +2790,8 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
             mu_hi *= 2.0;
         } while(++safety < 60);
 
-        double gap_under = INFINITE;
-        double gap_over = INFINITE;
+        double gap_under = LQ_INFINITE;
+        double gap_over = LQ_INFINITE;
 
         for(int i = 0; i < 40; ++i) {
             double mu = 0.5 * (mu_lo + mu_hi);
@@ -2846,7 +2902,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
         size_t cb = current_bytes();
         while (cb > budget) {
             int best = -1;
-            double best_score = INFINITE;
+            double best_score = LQ_INFINITE;
             for (size_t i = 0; i < all_tensors.size(); ++i) {
                 const auto & tn = all_tensors[i];
                 if (tn.choice == 0) { continue; }
@@ -2912,7 +2968,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                 };
 
                 ggml_type fill = GGML_TYPE_Q8_0;
-                double fill_bpw = INFINITE;
+                double fill_bpw = LQ_INFINITE;
                 int fill_rank = 3;
                 for (const ggml_type t : quant_types) {
                     if (!ggml_is_quantized(t)) { continue; }
@@ -2927,7 +2983,7 @@ static std::unordered_map<std::string, ggml_type> target_bpw_type(
                     }
                 }
 
-                if (fill_bpw == INFINITE && qs.ignored_types[fill]) {
+                if (fill_bpw == LQ_INFINITE && qs.ignored_types[fill]) {
                     LLAMA_LOG_WARN("\t%s: ffn_down type %s is ignored by --target-exclude, keeping the auto-selected type\n", func, ggml_type_name(fill));
                 } else {
                     size_t locked_bytes = 0;

@@ -14,6 +14,7 @@
 		isMcpResource,
 		isMediaExtra
 	} from '#lib/utils/index.ts';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -34,6 +35,8 @@
 		activeModelId?: string;
 		/** A message's attachments: media opens the conversation's slideshow at it */
 		conversationGallery?: boolean;
+		/** Rendered before the attachments, e.g. the chat form's system message */
+		leading?: Snippet;
 	}
 
 	let {
@@ -45,6 +48,7 @@
 		imageClass = '',
 		imageHeight = 'h-24',
 		imageWidth = 'w-auto',
+		leading,
 		limitToSingleRow = false,
 		onFileRemove,
 		readonly = false,
@@ -104,16 +108,20 @@
 	/>
 {/snippet}
 
-{#if displayItems.length > 0}
+{#if displayItems.length > 0 || leading}
 	<div class={className} {style}>
 		{#if limitToSingleRow}
 			<ScrollCarousel bind:this={carouselRef} variant={ScrollCarouselVariant.CENTER}>
+				{@render leading?.()}
+
 				{#each displayItems as item (item.id)}
 					{@render attachmentitem(item)}
 				{/each}
 			</ScrollCarousel>
 		{:else}
 			<div class="flex flex-wrap items-start justify-end gap-3">
+				{@render leading?.()}
+
 				{#each displayItems as item (item.id)}
 					{@render attachmentitem(item)}
 				{/each}

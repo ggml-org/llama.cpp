@@ -1,10 +1,11 @@
 #ifndef HTP_CTX_H
 #define HTP_CTX_H
 
+#include "dma-proxy.h"
 #include "dma-queue.h"
 #include "hmx-queue.h"
-#include "htp-dcache.h"
 #include "htp-ops.h"
+#include "htp-thread.h"
 #include "htp-trace.h"
 #include "work-queue.h"
 #include "hex-fastdiv.h"
@@ -25,15 +26,6 @@ struct htp_mmap {
     uint64_t base;
     uint32_t fd;
     uint32_t flags;
-};
-
-// Scratchpad state
-struct htp_spad {
-    const struct htp_tensor * src;             // original src of the data (for reuse)
-    uint8_t *                 data;            // pointer to an area in vtcm
-    uint32_t                  stride;          // stride used inside this spad
-    uint32_t                  size;            // total size
-    uint32_t                  size_per_hvx;    // size per hvx
 };
 
 struct htp_mdev_group {
@@ -61,11 +53,6 @@ struct htp_ops_context {
         const struct htp_tensor * dsts[HTP_OP_MAX_OUTPUTS];
     };
 
-    // TODO convert these to an array
-    struct htp_spad src0_spad;
-    struct htp_spad src1_spad;
-    struct htp_spad dst_spad;
-
     uint32_t              flags;
     uint32_t              n_hvx;
     struct fastdiv_values n_hvx_div;
@@ -86,8 +73,10 @@ struct htp_context {
     struct htp_mmap        mmap[HTP_MAX_MMAPS];
     dma_queue_t            dma[HTP_MAX_NTHREADS];
     struct htp_thread_trace trace[HTP_MAX_NTHREADS];
+    htp_thread_t           main_th;
     work_queue_t           hvx_queue;
     hmx_queue_t            hmx_queue;
+    dma_proxy_t            dma_proxy;
 
     uint32_t               n_threads;
     uint32_t               n_hvx;
@@ -107,7 +96,6 @@ struct htp_context {
     atomic_bool            vtcm_needs_release;
 
     uint64_t               max_vmem;
-    struct htp_dirty_range dirty_ranges[HTP_MAX_DIRTY_RANGES];
 
     // Persistent DDR scratchpad for MUL_MAT_ID mappings
     void *                 ddr_spad_base;

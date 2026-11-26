@@ -65,7 +65,6 @@ struct htp_im2col_kernel_params {
     uint32_t OD, OH, OW;
     uint32_t patch_stride;
     uint32_t total_rows;
-    uint32_t rows_per_chunk;
 
     struct fastdiv_values div_OH;
     struct fastdiv_values div_OD;

@@ -89,7 +89,10 @@ describe('sending a voice message', () => {
 			vision: true
 		});
 
-		expect(ChatService.conversionOptionsFor('text-model')).toEqual({ audioInput: false });
+		expect(ChatService.conversionOptionsFor('text-model')).toEqual({
+			audioInput: false,
+			visionInput: true
+		});
 	});
 });
 

@@ -20,7 +20,7 @@ import PencilRuler from '@lucide/svelte/icons/pencil-ruler';
 import SlidersVertical from '@lucide/svelte/icons/sliders-vertical';
 import Sun from '@lucide/svelte/icons/sun';
 import TextCursorInput from '@lucide/svelte/icons/text-cursor-input';
-import { SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
+import { SettingsPlatform, SyncableParameterType, VoiceInputMode } from '#lib/enums/index.ts';
 import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
 import { ColorMode } from '#lib/enums/ui.enums.ts';
 import type {
@@ -65,6 +65,9 @@ export const SETTINGS_SECTION_TITLES = {
 	VOICE: SETTINGS_SECTIONS.VOICE.title
 } as const;
 
+/** The action that opens the MCP servers, under the Enable MCP setting. */
+export const MANAGE_MCP_SERVERS_LABEL = 'Manage MCP servers';
+
 export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 	// General
 	{
@@ -95,6 +98,8 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'The starting message that defines how model should behave.',
 				key: SETTINGS_KEYS.SYSTEM_MESSAGE,
 				label: 'System Message',
+				placeholder:
+					'You are a helpful assistant. Answer briefly and ask when something is unclear.',
 				type: SettingsFieldType.TEXTAREA
 			},
 			{
@@ -117,6 +122,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Use Enter to send messages, and Shift + Enter or Ctrl/Cmd + Enter for new lines. When disabled, and always on a touch screen, Enter adds a line and Ctrl/Cmd + Enter sends.',
 				key: SETTINGS_KEYS.SEND_ON_ENTER,
 				label: 'Send message on Enter',
+				platform: SettingsPlatform.DESKTOP,
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -327,6 +333,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'On desktop, keep a one-line message on the same row as the + button, the model selector and the send button. A second line, or a line too long for the row, brings back the two-row form.',
 				key: SETTINGS_KEYS.SINGLE_ROW_CHAT_FORM,
 				label: 'Single-row chat form for short messages',
+				platform: SettingsPlatform.DESKTOP,
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -334,6 +341,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Always keep the sidebar visible on desktop instead of auto-hiding it.',
 				key: SETTINGS_KEYS.ALWAYS_SHOW_SIDEBAR_ON_DESKTOP,
 				label: 'Always show sidebar on desktop',
+				platform: SettingsPlatform.DESKTOP,
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -341,6 +349,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Show open chats as browser-style tabs above the conversation, one per open chat. When disabled, only one chat is shown at a time.',
 				key: SETTINGS_KEYS.CONVERSATION_TABS,
 				label: 'Conversation tabs',
+				platform: SettingsPlatform.DESKTOP,
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -383,6 +392,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				help: 'Keep the organization name on a phone too, where the model selector is narrow. Applies only while the organization name is shown.',
 				key: SETTINGS_KEYS.SHOW_MODEL_ORG_NAME_ON_MOBILE,
 				label: 'Show organization name on mobile',
+				platform: SettingsPlatform.MOBILE,
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -501,7 +511,7 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		settings: [
 			{
 				defaultValue: '[]',
-				help: 'Configure MCP servers as a JSON list. Use the form in the MCP Client settings section to edit.',
+				help: `Configure MCP servers as a JSON list. Edit them with ${MANAGE_MCP_SERVERS_LABEL}.`,
 				key: SETTINGS_KEYS.MCP_SERVERS,
 				label: 'MCP servers',
 				standaloneField: false,
@@ -525,9 +535,9 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 		settings: [
 			{
 				defaultValue: false,
-				help: 'Show MCP in the sidebar, to add and manage MCP servers. Servers already added keep working while it is hidden.',
-				key: SETTINGS_KEYS.SHOW_MCP,
-				label: 'Show MCP',
+				help: 'Let chats use the tools, prompts and resources of MCP servers. While it is off, no MCP server is connected.',
+				key: SETTINGS_KEYS.ENABLE_MCP,
+				label: 'Enable MCP',
 				type: SettingsFieldType.CHECKBOX
 			},
 			{
@@ -870,6 +880,7 @@ function toSettingsSection(section: SettingsSectionEntry): SettingsSection {
 				min: s.min,
 				options: s.options as SettingsFieldConfig['options'],
 				placeholder: s.placeholder,
+				platform: s.platform,
 				radioOptions: s.radioOptions,
 				type: s.type
 			})),
