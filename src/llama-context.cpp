@@ -196,7 +196,7 @@ llama_context::llama_context(
             model.arch == LLM_ARCH_CLOVER_MOE ||
             // KDA
             model.arch == LLM_ARCH_KIMI_K3 || model.arch == LLM_ARCH_KIMI_K31 || model.arch == LLM_ARCH_GLM5_NEXT ||
-            model.arch == LLM_ARCH_BAILINGMOE3);
+            model.arch == LLM_ARCH_BAILINGMOE3 || model.arch == LLM_ARCH_RAON1_MINI);
 
     cparams.n_threads               = params.n_threads;
     cparams.n_threads_batch         = params.n_threads_batch;
@@ -375,6 +375,13 @@ llama_context::llama_context(
 
     cparams.op_offload     = params.op_offload;
     cparams.kv_unified     = params.kv_unified;
+
+    // the Hy4 flash pools gather their members from a single KV stream
+    if (model.arch == LLM_ARCH_HY_V4_FLASH && !cparams.kv_unified && cparams.n_seq_max > 1) {
+        LLAMA_LOG_WARN("%s: %s needs a unified KV cache, the sequences share n_ctx\n", __func__, llm_arch_name(model.arch));
+        cparams.kv_unified = true;
+    }
+
     cparams.moe_cache_size      = params.moe_cache_size;
     cparams.moe_cache_cpu_share = params.moe_cache_cpu_share;
 
@@ -1834,13 +1841,6 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     if (!graph_reuse_disable && gf_res_prev_active == res && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
-        // with pipeline parallelism, the previous graph_compute_async may still be running
-        // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
-        // that the previous compute is still reading.
-        if (cparams.pipeline_parallel) {
-            ggml_backend_sched_synchronize(sched.get());
-        }
-
         n_reused++;
     } else {
         gf_res_prev_active = nullptr;
@@ -3108,12 +3108,15 @@ ggml_status llama_context::graph_compute(
     int n_threads        = batched ? cparams.n_threads_batch : cparams.n_threads;
     ggml_threadpool_t tp = batched ? threadpool_batch        : threadpool;
 
+    decltype(ggml_threadpool_pause) * pause_fn = nullptr;
+
     if (backend_cpu != nullptr) {
         auto * reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend_cpu));
         auto * set_threadpool_fn = (decltype(ggml_backend_cpu_set_threadpool) *) ggml_backend_reg_get_proc_address(reg, "ggml_backend_cpu_set_threadpool");
         if (set_threadpool_fn) {
             set_threadpool_fn(backend_cpu, tp);
         }
+        pause_fn = (decltype(ggml_threadpool_pause) *) ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_pause");
     }
 
     // set the number of threads for all the backends
@@ -3126,6 +3129,11 @@ ggml_status llama_context::graph_compute(
     auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
+    }
+
+    // stop polling while the other backends wrap up
+    if (tp != nullptr && pause_fn != nullptr && ggml_backend_sched_get_n_splits(sched.get()) > 1) {
+        pause_fn(tp);
     }
 
     // fprintf(stderr, "splits: %d\n", ggml_backend_sched_get_n_splits(sched));
@@ -3859,28 +3867,28 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
 }
 
 size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
-    std::unique_ptr<llama_io_read_i> io;
-    if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
-        // create a temporary io to read the magic and the src seq_id
-        io = std::make_unique<llama_io_read_host>(src, size);
-
-        uint32_t magic_read;
-        io->read(&magic_read, sizeof(magic_read));
-        if (io_magic != magic_read) {
-            throw std::runtime_error("wrong sequence state magic");
-        }
-
-        llama_seq_id seq_id_read;
-        io->read(&seq_id_read, sizeof(seq_id_read));
-
-        GGML_ASSERT(mem_storage.find(seq_id_read) != mem_storage.end());
-
-        io = std::make_unique<llama_io_read_device>(src, size, mem_storage[seq_id_read]);
-    } else {
-        io = std::make_unique<llama_io_read_host>(src, size);
-    }
+    std::unique_ptr<llama_io_read_i> io = std::make_unique<llama_io_read_host>(src, size);
 
     try {
+        if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+            // read the magic and the src seq_id with the host io, then switch to the device io
+            uint32_t magic_read;
+            io->read(&magic_read, sizeof(magic_read));
+            if (io_magic != magic_read) {
+                throw std::runtime_error("wrong sequence state magic");
+            }
+
+            llama_seq_id seq_id_read;
+            io->read(&seq_id_read, sizeof(seq_id_read));
+
+            const auto it = mem_storage.find(seq_id_read);
+            if (it == mem_storage.end()) {
+                throw std::runtime_error(format("no device state stored for seq_id %d", seq_id_read));
+            }
+
+            io = std::make_unique<llama_io_read_device>(src, size, it->second);
+        }
+
         uint32_t magic_read;
         io->read(&magic_read, sizeof(magic_read));
         if (io_magic != magic_read) {

@@ -48,6 +48,23 @@
 			<ChatMessageStatistics {...stats} {agenticTimings} hideSummary />
 		</StateGalleryItem>
 
+		<StateGalleryItem label="Agentic task time" note="generation view, whole reply">
+			<ChatMessageStatistics
+				{...stats}
+				{agenticTimings}
+				mode={ChatMessageStatisticsMode.GENERATION}
+			/>
+		</StateGalleryItem>
+
+		<StateGalleryItem label="Live agentic task" note="task time ticks from its start">
+			<ChatMessageStatistics
+				{...stats}
+				isLive
+				mode={ChatMessageStatisticsMode.GENERATION}
+				taskStartedAt={Date.now()}
+			/>
+		</StateGalleryItem>
+
 		<StateGalleryItem label="Generation only">
 			<ChatMessageStatistics {...stats} mode={ChatMessageStatisticsMode.GENERATION} />
 		</StateGalleryItem>

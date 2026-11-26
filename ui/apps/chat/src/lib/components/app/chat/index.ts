@@ -714,3 +714,16 @@ export { default as ChatScreenServerError } from './ChatScreen/ChatScreenServerE
  * Renders nothing otherwise. Shown inside ChatScreen only on an active conversation route.
  */
 export { default as ChatScreenStreamResumeStatus } from './ChatScreen/ChatScreenStreamResumeStatus.svelte';
+
+/**
+ * A new chat's custom system message as an attachment in the chat form, with the system
+ * message's dashed look, until the first message. Clicking it opens the message in a dialog
+ * to edit; it can be removed.
+ */
+export { default as ChatFormSystemMessageAttachment } from './ChatForm/ChatFormSystemMessageAttachment.svelte';
+
+/**
+ * Chip under the chat form that opens the conversation's system message for editing.
+ * Shown whenever the conversation has one.
+ */
+export { default as ChatFormSystemMessageChip } from './ChatForm/ChatFormSystemMessageChip.svelte';

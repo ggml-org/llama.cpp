@@ -318,6 +318,7 @@ ninja
 
 ## Known Issues
 
+- Adreno E17 compiler workarounds are disabled by default. If you encounter Flash Attention compilation failures or incorrect MoE results, set `GGML_OPENCL_ADRENO_E17_QUIRKS=1` before starting llama.cpp.
 - Flash attention does not always improve performance.
 - Currently OpenCL backend works on A6xx GPUs with recent drivers and compilers (usually found in IoT platforms).
   However, it does not work on A6xx GPUs found in phones with old drivers and compilers.

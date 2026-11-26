@@ -1,4 +1,4 @@
-// The live task timer sits at the end of the last tool row while a reply runs.
+// The live loop timer sits at the end of the last tool row while a reply runs.
 // The trace sets it once, naming that row's call, so the per-tool blocks need
 // no extra prop.
 
@@ -6,7 +6,7 @@ import { getContext, setContext } from 'svelte';
 
 const KEY = Symbol('tool-call-elapsed');
 
-/** The call that shows the timer and the task start (ms since epoch), or null for no timer. */
+/** The call that shows the timer and its start (ms since epoch), or null for no timer. */
 type ElapsedTarget = { startedAt: number; toolCallId: string } | null;
 
 export function setToolCallElapsedContext(getTarget: () => ElapsedTarget): void {
@@ -14,7 +14,7 @@ export function setToolCallElapsedContext(getTarget: () => ElapsedTarget): void 
 }
 
 /**
- * Call during component init. Returns a reader of the task start for a call:
+ * Call during component init. Returns a reader of the timer start for a call:
  * its start when that call shows the timer, null otherwise.
  */
 export function useToolCallElapsed(): (toolCallId: string | undefined) => number | null {

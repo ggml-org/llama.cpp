@@ -30,6 +30,10 @@ The Hexagon NPU backend takes advantage of Snapdragon unified memory where all D
 The NPU has dedicated tightly-coupled memory called VTCM (Vector Tightly-Coupled Memory). VTCM is used for intermediate data (such as
 dynamically quantized activations) and streaming buffers (chunks of weight and activation tensors fetched via DMA).
 
+Both DDR and VTCM reserve trailing guard space so HVX kernels can issue full-width vector loads (`vmem` / `vmemu`) on tail elements without boundary branches:
+- Shared DDR buffers pad allocations to 4 KB and append a 4 KB guard page.
+- Usable VTCM (`htp_vtcm_usable_size`) reserves `HTP_VTCM_GUARD_SIZE` (128 bytes) at the end of the physical VTCM page.
+
 ## Large model handling
 
 Hexagon NPU sessions have a 32-bit virtual address space window of around 3.5GB.
@@ -72,34 +76,29 @@ For a weight matrix of logical shape `[ne0, ne1]` (where `ne0 = K`, `ne1 = N`):
 
 ### Block-32 Quantized Formats
 
-Block-32 formats use a tile size of 32 rows x 32 columns (`K_cols = 32`):
+Block-32 formats use a tile size of 32 rows x 32 columns (`K_cols = 32`).
+Quants are stored in 4-K-grouped (`vrmpy`) byte order across 128-byte HVX vectors:
+columns `k = 0..31` are split into 8 groups `g = k / 4` of 4 consecutive columns (`j = k % 4`), stored at `4 * row + j` within each vector.
 
 - **Q4_0** (576 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q4_0`):
-  - **Quants** (bytes 0..511, 512 bytes):
+  - **Quants** (bytes 0..511, 512 bytes, 4 HVX vectors `p = 0..3`):
     Contains 32 rows x 32 columns of 4-bit quants.
-    Divided into 16 column pairs `cp = 0..15` covering columns `2*cp` and `2*cp + 1`.
-    For each column pair `cp`, 32 bytes are stored consecutively for rows `row = 0..31`:
-    `tile[cp * 32 + row]` holds `(quant[row][2*cp + 1] << 4) | quant[row][2*cp]`.
-    Low nibble holds the even column; high nibble holds the odd column.
+    Vector `p` packs column group `2*p` in the low nibble and group `2*p + 1` in the high nibble:
+    `tile[p * 128 + row * 4 + j]` holds `(quant[row][8*p + 4 + j] << 4) | quant[row][8*p + j]` for `row = 0..31`, `j = 0..3`.
   - **Scales** (bytes 512..575, 64 bytes):
     32 FP16 values (`ggml_half`), storing scale `d` for each row `row = 0..31`.
 
 - **Q8_0** (1088 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q8_0`):
-  - **Quants** (bytes 0..1023, 1024 bytes):
+  - **Quants** (bytes 0..1023, 1024 bytes, 8 HVX vectors `p = 0..7`):
     Contains 32 rows x 32 columns of signed 8-bit quants (`int8_t`).
-    Divided into 16 column pairs `cp = 0..15` covering columns `col0 = 2*cp` and `col1 = 2*cp + 1`.
-    For each column pair `cp`, 64 bytes store interleaved column elements for each row `row = 0..31`:
-    `tile[cp * 64 + 2 * row + 0] = quant[row][col0]`
-    `tile[cp * 64 + 2 * row + 1] = quant[row][col1]`
+    Vector `p` holds column group `p` (`k = 4*p .. 4*p + 3`):
+    `tile[p * 128 + row * 4 + j] = quant[row][4*p + j]` for `row = 0..31`, `j = 0..3`.
   - **Scales** (bytes 1024..1087, 64 bytes):
     32 FP16 values (`ggml_half`), storing scale `d` for each row `row = 0..31`.
 
 - **IQ4_NL** (576 bytes per tile, `HTP_TENSOR_TILE_SIZE_IQ4_NL`):
   - **Quants** (bytes 0..511, 512 bytes):
-    Same nibble transposition and storage layout as `Q4_0`.
-    Contains 32 rows x 32 columns of non-linear 4-bit indices (values 0..15).
-    Divided into 16 column pairs `cp = 0..15`:
-    `tile[cp * 32 + row]` holds `(quant[row][2*cp + 1] << 4) | quant[row][2*cp]`.
+    Same 4-K-grouped nibble layout as `Q4_0`, storing 4-bit non-linear indices (values 0..15).
   - **Scales** (bytes 512..575, 64 bytes):
     32 FP16 values (`ggml_half`), storing scale `d` for each row `row = 0..31`.
   - **Dequantization**:
@@ -107,10 +106,7 @@ Block-32 formats use a tile size of 32 rows x 32 columns (`K_cols = 32`):
 
 - **MXFP4** (544 bytes per tile, `HTP_TENSOR_TILE_SIZE_MXFP4`):
   - **Quants** (bytes 0..511, 512 bytes):
-    Same nibble transposition and storage layout as `Q4_0`.
-    Contains 32 rows x 32 columns of 4-bit OCP Microscaling FP4 (E2M1) values.
-    Divided into 16 column pairs `cp = 0..15`:
-    `tile[cp * 32 + row]` holds `(quant[row][2*cp + 1] << 4) | quant[row][2*cp]`.
+    Same 4-K-grouped nibble layout as `Q4_0`, storing 4-bit OCP Microscaling FP4 (E2M1) values.
   - **Scales** (bytes 512..543, 32 bytes):
     32 unsigned 8-bit values (`uint8_t`), storing one 8-bit biased exponent (E8M0, bias 127) scale `e` per row `row = 0..31`.
   - **Dequantization**:
@@ -119,26 +115,25 @@ Block-32 formats use a tile size of 32 rows x 32 columns (`K_cols = 32`):
 
 - **NVFP4** (576 bytes per tile, `HTP_TENSOR_TILE_SIZE_NVFP4`, lossless tiling with same size as `block_nvfp4`):
   - A 64-element block spans 2 consecutive k-tiles; k-tile `h` holds sub-blocks `2h` and `2h+1`.
-  - **Quants** (bytes 0..511): same nibble transposition as `Q4_0`, holding E2M1 values in element order
-    (within a 16-element sub-block, `qs` byte `j` holds elements `j` and `j+8`).
+  - **Quants** (bytes 0..511, 4 HVX vectors): 4-K-grouped nibble layout per 16-element sub-block `u = 0..1` (`tile[(2*u + 0)*128 + row*4 + j]` holds low nibbles of `qs_sub[j]` and `qs_sub[4+j]`; `tile[(2*u + 1)*128 + row*4 + j]` holds high nibbles).
   - **Scales** (bytes 512..575): UE4M3 bytes, `tile[512 + 32*u + row]` for sub-block `u = 0..1` of the k-tile.
   - The per-tensor F32 scale is not part of the tile.
 
 - **Q4_1** (640 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q4_1`):
   - **Quants** (bytes 0..511, 512 bytes):
-    Same 4-bit nibble transposition and storage layout as `Q4_0`.
+    Same 4-K-grouped nibble layout as `Q4_0`.
   - **Scales** (bytes 512..639, 128 bytes):
     32 pairs of FP16 values (`ggml_half`): `scale[2 * row + 0] = d` (scale) and `scale[2 * row + 1] = m` (min) for each row `row = 0..31`.
 
 - **Q5_0** (704 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q5_0`):
-  - **Quants** (bytes 0..511): same 4-bit nibble transposition and storage layout as `Q4_0`, holding the low 4 bits.
-  - **5th-bit plane** (bytes 512..639): byte `32*c + row` (`c = 0..3`) holds a flag for `k = 2*(4i + c)` at bit `2i` and for `k = 2*(4i + c) + 1` at bit `2i + 1`, for `i = 0..3`. The flag is set when the 5th bit of the quant is clear.
+  - **Quants** (bytes 0..511): same 4-K-grouped nibble layout as `Q4_0`, holding the low 4 bits.
+  - **5th-bit plane** (bytes 512..639, 1 HVX vector): 4-K-grouped; `plane[row * 4 + j]` (`j = 0..3`) holds a flag at bit `g` (`0..7`) for `k = 4*g + j`. The flag is set when the 5th bit of the quant is clear.
   - **Scales** (bytes 640..703, 64 bytes): 32 FP16 values, storing scale `d` for each row `row = 0..31`.
   - **Dequantization**: `0xF0` is OR-ed into the nibble where the flag is set, giving the signed value `q - 16` (-16..15), scaled by `d`.
 
 - **Q5_1** (768 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q5_1`, same layout as the Q5_K tile):
   - **Quants** (bytes 0..511) and **scales** (bytes 512..639): same as `Q4_1`, holding the low 4 bits and `(d, m)` pairs.
-  - **5th-bit plane** (bytes 640..767): same as `Q5_K`; a bit is set when the 5th bit of the quant is set.
+  - **5th-bit plane** (bytes 640..767, 1 HVX vector): 4-K-grouped; `plane[row * 4 + j]` (`j = 0..3`) holds bit `g` (`0..7`) for `k = 4*g + j`, set when the 5th bit of the quant is set.
   - Uses the `Q5_K` HVX/HMX kernels (Q8_1 activations with block sums).
 
 ### Q1_0 Format (1-Bit Quantization)
@@ -209,12 +204,12 @@ Byte ordering: `Q2_K`, `Q3_K`, and `Q6_K` use `vrmpy` byte order within each 128
   - `bytes 384..511` (vec 3): FP16 scales `d * (scales[] - 32)`: `fp16[0..31]` for k 0..15, `fp16[32..63]` for k 16..31.
 
 - **Q4_K** (640 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q4_K`, same layout as Q4_1 tile; each 256-k super-block splits into 8 tiles of 32 k):
-  - `bytes   0..511` (vec 0..3): 4-bit quants; byte `32*cp + r` holds `k = 2*cp` (low nibble) and `2*cp + 1` (high nibble).
+  - `bytes   0..511` (vec 0..3): 4-bit quants in 4-K-grouped order; `tile[p * 128 + row * 4 + j]` holds `k = 8*p + j` (low nibble) and `k = 8*p + 4 + j` (high nibble).
   - `bytes 512..639` (vec 4): 32x2 FP16 per row: `(d * sc, -dmin * m)`.
 
 - **Q5_K** (768 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q5_K`):
   - `bytes   0..639` (vec 0..4): Q4_K tile (low 4 bits + FP16 scale/min pairs).
-  - `bytes 640..767` (vec 5): 5th-bit plane; byte `l` holds the 8 high bits for lane `l` across vec `i = 0..3` (`bit 2i = lo, 2i+1 = hi`).
+  - `bytes 640..767` (vec 5): 5th-bit plane in 4-K-grouped order; `plane[row * 4 + j]` holds bit `g` (`0..7`) for `k = 4*g + j`.
 
 - **Q6_K** (896 bytes per tile, `HTP_TENSOR_TILE_SIZE_Q6_K`):
   - `bytes   0..511` (vec 0..3): low 4 bits; vec `i` holds group `2i` (low nibble) and `2i+1` (high nibble).
@@ -227,8 +222,9 @@ Writing high-performance operators for Hexagon requires following specific guide
 
 ### DDR -> DMA -> VTCM Execution Pipeline
 
-- Strongly prefer the `DDR -> DMA -> VTCM -> compute (HVX/HMX) -> VTCM -> DMA -> DDR` data flow.
-- Direct HVX reads/writes from/to DDR are less efficient and should only be used as a fallback.
+- All operators must use the `DDR -> DMA -> VTCM -> compute (HVX/HMX) -> VTCM -> DMA -> DDR` data flow.
+- **No direct reads or writes to `tensor->data`**: Do not dereference `tensor->data` pointers directly (scalar or HVX). All tensor transfers must go through DMA, because bypass DMA writes are not L1D/L2 coherent and tensors may reside in 40-bit extended address space.
+- **Rare exception (small index/position tensors)**: For small metadata tensors that require scalar indexing (such as `ids`, `pos`, or row indices), use [`htp_tensor_read()`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h) to copy into a 128-byte aligned local DDR buffer (`ddr_spad_base` or stack). It handles extended addresses, arbitrary strides, and `dccleaninva` + `syncht` cache maintenance in one place.
 - Use `dma_addr_t` only for DMA base and final addresses. Form a final address by adding a 32-bit byte offset to a
   `dma_addr_t` tensor base address. This permits a 64-bit mapped base address on newer platforms while retaining 32-bit
   relative addressing.
@@ -244,8 +240,12 @@ Writing high-performance operators for Hexagon requires following specific guide
   properly. Flushing is only used in rare exceptions where a batch of operations is pushed without individual pops.
 - Use the DMA queue interface from [`dma-queue.h`](../../../ggml/src/ggml-hexagon/htp/dma-queue.h)
   (`dma_queue_push()`, `dma_queue_pop()`, and `dma_queue_flush()`).
-  See [`cumsum-ops.c`](../../../ggml/src/ggml-hexagon/htp/cumsum-ops.c) and
-  [`act-ops.c`](../../../ggml/src/ggml-hexagon/htp/act-ops.c) for reference implementations.
+- For new simple ops, prefer the generic double-buffered pipeline drivers in
+  [`dma-pipeline.h`](../../../ggml/src/ggml-hexagon/htp/dma-pipeline.h) (`dma_pipe_io_run`, `dma_pipe_in_run`,
+  `dma_pipe_out_run`), which use dummy pushes, `dma_queue_pop().src`/`.dst` slot recycling, and `dma_queue_flush()`
+  at the end of the op. See [`cumsum-ops.c`](../../../ggml/src/ggml-hexagon/htp/cumsum-ops.c),
+  [`diag-ops.c`](../../../ggml/src/ggml-hexagon/htp/diag-ops.c), and
+  [`pad-ops.c`](../../../ggml/src/ggml-hexagon/htp/pad-ops.c) for reference implementations.
 
 ### Avoid Scalar Reads and Writes to VTCM
 
@@ -256,22 +256,22 @@ Writing high-performance operators for Hexagon requires following specific guide
 - Hexagon cores do not have hardware division instructions.
 - For recurring divisions across iterations or threads, use `fastdiv` from
   [`hex-fastdiv.h`](../../../ggml/src/ggml-hexagon/htp/hex-fastdiv.h) with precomputed divisors (such as
-  `octx->ctx->mdev.count_div` or `octx->n_threads_div`).
+  `octx->ctx->mdev.count_div` or `octx->n_hvx_div`).
 - Do not call `init_fastdiv_values()` for single-use divisions; use standard compiler division (`/`) instead.
 
 ### Host-Side Precomputation via `kernel_params`
 
 - Precompute tensor shapes, strides, scale conversions, tiling layouts, and validation checks on the host CPU during graph
-  preparation in [`ggml-hexagon.cpp`](../../../ggml/src/ggml-hexagon/ggml-hexagon.cpp).
+  preparation in [`htp-kparams.cpp`](../../../ggml/src/ggml-hexagon/htp-kparams.cpp).
 - Pack precomputed parameters into the operator's fixed `kernel_params` structure in `htp_op_node` (such as
   `htp_mm_kernel_params`, `htp_unary_kernel_params`, `htp_fa_kernel_params`, `htp_get_rows_kernel_params`).
 - The NPU executes directly using `octx->kernel_params` without redundant runtime metadata extraction or validation.
 - **Strict Host-Kernel Alignment**:
   - Verify that parameters calculated by the host CPU are strictly honored by the NPU kernel.
-  - Ensure the kernel does not ignore host-computed fields (for example, falling back to `octx->n_threads` instead of
-    using `kparams->n_threads`, or ignoring precomputed `tasks_per_thread` and chunk counts).
+  - Ensure the kernel does not ignore host-computed fields (for example, falling back to `octx->n_hvx` instead of
+    using `kparams->n_hvx`, or ignoring precomputed `tasks_per_hvx` and chunk counts).
   - Both human developers and coding agents must audit both sides of the interface: ensure fields populated in `kernel_params`
-    in [`ggml-hexagon.cpp`](../../../ggml/src/ggml-hexagon/ggml-hexagon.cpp) are actively and consistently utilized by the
+    in [`htp-kparams.cpp`](../../../ggml/src/ggml-hexagon/htp-kparams.cpp) are actively and consistently utilized by the
     corresponding operator entry point and worker threads in `htp/*-ops.c`.
 
 ### Tracing Instrumentation
@@ -292,7 +292,7 @@ Writing high-performance operators for Hexagon requires following specific guide
 - Distribute parallel work across NPU worker threads using the thread pool work queue:
 
   ```c
-  work_queue_run(ctx->work_queue, worker_func, &op_ctx, n_threads);
+  work_queue_run(ctx->hvx_queue, worker_func, &op_ctx, n_hvx);
   ```
 
 - Keep worker functions independent and re-entrant. Worker threads should only operate on their designated chunk of rows or elements.
@@ -307,6 +307,12 @@ Writing high-performance operators for Hexagon requires following specific guide
 - **Distinction**: `octx->src[N]` pointers *can* be NULL by design and must be checked when optional.
   Examples include attention masks, optional bias or weights in fused kernels, and frequency factors.
 
+### Prefer Early Dispatch and Specialized Micro-Kernels
+
+- Avoid peppering micro-kernels, row or tile compute loops, or DMA worker loops with runtime checks for operand types, optional inputs, broadcast modes, or layout variants.
+- Resolve execution variants early during operator setup (`op_*` / `execute_op_*`) via function pointers or dispatch tables so each micro-kernel and inner loop handles a single clean path that the compiler can unroll and software-pipeline without extra branch or register pressure.
+- Prefer clean standalone specialized functions; use macros only to avoid genuine code duplication across type or mode instantiations.
+
 ### `supports_op` Independence from Buffer and Repack State
 
 - `supports_op` (and op-specific checkers such as `supported_mul_mat()`, `supported_get_rows()`) runs during GGML graph scheduling **before** buffers are allocated and before tensor data is populated.
@@ -318,6 +324,10 @@ Writing high-performance operators for Hexagon requires following specific guide
 - Operator support decisions must depend strictly on static tensor properties: operand types (`t->type`), shapes (`t->ne`), strides (`t->nb`), and operation parameters.
 - Repacking (converting weights to tiled layout) is an internal optimization applied during `set_tensor()` or rt-repack. Non-weight tensors or test harness tensors with the same type remain in flat layout.
 - Therefore, any supported type (such as BF16, F16, quantized types) must be supported both when repacked into tiles and when stored flat in memory.
+
+### FP16 and Mixed-Precision Operator Support
+
+- New and updated Hexagon compute operators must support `F16` (and mixed `F16`/`F32` where applicable for graph lowering) across activation inputs and outputs, even when `ggml-cpu` only implements `F32`.
 
 ### Multiline Macro Formatting
 
@@ -361,56 +371,37 @@ python3 scripts/snapdragon/ggml-hexagon-inspect.py --addr2line 0x51a30 0x5ba54
 Multi-device (mdev) mode enables row-level tensor parallel execution across multiple physical NPU cores or virtual NPU
 sessions.
 
-### 128-Byte Cache Line Alignment
+### Non-Overlapping Output Ranges
 
-- Shared tensor buffers reside in DDR (RPCMEM) with a 128-byte cache line granularity
-  (`HEX_L2_LINE_SIZE` = 128 bytes, `HTP_TENSOR_MDEV_LINE_SIZE`).
-- **Rule**: Multi-device work partitions that write directly to DDR through HVX/L2 must align destination write regions to
-  128-byte cache line boundaries so distinct devices never share or overwrite the same cache line.
-- DMA writes to DDR are not subject to this cache-line ownership rule. They may use smaller non-overlapping destination
-  ranges when the operator only writes through DMA.
+- Because all DDR writes go through bypass DMA, multi-device partitions are **not** subject to 128-byte cache-line
+  alignment rules.
+- Devices only need non-overlapping destination output ranges and any kernel-specific tile or vector granularity
+  (for example, 32 rows for tiled matmul or 128-byte vector chunks for flat 1D element-wise ops).
 
-### Partitioning Helpers in `htp-tensor.h`
+### Partitioning Helper in `htp-tensor.h`
 
-Common partitioning logic is factored into reusable inline helpers in
-[`htp-tensor.h`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h):
+Common partitioning logic is factored into [`htp_tensor_mdev_partition`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h)
+in [`htp-tensor.h`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h):
 
-1. [`htp_tensor_mdev_rows_per_chunk`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L104):
-   Determines the minimum number of rows per chunk so that the chunk byte size is a multiple of 128 bytes:
-
-   ```
-   rows_per_chunk = 128 / hex_gcd_u32(row_size, 128)
-   ```
-
-   If the active row and outer strides are already multiples of 128 bytes, `rows_per_chunk = 1`.
-   Returns `false` if the tensor cannot be safely row-partitioned (such as unaligned base pointer, permuted layout,
-   or non-128-byte aligned outer strides).
-
-2. [`htp_tensor_mdev_partition`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L131):
-   Calculates the per-device work range `struct htp_tensor_mdev_range { uint32_t start; uint32_t count; }` given
-   `total_units`, `units_per_chunk`, `mdev_idx`, `mdev_count`, and the precomputed `mdev_count_div`.
-   Handles chunk distribution across devices, assigns remainder units to the last device, and automatically triggers
-   single-device fallback when partitioning is unsafe.
+- Calculates the per-device work range `struct htp_tensor_mdev_range { uint32_t start; uint32_t count; }` given
+  `total_units`, `units_per_chunk`, `mdev_idx`, `mdev_count`, and the precomputed `mdev_count_div`.
+- Handles chunk distribution across devices, assigns remainder units to the last device, and automatically falls back
+  to Device 0 when `units_per_chunk == 0` or `total_units / units_per_chunk < mdev_count`.
 
 ### Row-Partitioned Operators
 
-For row-wise operators that write directly to DDR
-(such as activations in [`act-ops.c`](../../../ggml/src/ggml-hexagon/htp/act-ops.c),
-binary ops in [`binary-ops.c`](../../../ggml/src/ggml-hexagon/htp/binary-ops.c),
+For row-wise operators (such as binary ops in [`binary-ops.c`](../../../ggml/src/ggml-hexagon/htp/binary-ops.c)
 and unary ops in [`unary-ops.c`](../../../ggml/src/ggml-hexagon/htp/unary-ops.c)):
 
 ```c
-const uint32_t total_rows   = ne01 * ne02 * ne03;
-const size_t   dst_row_size = dst->ne[0] * elem_size;
+const uint32_t total_rows = ne01 * ne02 * ne03;
 
 uint32_t row_start = 0;
 uint32_t nrows     = total_rows;
 
 if (octx->ctx->mdev.count > 1) {
-    uint32_t rows_per_chunk = 0;
-    htp_tensor_mdev_rows_per_chunk(dst, elem_size, (uint32_t) dst_row_size, &rows_per_chunk);
     const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
-        total_rows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        total_rows, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
     row_start = range.start;
     nrows     = range.count;
 }
@@ -422,24 +413,16 @@ if (nrows == 0) {
 
 ### Element-Partitioned Operators
 
-For flat element-wise operations that write directly to DDR:
-- Partition total linear elements N = ne0 * ne1 * ne2 * ne3 in 128-byte cache line chunks (`elems_per_line = (elem_size == 4) ? 32 : 64`).
-- Requires strict 1D contiguity:
-  [`htp_tensor_is_contiguous(dst, elem_size)`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L65)
-  and 128-byte aligned destination pointer
-  [`htp_tensor_mdev_data_aligned(dst)`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L84).
-- If contiguous and aligned, pass `elems_per_line` to
-  [`htp_tensor_mdev_partition`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h#L131);
-  otherwise pass 0 to trigger Device 0 fallback.
+For flat 1D element-wise operations:
+- Partition total linear elements `N = ne0 * ne1 * ne2 * ne3` in HVX vector-sized chunks (`elems_per_line = 128 / elem_size`).
+- Requires 1D contiguity via [`htp_tensor_is_contiguous`](../../../ggml/src/ggml-hexagon/htp/htp-tensor.h); otherwise pass
+  `0` to trigger Device 0 fallback.
 
 ### Single-Device Fallback (Device 0)
 
-- Fallback to Device 0 (`mdev.idx == 0`) when partitioning would cause cache line tearing or there are too few aligned chunks.
-- Triggers:
-  1. Destination tensor cannot be safely partitioned (`rows_per_chunk == 0` or non-contiguous/unaligned buffer).
-  2. Total aligned chunks < `mdev_count`.
+- Fallback to Device 0 (`mdev.idx == 0`) happens when `units_per_chunk == 0` or `total_chunks < mdev_count`.
 - Device 0 processes the entire tensor `[0, total_units)`.
-- Devices 1 ... N-1 receive `count = 0` and return `HTP_STATUS_OK` immediately.
+- Devices `1 ... N-1` receive `count = 0` and return `HTP_STATUS_OK` immediately.
 
 ### Flatten Outer Dimensions Globally
 
@@ -494,10 +477,7 @@ Multi-device execution synchronizes worker sessions through atomic fence slots a
   (htp_mdev_group_barrier)                     (htp_mdev_group_barrier)
        |                                            |
   Kernel Execution                             Kernel Execution
-  (Output Slice 0)                             (Output Slice 1)
-       |                                            |
-  Tensor Cache Flush                           Tensor Cache Flush
-  (htp_dcache_flush_dirty_tensors)             (htp_dcache_flush_dirty_tensors)
+  (Output Slice 0, via bypass DMA)             (Output Slice 1, via bypass DMA)
        |                                            |
   Post-Op/Batch Barrier ---------------------- Post-Op/Batch Barrier
   (htp_mdev_group_barrier)                     (htp_mdev_group_barrier)
@@ -532,11 +512,8 @@ Multi-device execution synchronizes worker sessions through atomic fence slots a
   misaligned barrier arrivals across iterations.
 - If any peer reports an error status (`peer_status > HTP_STATUS_OK`), the barrier propagates the error and unblocks immediately.
 
-### Tensor Cache Flush and Pipeline Completion
+### Pipeline Completion
 
-- In the kernel, ensure all pushed DMA operations have been popped in strict FIFO order to drain the queue.
-- Use [`htp_dcache_flush_dirty_tensors()`](../../../ggml/src/ggml-hexagon/htp/htp-dcache.h) to flush specific dirty tensors back to DDR:
-  - [`htp_dcache_flush_dirty_tensors()`](../../../ggml/src/ggml-hexagon/htp/htp-dcache.h) flushes modified tensor address ranges, or the
-    full D-cache when their total size exceeds the flush threshold, ensuring peer devices and the host CPU observe consistent
-    data in DDR.
-- Never signal completion before all DMA transfers are drained and dirty tensor flushes have completed.
+- In the kernel, ensure all pushed DMA operations have been popped in strict FIFO order (or flushed via `dma_queue_flush()`) to drain the queue.
+- Because all DDR writes use bypass DMA, no per-tensor output cache flush is needed.
+- Never signal completion before all DMA transfers are drained.

@@ -19,6 +19,7 @@ import {
 } from '#lib/constants/index.ts';
 import { ColorMode, HealthCheckStatus, MCPConnectionPhase, MCPRefType } from '#lib/enums/index.ts';
 import { MCPService } from '#lib/services/mcp.service.ts';
+import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 import { serverStore } from '#lib/stores/llama-server.svelte.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { MCPHealthCheckManager, type McpHealthHost } from '#lib/stores/mcp/health.svelte.ts';
@@ -94,6 +95,11 @@ class MCPStore implements McpHealthHost {
 		return (
 			mcpConfig !== null && mcpConfig !== undefined && Object.keys(mcpConfig.servers).length > 0
 		);
+	}
+
+	/** Whether the Enable MCP setting is on. */
+	get isFeatureEnabled(): boolean {
+		return Boolean(settingsStore.config[SETTINGS_KEYS.ENABLE_MCP]);
 	}
 
 	get isInitialized(): boolean {
@@ -736,6 +742,9 @@ class MCPStore implements McpHealthHost {
 	}
 
 	getServers(): MCPServerSettingsEntry[] {
+		// a plain chat keeps the saved servers and connects to none
+		if (!agenticMode.enabled) return [];
+
 		const raw = settingsStore.config.mcpServers;
 
 		// cache the parse: the config string rarely changes and getServers is
@@ -811,6 +820,8 @@ class MCPStore implements McpHealthHost {
 	}
 
 	hasAvailableServers(): boolean {
+		if (!this.isFeatureEnabled) return false;
+
 		return parseMcpServerSettings(settingsStore.config.mcpServers).some(
 			(s) => s.enabled && s.url.trim()
 		);
@@ -1093,6 +1104,8 @@ class MCPStore implements McpHealthHost {
 	 * Builds MCP client configuration from settings.
 	 */
 	private buildMcpClientConfig(cfg: SettingsConfigType): MCPClientConfig | undefined {
+		if (!cfg[SETTINGS_KEYS.ENABLE_MCP]) return undefined;
+
 		const rawServers = parseMcpServerSettings(cfg.mcpServers);
 
 		if (!rawServers.length) {
@@ -1270,6 +1283,8 @@ class MCPStore implements McpHealthHost {
 
 	/** Server ids that are usable right now: globally enabled ones. */
 	private globalEnabledServerIds(): Set<string> {
+		if (!this.isFeatureEnabled) return new Set();
+
 		return new Set(
 			this.getServers()
 				.filter((s) => s.enabled)

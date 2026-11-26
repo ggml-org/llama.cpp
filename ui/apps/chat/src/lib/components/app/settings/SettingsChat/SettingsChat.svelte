@@ -14,14 +14,17 @@
 	import {
 		NUMERIC_FIELDS,
 		POSITIVE_INTEGER_FIELDS,
-		SETTINGS_CHAT_SECTIONS,
 		SETTINGS_KEYS,
-		SETTINGS_SECTION_SLUGS
+		SETTINGS_SECTION_SLUGS,
+		settingsChatSections
 	} from '#lib/constants/index.ts';
 	import { ColorMode } from '#lib/enums/ui.enums.ts';
-	import { modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
+	import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
+	import { deviceStore, modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
 	import type { SettingsSection, SettingsSectionTitle } from '#lib/types/index.ts';
+	import { isSettingShownOn } from '#lib/utils/index.ts';
 	import { setMode } from 'mode-watcher';
+	import { tick } from 'svelte';
 	import { fade } from 'svelte/transition';
 	interface Props {
 		initialSection?: string;
@@ -33,24 +36,49 @@
 
 	let { initialSection, mobileHeaderClass, onClose, onSectionChange }: Props = $props();
 
-	let activeSlug = $derived(initialSection ?? 'general');
+	const sections = $derived(settingsChatSections(agenticMode.enabled));
+
+	let activeSlug = $derived(initialSection ?? SETTINGS_SECTION_SLUGS.GENERAL);
+
+	let contentEl = $state<HTMLDivElement>();
+
+	// a new section starts at its top, whether the dialog, the drawer or the page scrolls
+	function scrollToTop() {
+		let el: HTMLElement | null = contentEl ?? null;
+
+		while (el) {
+			const { overflowY } = getComputedStyle(el);
+
+			if ((overflowY === 'auto' || overflowY === 'scroll') && el.scrollHeight > el.clientHeight)
+				break;
+
+			el = el.parentElement;
+		}
+
+		(el ?? document.scrollingElement)?.scrollTo({ top: 0 });
+	}
 
 	function handleSectionChange(section: SettingsSectionTitle) {
-		const found = SETTINGS_CHAT_SECTIONS.find((s) => s.title === section);
+		const found = sections.find((s) => s.title === section);
 
-		if (found) {
+		if (found && found.slug !== activeSlug) {
 			activeSlug = found.slug;
+			void tick().then(scrollToTop);
 		}
 
 		onSectionChange?.(section);
 	}
 
 	let currentSection = $derived(
-		SETTINGS_CHAT_SECTIONS.find((section) => section.slug === activeSlug) ||
-			SETTINGS_CHAT_SECTIONS[0]
+		sections.find((section) => section.slug === activeSlug) || sections[0]
 	);
 
 	let localConfig: SettingsConfigType = $state({ ...settingsStore.config });
+
+	// a setting for another kind of device is left out
+	let sectionFields = $derived(
+		(currentSection.fields ?? []).filter((field) => isSettingShownOn(field, deviceStore.isMobile))
+	);
 
 	// inputs hand back strings for numeric fields, so compare stringified values
 	let hasChanges = $derived.by(() => {
@@ -131,9 +159,9 @@
 
 				if (!isNaN(numValue)) {
 					if ((POSITIVE_INTEGER_FIELDS as readonly string[]).includes(field)) {
-						const entryByMinMax = SETTINGS_CHAT_SECTIONS.flatMap(
-							(section) => section.fields ?? []
-						).find((entry) => entry.key === field);
+						const entryByMinMax = sections
+							.flatMap((section) => section.fields ?? [])
+							.find((entry) => entry.key === field);
 						const lo = entryByMinMax?.min ?? 1;
 						const hi = entryByMinMax?.max ?? Number.POSITIVE_INFINITY;
 
@@ -163,7 +191,7 @@
 		<SettingsChatDesktopSidebar
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
 			onSectionChange={handleSectionChange}
-			sections={SETTINGS_CHAT_SECTIONS}
+			{sections}
 		/>
 
 		<SettingsChatMobileHeader
@@ -171,10 +199,10 @@
 			class={mobileHeaderClass}
 			isActive={(section: SettingsSection) => section.slug === activeSlug}
 			onSectionChange={handleSectionChange}
-			sections={SETTINGS_CHAT_SECTIONS}
+			{sections}
 		/>
 
-		<div class="mx-auto max-w-2xl px-4 flex-1 md:mt-4">
+		<div bind:this={contentEl} class="mx-auto max-w-2xl px-4 flex-1 md:mt-4">
 			<div class="space-y-6 pt-3">
 				<div class="grid">
 					{#if currentSection.slug === SETTINGS_SECTION_SLUGS.TOOLS}
@@ -183,14 +211,14 @@
 						<SettingsChatImportExportTab />
 					{:else if currentSection.slug === SETTINGS_SECTION_SLUGS.VOICE && currentSection.fields}
 						<SettingsChatVoiceTab
-							fields={currentSection.fields}
+							fields={sectionFields}
 							{localConfig}
 							onConfigChange={handleConfigChange}
 						/>
 					{:else if currentSection.fields}
 						<div class="space-y-6">
 							<SettingsChatFields
-								fields={currentSection.fields}
+								fields={sectionFields}
 								{localConfig}
 								onConfigChange={handleConfigChange}
 								onThemeChange={handleThemeChange}

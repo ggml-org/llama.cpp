@@ -1067,8 +1067,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
             {
                 if (ne00 < 32) {
                     nsg = 1;
-                    nr0 = 32;
-                    nr1 = 1;
+                    nr0 = std::min(ne01, 32);
+                    nr1 = 32/nr0;
                     suffix = "_short";
                 } else {
                     nsg = std::min(4, (ne00 + 127) / 128);

@@ -1,7 +1,5 @@
 <script lang="ts">
 	import ModelsSelectorDownloadItem from './ModelsSelectorDownloadItem.svelte';
-	import { Logo } from '@ggml-org/llama-ui/app/misc';
-	import { Heart, Power } from '@lucide/svelte';
 	import { DialogConfirmDownload } from '#lib/components/app/dialogs/index.ts';
 	import {
 		GroupedList,
@@ -182,10 +180,6 @@
 		revealChevronOnHover
 		sticky
 	>
-		{#snippet icon()}
-			<Power class="size-icon-sm shrink-0" />
-		{/snippet}
-
 		{#each loadedForChat as item (item.option.id)}
 			{@render render(item, !showOrgName)}
 		{/each}
@@ -211,10 +205,6 @@
 {#if favorites.length > 0}
 	<!-- Favorites come first; the sections below skip them -->
 	<ModelsSection label="Favorites" persistKey="favorites" revealChevronOnHover sticky>
-		{#snippet icon()}
-			<Heart class="size-icon-sm shrink-0" />
-		{/snippet}
-
 		{#each favorites as item (`fav-${item.option.id}`)}
 			{@render render(item, !showOrgName)}
 		{/each}
@@ -245,14 +235,17 @@
 	{/if}
 {/snippet}
 
+<!-- the server's own models are listed as they are, since there is no other provider yet to tell
+     them from; with favorites or loaded models above, they sit in a section of their own, as
+     those do -->
 {#if groups.available.length > 0}
-	<ModelsSection label="Local models" persistKey={LOCAL_BACKEND_ID} revealChevronOnHover sticky>
-		{#snippet icon()}
-			<Logo class="shrink-0" style="--size: 0.875rem" />
-		{/snippet}
-
+	{#if favorites.length > 0 || loaded.length > 0}
+		<ModelsSection label="Other models" persistKey={LOCAL_BACKEND_ID} revealChevronOnHover sticky>
+			{@render localRows()}
+		</ModelsSection>
+	{:else}
 		{@render localRows()}
-	</ModelsSection>
+	{/if}
 {/if}
 
 <DialogConfirmDownload

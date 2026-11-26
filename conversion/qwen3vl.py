@@ -209,7 +209,7 @@ class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
             if not self.has_vision_encoder:
                 raise ValueError(f"Model does not have vision encoder, but found tensor {name}")
             # need to transform vision tensor naming, so that modify_tensors() logic can be used correctly
-            name = name.replace("thinker.visual.", "model.visual.")
+            name = name.replace("thinker.visual.", "visual.")
             if ".merger_list." in name:
                 name = name.replace(".merger_list.", ".deepstack_merger_list.")
                 name = name.replace(".ln_q", ".norm")

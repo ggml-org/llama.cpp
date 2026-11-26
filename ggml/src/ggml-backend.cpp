@@ -21,6 +21,7 @@
 #include <string.h>
 #include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifdef __APPLE__
@@ -1261,6 +1262,9 @@ struct ggml_backend_sched {
     // inputs of the next split read from the backend of the current split before it computes, see ggml_backend_sched_prefetch_inputs
     ggml_backend_event_t prefetch_events[GGML_SCHED_MAX_BACKENDS]; // created on first use, NULL if the backend has no events
     bool                 prefetch_tried [GGML_SCHED_MAX_BACKENDS];
+
+    // backends that take host inputs with set_tensor_async, see ggml_backend_dev_caps
+    bool fast_async_host_input[GGML_SCHED_MAX_BACKENDS];
     struct ggml_tensor * prefetched[GGML_SCHED_MAX_SPLIT_INPUTS];
     int n_prefetched;
     int prefetch_split;     // the split that reads the prefetched inputs
@@ -1890,20 +1894,38 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         sched->prev_leaf_backend_ids = tmp;
     }
 
-    // optimize the split graphs and collect the allocation dependencies added by the backends
+    // optimize the split graphs and collect the allocation dependencies and scratch tensors added by the backends
     // this needs to happen before we make graph_copy, so they are in sync
     // TODO: this may create many small allocations in the scheduler, restructure to use a flat array
-    std::unordered_map<ggml_tensor *, std::vector<ggml_tensor *>> alloc_deps;
+    struct optimize_state {
+        ggml_context * ctx;
+        // node -> tensors kept allocated until the node has been computed
+        std::unordered_map<ggml_tensor *, std::vector<ggml_tensor *>> alloc_deps;
+        // node -> scratch tensors allocated before the node is computed
+        std::unordered_map<ggml_tensor *, std::vector<ggml_tensor *>> scratch;
+    } opt_state;
+    opt_state.ctx = sched->ctx;
 
     struct ggml_backend_graph_optimize_params opt_params = {
         /* .add_alloc_dep = */ [](void * user_data, ggml_tensor * tensor, ggml_tensor * until) {
-            auto & deps = *(std::unordered_map<ggml_tensor *, std::vector<ggml_tensor *>> *) user_data;
-            std::vector<ggml_tensor *> & keep = deps[until];
+            auto & state = *(optimize_state *) user_data;
+            std::vector<ggml_tensor *> & keep = state.alloc_deps[until];
             if (std::find(keep.begin(), keep.end(), tensor) == keep.end()) {
                 keep.push_back(tensor);
             }
         },
-        /* .user_data     = */ &alloc_deps,
+        /* .add_scratch   = */ [](void * user_data, size_t nbytes, ggml_tensor * first, ggml_tensor * last) {
+            auto & state = *(optimize_state *) user_data;
+            GGML_ASSERT(nbytes > 0);
+            ggml_tensor * t = ggml_new_tensor_1d(state.ctx, GGML_TYPE_I8, (int64_t) nbytes);
+            std::vector<ggml_tensor *> & first_scratch = state.scratch[first];
+            ggml_format_name(t, "scratch-%zu (%s)", first_scratch.size(), first->name);
+            first_scratch.push_back(t);
+            // the scratch tensor has no other users, the dep at `last` is what frees it
+            state.alloc_deps[last].push_back(t);
+            return t;
+        },
+        /* .user_data     = */ &opt_state,
     };
 
     for (int i = 0; i < sched->n_splits; i++) {
@@ -1913,17 +1935,27 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         ggml_backend_graph_optimize(sched->backends[split->backend_id], &split->graph, &opt_params);
     }
 
+    const auto & alloc_deps = opt_state.alloc_deps;
+
     // each dep is added to graph_copy as a GGML_OP_NONE node with the kept tensors as srcs
     int n_dep_nodes = 0;
     for (const auto & it : alloc_deps) {
         n_dep_nodes += (it.second.size() + GGML_MAX_SRC - 1) / GGML_MAX_SRC;
     }
 
+    // each scratch tensor is added to graph_copy as a GGML_OP_NONE node right before its first user
+    // scratch tensors not yet added to graph_copy
+    std::unordered_set<ggml_tensor *> scratch_pending;
+    for (const auto & it : opt_state.scratch) {
+        scratch_pending.insert(it.second.begin(), it.second.end());
+    }
+    const int n_scratch_nodes = (int) scratch_pending.size();
+
     int total_inputs = sched->n_graph_inputs;
     for (int i = 0; i < sched->n_splits; i++) {
         total_inputs += sched->splits[i].n_inputs;
     }
-    int graph_size = std::max(graph->n_nodes, graph->n_leafs) + total_inputs * 2 * sched->n_copies + n_dep_nodes;
+    int graph_size = std::max(graph->n_nodes, graph->n_leafs) + total_inputs * 2 * sched->n_copies + n_dep_nodes + n_scratch_nodes;
 
     // remember the actual graph_size for performing reallocation checks later
     sched->prev_graph_size = sched->graph_size;
@@ -1966,6 +1998,19 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         }
 
         for (int j = split->i_start; j < split->i_end; j++) {
+            // add the scratch tensors first so that they are allocated before this node is computed
+            if (!scratch_pending.empty()) {
+                auto it = opt_state.scratch.find(graph->nodes[j]);
+                if (it != opt_state.scratch.end()) {
+                    for (ggml_tensor * t : it->second) {
+                        assert(graph_copy->size > graph_copy->n_nodes);
+                        sched->node_backend_ids[graph_copy->n_nodes] = split->backend_id;
+                        graph_copy->nodes[graph_copy->n_nodes++] = t;
+                        scratch_pending.erase(t);
+                    }
+                }
+            }
+
             assert(graph_copy->size > graph_copy->n_nodes);
             sched->node_backend_ids[graph_copy->n_nodes] = tensor_backend_id(graph->nodes[j]);
             graph_copy->nodes[graph_copy->n_nodes++] = graph->nodes[j];
@@ -1981,6 +2026,8 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 for (size_t k = 0; k < keep.size(); k += GGML_MAX_SRC) {
                     struct ggml_tensor * dep = ggml_view_tensor(sched->ctx, keep[k]);
                     for (size_t s = 0; s < GGML_MAX_SRC && k + s < keep.size(); s++) {
+                        // a scratch tensor freed before it was allocated: its `last` comes before its `first`
+                        GGML_ASSERT(scratch_pending.count(keep[k + s]) == 0 && "add_scratch: last is before first");
                         dep->src[s] = keep[k + s];
                     }
                     assert(graph_copy->size > graph_copy->n_nodes);
@@ -1994,6 +2041,8 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
     // a mismatch means a backend added a dep with an `until` tensor that is not a node of the optimized graph
     GGML_ASSERT(n_dep_nodes_added == n_dep_nodes);
+    // a scratch tensor left over means a backend passed a `first` tensor that is not a node of the optimized graph
+    GGML_ASSERT(scratch_pending.empty() && "add_scratch: first is not a node of the graph");
 
     if (sched->n_copies > 1) {
         // add input copies as leafs so that they are allocated first
@@ -2107,7 +2156,8 @@ static bool ggml_backend_sched_is_host_weight(const struct ggml_tensor * t) {
         ggml_backend_buffer_is_host(t->buffer);
 }
 
-static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
+// returns true if the copy is reading asynchronously from host memory, to safely write to the memory a synchronization on the split backend is then needed
+static bool ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggml_backend_sched_split * split, struct ggml_tensor * input) {
     const int split_backend_id = split->backend_id;
     ggml_backend_t split_backend = sched->backends[split_backend_id];
     ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, input);
@@ -2118,9 +2168,18 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
         for (int i = 0; i < sched->n_prefetched; i++) {
             if (sched->prefetched[i] == input) {
                 ggml_backend_event_synchronize(sched->prefetch_events[sched->prefetch_backend_id]);
-                return;
+                return false;
             }
         }
+    }
+
+    // without pipeline parallelism the input copy has a single slot, so it can be written in order on the split backend
+    ggml_backend_buffer_t input_buf = input->view_src ? input->view_src->buffer : input->buffer;
+    if (sched->fast_async_host_input[split_backend_id] && sched->events[split_backend_id][sched->cur_copy] == NULL &&
+            ggml_backend_dev_type(ggml_backend_get_device(input_backend)) == GGML_BACKEND_DEVICE_TYPE_CPU &&
+            ggml_backend_buffer_is_host(input_buf) && !ggml_backend_sched_is_host_weight(input) && ggml_nbytes(input) > 0) {
+        ggml_backend_tensor_set_async(split_backend, input_cpy, input->data, 0, ggml_nbytes(input));
+        return true;
     }
 
     if (input->flags & GGML_TENSOR_FLAG_INPUT) {
@@ -2131,7 +2190,7 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
             ggml_backend_synchronize(split_backend);
         }
         ggml_backend_tensor_copy(input, input_cpy);
-        return;
+        return false;
     }
 
     // wait for the split backend to finish using the input before overwriting it
@@ -2143,7 +2202,7 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
 
     if (sched->callback_copy != NULL && ggml_backend_sched_is_host_weight(input) &&
         sched->callback_copy(split_backend, input, input_cpy, &split->graph, sched->callback_copy_user_data)) {
-        return;
+        return false;
     }
 
     // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
@@ -2157,6 +2216,7 @@ static void ggml_backend_sched_copy_input(ggml_backend_sched_t sched, struct ggm
         }
         ggml_backend_tensor_copy(input, input_cpy);
     }
+    return false;
 }
 
 // the inputs of the next split that are computed on the backend of this split before it, and copied to host memory,
@@ -2243,11 +2303,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
         // copy the input tensors to the split backend
         // the weights in host memory are copied last, so that the copy callback can read the other inputs of the split
+        bool host_read_pending = false;
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             struct ggml_tensor * input = split->inputs[input_id];
             if (!ggml_backend_sched_is_host_weight(input) && sched->hv_tensor_requires_copy[hash_id(input)]) {
-                ggml_backend_sched_copy_input(sched, split, input);
+                host_read_pending |= ggml_backend_sched_copy_input(sched, split, input);
             }
+        }
+        // the host data of async copies can be overwritten by later splits or by the user after this function returns
+        if (host_read_pending) {
+            ggml_backend_synchronize(split_backend);
         }
         // after the copies above, which may read host memory reused by the copies of the next split
         // before the weights, whose copy callback may queue large uploads
@@ -2366,6 +2431,10 @@ ggml_backend_sched_t ggml_backend_sched_new(
         sched->backends[b] = backends[b];
         sched->bufts[b] = bufts ? bufts[b] : ggml_backend_get_default_buffer_type(backends[b]);
         GGML_ASSERT(ggml_backend_supports_buft(backends[b], sched->bufts[b]));
+
+        struct ggml_backend_dev_props props;
+        ggml_backend_dev_get_props(ggml_backend_get_device(backends[b]), &props);
+        sched->fast_async_host_input[b] = props.caps.fast_async_host_input && backends[b]->iface.set_tensor_async != NULL && !ggml_backend_is_meta(backends[b]);
 
         if (sched->n_copies > 1) {
             for (int c = 0; c < sched->n_copies; c++) {

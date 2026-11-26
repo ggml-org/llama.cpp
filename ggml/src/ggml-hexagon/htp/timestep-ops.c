@@ -1,7 +1,3 @@
-#pragma clang diagnostic ignored "-Wunused-variable"
-#pragma clang diagnostic ignored "-Wunused-function"
-#pragma clang diagnostic ignored "-Wunused-but-set-variable"
-
 #include <HAP_farf.h>
 #include <stdint.h>
 
@@ -185,8 +181,6 @@ static void timestep_thread(const htp_thread_t * th, unsigned int nth, unsigned 
 int op_timestep_embedding(struct htp_ops_context * octx) {
     const struct htp_timestep_kernel_params * kparams =
         (const struct htp_timestep_kernel_params *) octx->kernel_params;
-
-    const int32_t max_period = (int32_t) octx->op_params[1];
 
     // Only device 0 writes the output when running multi-device
     if (octx->ctx->mdev.count > 1 && octx->ctx->mdev.idx != 0) {
