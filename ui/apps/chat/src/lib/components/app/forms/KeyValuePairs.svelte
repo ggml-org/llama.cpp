@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { Input } from '@ggml-org/llama-ui/ui/input';
+	import { Textarea } from '@ggml-org/llama-ui/ui/textarea';
 	import { Plus, Trash2 } from '@lucide/svelte';
 	import {
 		KEY_VALUE_PAIR_KEY_MAX_LENGTH,
@@ -140,9 +141,9 @@
 						value={pair.key}
 					/>
 
-					<textarea
+					<Textarea
 						{@attach autoResizeTextarea}
-						class="flex-1 resize-none rounded-md border border-input bg-transparent px-3 py-2 text-body leading-5 md:text-body-sm placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring focus-visible:outline-none"
+						class="min-h-0 flex-1 resize-none leading-5"
 						maxlength={KEY_VALUE_PAIR_VALUE_MAX_LENGTH}
 						onblur={(e) => trimPairValue(index, e.currentTarget.value)}
 						oninput={(e) => {
@@ -150,9 +151,9 @@
 							autoResizeTextarea(e.currentTarget);
 						}}
 						placeholder={valuePlaceholder}
-						rows="1"
+						rows={1}
 						value={pair.value}
-					></textarea>
+					/>
 
 					<button
 						aria-label="Remove item"

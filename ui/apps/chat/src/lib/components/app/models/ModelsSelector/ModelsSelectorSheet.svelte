@@ -376,16 +376,15 @@
 			{/if}
 		</SheetPages>
 
-		<!-- the reasoning effort, then the search at the sheet's foot, in the chat form's own
-		     surface and shape; both keep the lists' gutter -->
+		<!-- the reasoning effort, then the search at the sheet's foot: a plain text field in the chat
+		     form's shape; both keep the lists' gutter -->
 		<div class="flex shrink-0 flex-col gap-3 px-4 pt-2 pb-[max(0.5rem,var(--safe-area-bottom))]">
 			{#if hasEffort}
 				<ModelsSelectorReasoning variant="list" />
 			{/if}
 
 			<SearchInput
-				class="chat-form-surface overflow-hidden rounded-(--chat-form-single-row-radius)"
-				inputClass="h-12 max-md:h-12 border-0 bg-transparent shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
+				inputClass="h-12 max-md:h-12 rounded-(--chat-form-single-row-radius)"
 				onInput={(value) => onSearchChange?.(value)}
 				onKeyDown={handleSearchKeyDown}
 				placeholder={MODELS_SHEET_TEXT.SEARCH_PLACEHOLDER}
