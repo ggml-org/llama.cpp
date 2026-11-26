@@ -48,7 +48,7 @@
 	import { browser } from '$app/env';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ModeWatcher } from 'mode-watcher';
+	import { mode, ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
@@ -467,7 +467,7 @@
 
 	<ModeWatcher />
 
-	<Toaster closeButton richColors />
+	<Toaster closeButton richColors theme={mode.current} />
 
 	{#if dropImport.isDragOver}
 		<DropImportOverlay />

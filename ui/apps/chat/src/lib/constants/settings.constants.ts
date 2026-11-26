@@ -3,6 +3,7 @@ import { CLI_FLAGS } from './cli-flags.constants';
 import { COMPACTION } from './compaction.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
+import { PDF_RENDERING } from './supported-file-types.constants';
 import { TITLE_GENERATION } from './title-generation.constants';
 import { VOICE_TRANSCRIPTION_MODEL_AUTO } from './voice.constants';
 import { FILE_GLOB_SEARCH_PICKERS } from './working-directory.constants';
@@ -232,6 +233,18 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.PDF_AS_IMAGE,
 				label: 'Parse PDF as image',
 				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: PDF_RENDERING.DEFAULT_DPI,
+				dependsOn: SETTINGS_KEYS.PDF_AS_IMAGE,
+				help: 'Pixels per inch each PDF page renders as when it is parsed as images. 108 is the default; 216 is a good fit for dense tables.',
+				isPositiveInteger: true,
+				key: SETTINGS_KEYS.PDF_DPI,
+				label: 'PDF image DPI',
+				max: PDF_RENDERING.MAX_DPI,
+				min: PDF_RENDERING.MIN_DPI,
+				placeholder: String(PDF_RENDERING.DEFAULT_DPI),
+				type: SettingsFieldType.INPUT
 			},
 			{
 				defaultValue: 0,
