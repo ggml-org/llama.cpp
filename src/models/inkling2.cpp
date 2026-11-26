@@ -226,7 +226,8 @@ ggml_tensor * llama_model_inkling2::graph::convolve(
         ggml_build_forward_expand(gf, dynamic);
     }
 
-    ggml_tensor * past = ggml_view_3d(ctx0, history, n_conv - 1, n_channels, n_seqs, history->nb[1], history->nb[2], offset*history->nb[1]);
+    ggml_tensor * past = ggml_view_3d(ctx0, history, n_conv - 1, n_channels, n_seqs,
+            (n_conv - 1)*ggml_element_size(history), history->nb[1], offset*(n_conv - 1)*ggml_element_size(history));
 
     ggml_tensor * x = ggml_transpose(ctx0, ggml_reshape_3d(ctx0, cur, n_channels, n_seq_tokens, n_seqs));
     x = ggml_concat(ctx0, past, x, 0);
@@ -315,11 +316,9 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
 
     ggml_tensor * state_r   = recr->mctx->get_r_l(il);
     ggml_tensor * history_r = build_rs(recr, state_r, hparams.n_embd_r(), ubatch.n_seqs);
-    history_r = ggml_reshape_3d(ctx0, history_r, hparams.n_shortconv_l_cache - 1, hparams.n_sconv_channels, ubatch.n_seqs);
 
     ggml_tensor * state_s   = recr->mctx->get_s_l(il);
     ggml_tensor * history_s = build_rs(recr, state_s, hparams.n_embd_s(), ubatch.n_seqs);
-    history_s = ggml_reshape_3d(ctx0, history_s, hparams.n_shortconv_l_cache - 1, 2*n_embd, ubatch.n_seqs);
 
     ggml_tensor * inpSA = cur;
 

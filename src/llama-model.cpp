@@ -959,8 +959,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                 blck_size_perf *= 2;
             }
 
-            // inkling2: align the split to whole kv head pairs
-            const int64_t granularity_q    = std::lcm(is_inkling2 ? 2*n_embd_q : n_embd_q, blck_size_perf);
+            const int64_t granularity_q    = std::lcm(n_embd_q, blck_size_perf);
             const int64_t granularity_head = granularity_q / hparams.n_embd_head_k(il); // for tensors with one value per head
             if (std::regex_match(tensor_name, pattern_attn_gate_bias) || std::regex_match(tensor_name, pattern_attn_head)) {
                 GGML_ASSERT(segments.size() == 1);
