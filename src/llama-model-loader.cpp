@@ -1296,6 +1296,11 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         if (is_matmul_scale) {
             const auto it = matmul_weight_bufts.find(LLM_TN_IMPL(tn.arch, tn.tensor, "weight", tn.bid, tn.xid).str());
             if (it != matmul_weight_bufts.end()) {
+                ggml_backend_dev_t dev = ggml_backend_buft_get_device(it->second);
+                // CPU extra buffers (repack, AMX, KleidiAI) only hold the layouts of their weights
+                if (dev && ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && !ggml_backend_buft_is_host(it->second)) {
+                    return ggml_backend_dev_buffer_type(dev);
+                }
                 return it->second;
             }
         }

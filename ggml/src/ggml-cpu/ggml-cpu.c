@@ -1643,6 +1643,53 @@ static void * incr_ptr_aligned(void ** p, size_t size, size_t align) {
     return ptr;
 }
 
+// apply the weight scale (src[3]) carried by ggml_mul_mat_id_ext: per-tensor [1],
+// per-expert [n_expert] or per-channel-per-expert [n_out, n_expert], indexed via ids
+static void ggml_compute_forward_mul_mat_id_scale(
+        const struct ggml_compute_params * params,
+              struct ggml_tensor * dst) {
+    const struct ggml_tensor * scale = dst->src[3];
+    if (!scale) {
+        return;
+    }
+
+    const struct ggml_tensor * ids = dst->src[2];
+
+    const int ith = params->ith;
+    const int nth = params->nth;
+
+    const int64_t ne0 = dst->ne[0], ne1 = dst->ne[1], ne2 = dst->ne[2];
+    const int64_t ne02 = dst->src[0]->ne[2];
+    const size_t  nb1 = dst->nb[1], nb2 = dst->nb[2];
+
+    ggml_barrier(params->threadpool);
+
+    const char * sd = (const char *) scale->data;
+    const bool per_ch_exp = scale->ne[0] == ne0 && scale->ne[1] == ne02;
+    const bool per_expert = ggml_nelements(scale) == ne02;
+    const int64_t nr = ne1 * ne2;
+    for (int64_t ir = ith; ir < nr; ir += nth) {
+        const int64_t i1 = ir % ne1;
+        const int64_t i2 = ir / ne1;
+        const int32_t expert = *(const int32_t *) ((const char *) ids->data + i1*ids->nb[0] + i2*ids->nb[1]);
+        if (expert < 0) {
+            continue;
+        }
+        float * dp = (float *) ((char *) dst->data + i1*nb1 + i2*nb2);
+        if (per_ch_exp) {
+            const char * sp = sd + expert*scale->nb[1];
+            for (int64_t i0 = 0; i0 < ne0; i0++) {
+                dp[i0] *= *(const float *) (sp + i0*scale->nb[0]);
+            }
+        } else {
+            const float s = *(const float *) (sd + (per_expert ? expert*scale->nb[0] : 0));
+            for (int64_t i0 = 0; i0 < ne0; i0++) {
+                dp[i0] *= s;
+            }
+        }
+    }
+}
+
 static void ggml_compute_forward_mul_mat_id(
         const struct ggml_compute_params * params,
               struct ggml_tensor * dst) {
@@ -1838,37 +1885,7 @@ static void ggml_compute_forward_mul_mat_id(
         }
     }
 
-    // apply the weight scale (src[3]) carried by ggml_mul_mat_id_ext: per-tensor [1],
-    // per-expert [n_expert] or per-channel-per-expert [n_out, n_expert], indexed via ids
-    const struct ggml_tensor * scale = dst->src[3];
-    if (scale) {
-        ggml_barrier(params->threadpool);
-
-        const char * sd = (const char *) scale->data;
-        const bool per_ch_exp = scale->ne[0] == ne0 && scale->ne[1] == ne02;
-        const bool per_expert = ggml_nelements(scale) == ne02;
-        const int64_t nr = ne1 * ne2;
-        for (int64_t ir = ith; ir < nr; ir += nth) {
-            const int64_t i1 = ir % ne1;
-            const int64_t i2 = ir / ne1;
-            const int32_t expert = *(const int32_t *) ((const char *) ids->data + i1*ids->nb[0] + i2*ids->nb[1]);
-            if (expert < 0) {
-                continue;
-            }
-            float * dp = (float *) ((char *) dst->data + i1*nb1 + i2*nb2);
-            if (per_ch_exp) {
-                const char * sp = sd + expert*scale->nb[1];
-                for (int64_t i0 = 0; i0 < ne0; i0++) {
-                    dp[i0] *= *(const float *) (sp + i0*scale->nb[0]);
-                }
-            } else {
-                const float s = *(const float *) (sd + (per_expert ? expert*scale->nb[0] : 0));
-                for (int64_t i0 = 0; i0 < ne0; i0++) {
-                    dp[i0] *= s;
-                }
-            }
-        }
-    }
+    ggml_compute_forward_mul_mat_id_scale(params, dst);
 }
 
 /////////////////////////////////
@@ -1882,6 +1899,11 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
 
     // extra_buffer op?
     if (ggml_cpu_extra_compute_forward(params, tensor)) {
+        if (tensor->op == GGML_OP_MUL_MAT) {
+            ggml_compute_forward_mul_mat_scale(params, tensor);
+        } else if (tensor->op == GGML_OP_MUL_MAT_ID) {
+            ggml_compute_forward_mul_mat_id_scale(params, tensor);
+        }
         return;
     }
 
