@@ -258,10 +258,6 @@
 		}
 	}
 
-	async function handleSystemPromptAdd(draft: { message: string; files: ChatUploadedFile[] }) {
-		await chatStore.addSystemPrompt(draft);
-	}
-
 	$effect(() => {
 		stick.setEnabled(!settingsStore.config.disableAutoScroll);
 	});
@@ -388,7 +384,6 @@
 				onFileUpload={fileUpload.handleFileUpload}
 				onSend={handleSendMessage}
 				onStop={() => chatStore.stopGeneration()}
-				onSystemPromptAdd={handleSystemPromptAdd}
 			/>
 		</div>
 	</div>

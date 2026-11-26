@@ -174,6 +174,8 @@
 		conversationsStore.activeConversation ? systemMessage?.content : undefined
 	);
 
+	// a system message is the same whichever model answers: its editor offers no selector
+	let isModelSelectorShown = $derived(showModelSelector && !systemMode);
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
 	// On a desktop the chip under the form shows a directory once one is set, and the + menu
 	// sets one until then. A phone has no chip: a chat shows it in its header (see
@@ -193,7 +195,7 @@
 		getCwd: () => cwd,
 		getPickersRef: () => pickersRef,
 		getServerHome: () => toolsStore.serverHome ?? null,
-		getShowModelSelector: () => showModelSelector,
+		getShowModelSelector: () => isModelSelectorShown,
 		getValue: () => value,
 		hasCwdTools: () => conversationsStore.preferences.hasEnabledCwdTools(),
 		// policy-aware, same rule as the agentic flow: MCP category on and at
@@ -944,7 +946,7 @@
 							? pickers.handleWorkingDirectoryOpen
 							: undefined}
 						{showAddButton}
-						{showModelSelector}
+						showModelSelector={isModelSelectorShown}
 						voice={{
 							action: voice.label,
 							hint: voice.hint,
