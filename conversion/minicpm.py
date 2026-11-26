@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
@@ -82,22 +81,6 @@ class MiniCPM5MoEModel(TextModel):
         self.gguf_writer.add_leading_dense_block_count(self.hparams["first_k_dense_replace"])
         self.gguf_writer.add_expert_weights_norm(self.hparams.get("norm_topk_prob", True))
         self.gguf_writer.add_expert_weights_scale(self.hparams["routed_scaling_factor"])
-
-    def set_vocab(self) -> None:
-        super().set_vocab()
-        tokenizer_config = self.dir_model / "tokenizer_config.json"
-        if not tokenizer_config.is_file():
-            return
-        with tokenizer_config.open(encoding="utf-8") as f:
-            add_bos = json.load(f).get("add_bos_token")
-        if isinstance(add_bos, bool):
-            # Match HF when the post-processor disagrees with tokenizer_config.json.
-            self.gguf_writer.remove_key(gguf.Keys.Tokenizer.ADD_BOS)
-            self.gguf_writer.add_add_bos_token(add_bos)
-
-    def get_vocab_base_pre(self, tokenizer) -> str:
-        # The MiniCPM5 BPE is unchanged by the tokenizer wrapper's automatic BOS insertion.
-        return "minicpm5"
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.endswith("self_attn.q_proj.weight"):
