@@ -50,6 +50,10 @@ export interface GlobSearchChildOptions {
 	 * the WD picker, which descends on any exact match. */
 	descendOnTrailingSeparator?: boolean;
 	childMaxDepth?: number;
+	/** For a plain name: the nearest results, handed over while the deeper walk still runs. */
+	onPartial?: (result: GlobSearchChildResult) => void;
+	/** For a plain name: also list the children of a nearby folder named exactly so. */
+	entersExactNearFolder?: boolean;
 }
 
 /**

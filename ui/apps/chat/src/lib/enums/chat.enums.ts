@@ -84,7 +84,8 @@ export enum ChatFormCommandAction {
 	COMPACT = 'compact',
 	CWD = 'cwd',
 	MODEL = 'model',
-	PROMPT = 'prompt'
+	PROMPT = 'prompt',
+	SYSTEM_MESSAGE = 'system-message'
 }
 
 export enum FileMentionEntryType {

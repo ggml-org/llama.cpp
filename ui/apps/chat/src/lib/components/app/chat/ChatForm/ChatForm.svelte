@@ -18,6 +18,7 @@
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
+		CHAT_FORM_ATTACHMENT_IMAGE_HEIGHT_CLASS,
 		CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
@@ -26,11 +27,13 @@
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT,
 		SYSTEM_MESSAGE_PLACEHOLDER,
+		UI_DATA_ATTRS,
 		VOICE_EDITOR_SELECTOR
 	} from '#lib/constants/index.ts';
 	import {
 		ContentPartType,
 		FileExtensionText,
+		FileMentionEntryType,
 		KeyboardKey,
 		MessageRole,
 		MimeTypeText,
@@ -64,7 +67,6 @@
 	} from '#lib/types/index.ts';
 	import {
 		buildMentionInsertion,
-		findCommandToken,
 		findMentionToken,
 		getConversationModel,
 		isIMEComposing,
@@ -97,6 +99,8 @@
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
+		/** A file was picked with an `@` mention, by its path on the server. */
+		onFileMention?: (path: string) => void;
 		onFilesAdd?: (files: File[]) => void;
 		onStop?: () => void;
 		onSubmit?: () => void;
@@ -116,6 +120,7 @@
 		expandable = false,
 		isLoading = false,
 		onAttachmentRemove,
+		onFileMention,
 		onFilesAdd,
 		onStop,
 		onSubmit,
@@ -140,6 +145,7 @@
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
 	let inputRef: ChatFormInput | undefined = $state(undefined);
+	let workingDirectoryRef: ChatFormCurrentWorkingDirectory | undefined = $state(undefined);
 
 	// Voice input
 	const recorder: VoiceRecorderLike = untrack(() => voiceRecorder) ?? new VoiceRecorder();
@@ -148,8 +154,8 @@
 	/** Why the last start failed (denied, no microphone, busy); the next tap tries again. */
 	let micError = $state<string | null>(null);
 
-	// Invisible anchor the pickers' popovers float above: the form's top edge, or in the
-	// expanded editor the line being written
+	// Invisible anchor the pickers' popovers float above: the line being written, or on a
+	// phone the form's top edge
 	let pickerAnchor: HTMLDivElement | null = $state(null);
 	let pickerAnchorBox = $state({ height: 1, top: 0 });
 
@@ -174,6 +180,8 @@
 		conversationsStore.activeConversation ? systemMessage?.content : undefined
 	);
 
+	// a system message is the same whichever model answers: its editor offers no selector
+	let isModelSelectorShown = $derived(showModelSelector && !systemMode);
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
 	// On a desktop the chip under the form shows a directory once one is set, and the + menu
 	// sets one until then. A phone has no chip: a chat shows it in its header (see
@@ -185,12 +193,16 @@
 
 	const pickers = useChatFormPickers({
 		canCompact: () => chatStore.canCompact(conversationsStore.activeMessages),
+		canEditSystemMessage: () => !!onSystemPromptClick && !systemMode,
+		// a phone picks in a drawer with its own search field, and a touch screen opens no
+		// typed pickers (see opensOnInput)
+		editsCwdInline: () => !deviceStore.isMobile && !deviceStore.isTouch,
 		focusInput: refocusInput,
 		getCaretOffset: () => inputRef?.getCaretOffset(),
 		getCwd: () => cwd,
 		getPickersRef: () => pickersRef,
 		getServerHome: () => toolsStore.serverHome ?? null,
-		getShowModelSelector: () => showModelSelector,
+		getShowModelSelector: () => isModelSelectorShown,
 		getValue: () => value,
 		hasCwdTools: () => conversationsStore.preferences.hasEnabledCwdTools(),
 		// policy-aware, same rule as the agentic flow: MCP category on and at
@@ -205,12 +217,17 @@
 				.some((s) => s.enabled && prefs.isServerToolsEnabled(s.id) && s.url.trim());
 		},
 		onCompact: () => chatStore.compactConversation(),
+		onSystemMessage: () => onSystemPromptClick?.({ files: uploadedFiles, message: value }),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		// TODO: no typed pickers with an on-screen keyboard for now: each mobile browser moves
 		// the page its own way as it opens, so a list by the form can not stay clear of the
 		// text. A drawer with its own search field (as the directory picker is) could.
 		opensOnInput: () => !deviceStore.isTouch,
-		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
+		setCaretOffset: (offset) => {
+			inputRef?.setCaretOffset(offset);
+			// the caret moved without typing, e.g. onto the `/cwd` line the + menu just added
+			measurePickerAnchor();
+		},
 		setValue: (v) => {
 			value = v;
 			onValueChange?.(v);
@@ -237,14 +254,9 @@
 	});
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
-		// Committing a directory consumes the `/cwd` token; the chip's
-		// clear-X path has no token to consume.
-		const token = findCommandToken(value);
-
-		if (token && token.name === 'cwd') {
-			value = '';
-			onValueChange?.('');
-		}
+		// Committing a directory consumes the `/cwd` line and keeps the message below it; the
+		// chip's clear-X path has no line to consume.
+		pickers.consumeCwdCommand();
 
 		await conversationsStore.preferences.setCwd(newDir);
 
@@ -365,18 +377,30 @@
 		isExpanded && deviceStore.isMobile ? (actionsEl ?? null) : pickerAnchor
 	);
 
+	// The anchor covers the caret's line, kept within the form when the line is scrolled out
+	// of the editor's view; on a phone the form's top edge
+	function measurePickerAnchor() {
+		const line = deviceStore.isMobile ? null : inputRef?.getCaretRect();
+		const form = pickerAnchor?.parentElement?.getBoundingClientRect();
+
+		if (!line || !form) {
+			pickerAnchorBox = { height: 1, top: 0 };
+
+			return;
+		}
+
+		const top = Math.min(Math.max(line.top - form.top, 0), form.height);
+
+		pickerAnchorBox = { height: Math.max(line.bottom - line.top, 1), top };
+	}
+
 	// before the popover is drawn, and again as the query is typed and the line moves
 	$effect.pre(() => {
 		if (!isPickerOpen) return;
 
 		void value;
 
-		const line = isExpanded && !deviceStore.isMobile ? inputRef?.getCaretRect() : null;
-		const formTop = pickerAnchor?.parentElement?.getBoundingClientRect().top ?? 0;
-
-		pickerAnchorBox = line
-			? { height: line.bottom - line.top, top: line.top - formTop }
-			: { height: 1, top: 0 };
+		measurePickerAnchor();
 	});
 	// shown on hover (always on touch screens) while collapsed, always while expanded: on
 	// the phone sheet it keeps the collapsed card's place, below the status bar
@@ -420,6 +444,66 @@
 		return true;
 	}
 
+	// A mention and the attachment it added point at each other: hovering either one dims
+	// the rest of the message and the other attachments
+	let focusedMentionPath = $state<string | null>(null);
+
+	function handleMentionHover(event: MouseEvent) {
+		const target = event.target instanceof Element ? event.target : null;
+		const path =
+			target
+				?.closest(`[${UI_DATA_ATTRS.MENTION_PATH}]`)
+				?.getAttribute(UI_DATA_ATTRS.MENTION_PATH) ?? null;
+		const isAttached = uploadedFiles.some((file) => file.mentionPath === path);
+
+		focusedMentionPath = path && isAttached ? path : null;
+	}
+
+	$effect(() => {
+		const path = focusedMentionPath;
+
+		if (!cardEl || !path) return;
+
+		const card = cardEl;
+		const mark = () => {
+			for (const element of card.querySelectorAll(`[${UI_DATA_ATTRS.MENTION_PATH}]`)) {
+				element.toggleAttribute(
+					UI_DATA_ATTRS.MENTION_ACTIVE,
+					element.getAttribute(UI_DATA_ATTRS.MENTION_PATH) === path
+				);
+			}
+		};
+		// the editor redraws its badges as it likes: a new one is marked too
+		const observer = new MutationObserver(mark);
+
+		mark();
+		observer.observe(card, { childList: true, subtree: true });
+
+		return () => {
+			observer.disconnect();
+
+			for (const element of card.querySelectorAll(`[${UI_DATA_ATTRS.MENTION_ACTIVE}]`)) {
+				element.removeAttribute(UI_DATA_ATTRS.MENTION_ACTIVE);
+			}
+		};
+	});
+
+	// listened for on the card as a whole: the badges are drawn by the editor
+	$effect(() => {
+		if (!cardEl) return;
+
+		const card = cardEl;
+		const clear = () => (focusedMentionPath = null);
+
+		card.addEventListener('mouseover', handleMentionHover);
+		card.addEventListener('mouseleave', clear);
+
+		return () => {
+			card.removeEventListener('mouseover', handleMentionHover);
+			card.removeEventListener('mouseleave', clear);
+		};
+	});
+
 	function handleFileSelect(files: File[]) {
 		onFilesAdd?.(files);
 	}
@@ -447,7 +531,14 @@
 	function handleKeydown(event: KeyboardEvent) {
 		// Pickers consume navigation/escape keys first; when consumed, skip
 		// the enter-to-submit logic below and keep the key from the editor.
-		if (pickers.handleKeydown(event)) {
+		// The directory picker takes the keys typed on its `/cwd` line; in the message below
+		// it only Escape, so Enter and the arrows there stay the message's
+		const isDirectoryKey = pickers.isCaretInCwdCommand() || event.key === KeyboardKey.ESCAPE;
+
+		if (
+			(isDirectoryKey && workingDirectoryRef?.handleKeydown(event)) ||
+			pickers.handleKeydown(event)
+		) {
 			event.preventDefault();
 
 			return;
@@ -647,6 +738,8 @@
 
 		// one undoable edit; the input reports the new value like typing
 		inputRef?.replaceText(built.newValue, built.caretOffset);
+
+		if (entry.type === FileMentionEntryType.FILE) onFileMention?.(entry.path);
 	}
 
 	function handleMicClick() {
@@ -677,6 +770,13 @@
 	/** Sends the message; dictated text that is still being refined is sent refined. */
 	async function submit() {
 		if (!canSubmit || disabled || hasLoadingAttachments || isSendWaiting) return;
+
+		// sending closes the directory picker first, so its `/cwd` command is not sent as text
+		if (pickers.isWorkingDirectoryPickerOpen) {
+			pickers.handleWorkingDirectoryClose();
+
+			if (!canSubmit) return;
+		}
 
 		if (voice.isRefining) {
 			isSendWaiting = true;
@@ -809,9 +909,12 @@
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
 				EXPANDED_SHEET_FILL
 			],
-			systemMode && '!border-2 !border-dashed !border-border/50 !bg-muted',
+			// a dashed outline stands in for the card's edge, drawn inside it: the card keeps its size
+			systemMode &&
+				'!bg-muted !outline-2 -outline-offset-2 !outline-dashed !outline-border/50 [--glass-edge-focus:transparent] [--glass-edge:transparent]',
 			disabled && 'cursor-not-allowed opacity-60'
 		]}
+		{...{ [UI_DATA_ATTRS.MENTION_FOCUS]: focusedMentionPath !== null || undefined }}
 		data-single-row={isSingleRow || undefined}
 		data-slot="input-area"
 	>
@@ -825,17 +928,6 @@
 				tooltip={isExpanded ? 'Collapse editor' : 'Expand editor'}
 			/>
 		{/if}
-
-		<ChatAttachmentsList
-			bind:uploadedFiles
-			activeModelId={activeModelId ?? undefined}
-			{attachments}
-			class={isExpanded ? 'py-5 max-md:px-(--chat-form-side-inset)' : 'py-5'}
-			leading={systemMessageAttachment ? systemMessageLeading : undefined}
-			limitToSingleRow
-			onFileRemove={handleFileRemove}
-			style="scroll-padding: 1rem;"
-		/>
 
 		<div
 			class={[
@@ -880,6 +972,20 @@
 				/>
 			{/if}
 
+			<!-- under the text, above the actions: the message reads first, what goes with it after.
+			     Never in a single row, which the form leaves while anything is attached -->
+			<ChatAttachmentsList
+				bind:uploadedFiles
+				activeModelId={activeModelId ?? undefined}
+				{attachments}
+				class="pt-2 pb-3"
+				imageHeight={CHAT_FORM_ATTACHMENT_IMAGE_HEIGHT_CLASS}
+				leading={systemMessageAttachment ? systemMessageLeading : undefined}
+				limitToSingleRow
+				onFileRemove={handleFileRemove}
+				style="scroll-padding: 1rem;"
+			/>
+
 			<!-- its own box, so the phone sheet can hold it by the bottom edge while it moves -->
 			<div bind:this={actionsEl} class={isSingleRow ? 'contents' : 'relative mt-auto'}>
 				{#if voice.isActive}
@@ -920,7 +1026,7 @@
 							? pickers.handleWorkingDirectoryOpen
 							: undefined}
 						{showAddButton}
-						{showModelSelector}
+						showModelSelector={isModelSelectorShown}
 						voice={{
 							action: voice.label,
 							hint: voice.hint,
@@ -952,15 +1058,21 @@
 		></div>
 	{/if}
 
-	<div class="flex flex-wrap items-center gap-x-1 self-start">
+	<!-- The chips sit under the card. On a new chat, where the page centres the form, they
+	     hang below it and take no room: the card stays where it is as they come and go -->
+	<div
+		class="flex flex-wrap items-center gap-x-1 self-start md:group-data-[chat-form-lifted]/chat-form-host:absolute md:group-data-[chat-form-lifted]/chat-form-host:top-full"
+	>
 		{#if showWorkingDirectory}
 			<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
 			<ChatFormCurrentWorkingDirectory
 				bind:query={pickers.workingDirectoryQuery}
+				bind:this={workingDirectoryRef}
 				class="self-start"
 				customAnchor={activePickerAnchor}
 				directory={cwd}
 				{disabled}
+				inline={pickers.isWorkingDirectoryInline}
 				isOpen={pickers.isWorkingDirectoryPickerOpen}
 				onChange={handleWorkingDirectoryChange}
 				onClose={pickers.handleWorkingDirectoryClose}
@@ -987,3 +1099,25 @@
 	}}
 	preSelectedUri={preSelectedResourceUri}
 />
+
+<style>
+	/* While a mention or the attachment it added is hovered (see handleMentionHover), the
+	   pair stays as it is and the rest of the message and the other attachments step back */
+	.chat-form-surface :global(.cm-content),
+	.chat-form-surface :global([data-mention-path]),
+	.chat-form-surface :global([data-attachment] > *) {
+		transition:
+			color 150ms ease-out,
+			opacity 150ms ease-out;
+	}
+
+	.chat-form-surface[data-mention-focus] :global(.cm-content) {
+		color: color-mix(in oklab, currentColor 40%, transparent);
+	}
+
+	.chat-form-surface[data-mention-focus]
+		:global(.cm-content [data-mention-path]:not([data-mention-active])),
+	.chat-form-surface[data-mention-focus] :global([data-attachment]:not([data-mention-active]) > *) {
+		opacity: 0.4;
+	}
+</style>

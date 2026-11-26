@@ -7,29 +7,35 @@
 	import { hapticTap, shouldTypeToFocus } from '#lib/utils/index.ts';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { onMount, tick } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 
 	interface Props {
 		class?: string;
 		disabled?: boolean;
+		/** An attachment is on its way (a mentioned file being read): sending waits for it. */
+		isAttaching?: boolean;
 		isLoading?: boolean;
 		onFileRemove?: (fileId: string) => void;
+		onFileMention?: (path: string) => void;
 		onFileUpload?: (files: File[]) => void;
+		/** The message being written, on each change. Not the system message edited in its place. */
+		onMessageChange?: (message: string) => void;
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
-		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
 		uploadedFiles?: ChatUploadedFile[];
 	}
 
 	let {
 		class: className,
 		disabled = false,
+		isAttaching = false,
 		isLoading = false,
+		onFileMention,
 		onFileRemove,
 		onFileUpload,
+		onMessageChange,
 		onSend,
 		onStop,
-		onSystemPromptAdd,
 		uploadedFiles = $bindable([])
 	}: Props = $props();
 
@@ -62,7 +68,13 @@
 			document.documentElement.style.removeProperty('--chat-form-height');
 		};
 	});
-	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
+	$effect(() => {
+		const text = message;
+
+		if (!isSystemMode) untrack(() => onMessageChange?.(text));
+	});
+
+	let hasLoadingAttachments = $derived(isAttaching || uploadedFiles.some((f) => f.isLoading));
 	let message = $state('');
 	let previousIsLoading = $derived(isLoading);
 
@@ -111,16 +123,10 @@
 		}
 	}
 
-	// With system messages hidden in the conversation there is nothing to edit in place, so the
-	// form itself turns into the system message editor
+	// The form itself turns into the system message editor, whether or not the conversation
+	// shows its system message
 
 	function handleSystemPromptClick() {
-		if (settingsStore.config[SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE] ?? true) {
-			onSystemPromptAdd?.({ files: uploadedFiles, message });
-
-			return;
-		}
-
 		const existing = conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM);
 
 		stashedDraft = { files: uploadedFiles, message };
@@ -225,6 +231,7 @@
 		{disabled}
 		expandable
 		{isLoading}
+		{onFileMention}
 		onFilesAdd={handleFilesAdd}
 		{onStop}
 		onSubmit={handleSubmit}

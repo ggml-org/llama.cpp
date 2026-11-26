@@ -107,6 +107,7 @@ export {
 	getFileTypeCategory,
 	getFileTypeCategoryByExtension,
 	getFileTypeByExtension,
+	getMediaMimeTypeByExtension,
 	isFileTypeSupported
 } from './file-type';
 
@@ -125,6 +126,7 @@ export {
 } from './formatters';
 
 // IME utilities
+export { hasPointerMoved } from './has-pointer-moved';
 export { isIMEComposing } from './is-ime-composing';
 export { shouldTypeToFocus } from './type-to-focus';
 
@@ -235,9 +237,13 @@ export {
 export {
 	splitPathQuery,
 	toHomeRelativeQuery,
+	toScopeSeparators,
 	buildCaseInsensitiveGlob,
+	buildFuzzyGlobs,
+	fuzzyDistance,
 	buildGlobSearchArgs,
 	rankEntries,
+	isHiddenPath,
 	joinPath,
 	highlightMatch,
 	type PathQuery
@@ -246,18 +252,25 @@ export {
 export { resolveTabTarget, resolveTabView, type TabView } from './chat-tabs';
 
 // Shared `file_glob_search` runner with a short-lived result cache
-export { runGlobSearch, runGlobSearchWithChildren } from './glob-search';
+export { runFolderSearch, runGlobSearch, runGlobSearchWithChildren } from './glob-search';
 
 // Mention-token detection (for the `@`-triggered file/folder mention picker)
 export {
 	findMentionToken,
+	isMentionDismissed,
 	takeMentionDismissSnapshot,
 	type MentionDismissSnapshot
 } from './mention-token';
 
 // Slash-command token detection (for the `/`-triggered command picker)
 export {
+	type CommandToken,
 	findCommandToken,
+	insertCwdCommand,
+	isCommandDismissed,
+	locateCwdCommand,
+	removeCommandToken,
+	replaceWithCwdCommand,
 	takeCommandDismissSnapshot,
 	type CommandDismissSnapshot
 } from './command-token';

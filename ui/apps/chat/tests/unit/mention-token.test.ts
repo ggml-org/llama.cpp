@@ -1,4 +1,8 @@
-import { findMentionToken, takeMentionDismissSnapshot } from '#lib/utils/index.ts';
+import {
+	findMentionToken,
+	isMentionDismissed,
+	takeMentionDismissSnapshot
+} from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
 describe('findMentionToken', () => {
@@ -20,8 +24,30 @@ describe('findMentionToken', () => {
 		expect(findMentionToken('text@pr', 7)).toBeNull();
 	});
 
-	it('returns null when the cursor is past the whitespace break', () => {
-		expect(findMentionToken('@pr hello', 9)).toBeNull();
+	it('keeps a single space before the caret in the token', () => {
+		expect(findMentionToken('@My Documents', 13)).toEqual({
+			end: 13,
+			query: 'My Documents',
+			start: 0
+		});
+		expect(findMentionToken('see @My Doc', 11)).toEqual({ end: 11, query: 'My Doc', start: 4 });
+		expect(findMentionToken('@pr ', 4)).toEqual({ end: 4, query: 'pr ', start: 0 });
+	});
+
+	it('ends the token at two spaces, a newline or a space right after the @', () => {
+		expect(findMentionToken('@pr  ', 5)).toBeNull();
+		expect(findMentionToken('@pr  hello', 10)).toBeNull();
+		expect(findMentionToken('@pr\nhello', 9)).toBeNull();
+		expect(findMentionToken('@ noon', 6)).toBeNull();
+	});
+
+	it('leaves the text after the caret out of the token', () => {
+		expect(findMentionToken('@My Doc and more', 7)).toEqual({ end: 7, query: 'My Doc', start: 0 });
+		expect(findMentionToken('@My Docu and more', 7)).toEqual({
+			end: 8,
+			query: 'My Docu',
+			start: 0
+		});
 	});
 
 	it('treats boundary characters (parens, brackets, comma) as token starts', () => {
@@ -46,6 +72,21 @@ describe('findMentionToken', () => {
 
 	it('ignores a boundary @ and keeps the most recent token', () => {
 		expect(findMentionToken('a @foo @bar', 11)).toEqual({ end: 11, query: 'bar', start: 7 });
+	});
+});
+
+describe('isMentionDismissed', () => {
+	const snapshot = { query: 'pr', start: 6 };
+
+	it('holds for the same token and for words typed after it', () => {
+		expect(isMentionDismissed(snapshot, { query: 'pr', start: 6 })).toBe(true);
+		expect(isMentionDismissed(snapshot, { query: 'pr is broken', start: 6 })).toBe(true);
+	});
+
+	it('ends when the token itself changes or another one starts', () => {
+		expect(isMentionDismissed(snapshot, { query: 'pro', start: 6 })).toBe(false);
+		expect(isMentionDismissed(snapshot, { query: 'pr', start: 9 })).toBe(false);
+		expect(isMentionDismissed(null, { query: 'pr', start: 6 })).toBe(false);
 	});
 });
 

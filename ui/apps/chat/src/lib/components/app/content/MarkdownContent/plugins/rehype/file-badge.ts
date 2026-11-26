@@ -14,7 +14,8 @@ import {
 	MENTION_BADGE_ICON_CLASSNAME,
 	MENTION_BADGE_SVG_ATTRIBUTES,
 	PATH_SEPARATOR,
-	SETTINGS_KEYS
+	SETTINGS_KEYS,
+	UI_DATA_ATTRS
 } from '#lib/constants/index.ts';
 import { settingsStore, toolsStore } from '#lib/stores/index.ts';
 import {
@@ -79,7 +80,8 @@ export const rehypeFileBadge: Plugin<[], Root> = () => {
 			node.tagName = 'span';
 			node.properties = {
 				className: MENTION_BADGE_CLASSNAME.split(' ').filter(Boolean),
-				title: titleAttr.startsWith(FILE_URI_PREFIX) ? decodedPath : titleAttr
+				title: titleAttr.startsWith(FILE_URI_PREFIX) ? decodedPath : titleAttr,
+				[UI_DATA_ATTRS.MENTION_PATH]: decodedPath
 			};
 			node.children = [
 				iconElement(href),

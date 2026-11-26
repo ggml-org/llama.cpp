@@ -4,7 +4,12 @@
 	import { File, Folder } from '@lucide/svelte';
 	import { ChatFormPickerList, ChatFormPickerListItem } from '#lib/components/app/chat/index.ts';
 	import HighlightedMatch from '#lib/components/app/forms/HighlightedMatch.svelte';
-	import { FILE_GLOB_SEARCH_PICKERS, HOME_TILDE, SEARCH } from '#lib/constants/index.ts';
+	import {
+		CHAT_FORM_PATH_PICKER_WIDTH_CLASS,
+		FILE_GLOB_SEARCH_PICKERS,
+		HOME_TILDE,
+		SEARCH
+	} from '#lib/constants/index.ts';
 	import {
 		BuiltInTool,
 		FileMentionEntryType,
@@ -15,7 +20,11 @@
 	import { useDebouncedSearch } from '#lib/hooks/use-debounced-search.svelte.ts';
 	import { usePickerNavigation } from '#lib/hooks/use-picker-navigation.svelte.ts';
 	import { conversationsStore, deviceStore, settingsStore, toolsStore } from '#lib/stores/index.ts';
-	import type { FileMentionEntry, GlobEntryResult } from '#lib/types/index.ts';
+	import type {
+		FileMentionEntry,
+		GlobEntryResult,
+		GlobSearchChildResult
+	} from '#lib/types/index.ts';
 	import { abbreviateHome, runGlobSearchWithChildren } from '#lib/utils/index.ts';
 
 	/**
@@ -67,6 +76,10 @@
 
 	let searchResults = $state<FileMentionEntry[]>([]);
 	let searchError = $state<string | null>(null);
+	// the running search has shown its nearest matches: the list stands in for the skeleton
+	let hasResultsOfSearch = $state(false);
+	// the query the listed results answer: a longer one typed since has not been searched yet
+	let resultsQuery = $state('');
 
 	// Coerce the depth setting to a positive integer; an invalid value
 	// would otherwise reach the server as max_depth 0 = unlimited.
@@ -80,44 +93,50 @@
 
 	// A smaller window than the WD picker suffices: entries are ranked client-side.
 	const MENTION_SEARCH_LIMIT = 50;
+	// what separates the words of a mention's query, which may hold several
+	const MENTION_WORD_SEPARATOR = ' ';
 
 	const search = useDebouncedSearch({
 		canRun: () => isOpen && fileSearchEnabled,
 		debounceMs: SEARCH.DEBOUNCE_MS,
 		getQuery: () => trimmedQuery,
 		run: async (query, signal, isCurrent) => {
-			try {
-				// A trailing path separator targets a directory, so also list its
-				// children. Accept both `/` and `\`.
-				const res = await runGlobSearchWithChildren(
-					query,
-					scopePath ?? home ?? HOME_TILDE,
-					searchDepth,
-					MENTION_SEARCH_LIMIT,
-					signal,
-					{ descendOnTrailingSeparator: true, type: GlobSearchType.ALL }
-				);
+			const toEntry = (e: GlobEntryResult): FileMentionEntry => ({
+				name: e.name,
+				path: e.path,
+				type: e.type === 'dir' ? FileMentionEntryType.DIRECTORY : FileMentionEntryType.FILE
+			});
 
+			hasResultsOfSearch = false;
+
+			// A stale search must not touch the list: the next one is already running.
+			const show = (res: GlobSearchChildResult) => {
 				if (!isCurrent()) return;
 
-				if (res.error) {
-					searchResults = [];
-					searchError = res.error;
+				hasResultsOfSearch = true;
+				resultsQuery = query;
+				searchResults = res.error ? [] : res.entries.map(toEntry);
+				searchError = res.error ?? null;
+			};
 
-					return;
-				}
-
-				const toEntry = (e: GlobEntryResult): FileMentionEntry => ({
-					name: e.name,
-					path: e.path,
-					type: e.type === 'dir' ? FileMentionEntryType.DIRECTORY : FileMentionEntryType.FILE
-				});
-
-				searchResults = res.entries.map(toEntry);
-				searchError = null;
+			try {
+				// A trailing path separator targets a directory, so also list its
+				// children. Accept both `/` and `\`. A plain name shows its nearest
+				// matches first, while the deeper walk runs.
+				show(
+					await runGlobSearchWithChildren(
+						query,
+						scopePath ?? home ?? HOME_TILDE,
+						searchDepth,
+						MENTION_SEARCH_LIMIT,
+						signal,
+						{ descendOnTrailingSeparator: true, onPartial: show, type: GlobSearchType.ALL }
+					)
+				);
 			} catch (err) {
 				if (!isCurrent() || signal.aborted) return;
 
+				resultsQuery = query;
 				searchResults = [];
 				searchError = err instanceof Error ? err.message : String(err);
 			}
@@ -182,7 +201,25 @@
 		// result yet (skeletons) or no matches - so the chat form's
 		// Enter-to-submit never fires mid-search.
 		if (isOpen && event.key === KeyboardKey.ENTER) {
+			// a mention holds spaces, so a query with one that found nothing is the message
+			// going on ("ask @alice about it"): Enter closes the picker and sends it
+			const hasWords = trimmedQuery.includes(MENTION_WORD_SEPARATOR);
+			// with no file search there is nothing to wait for
+			const isAnswered = !fileSearchEnabled || resultsQuery === trimmedQuery;
+			const isFinishedSentence =
+				hasWords && isAnswered && !search.isSearching && displayedItems.length === 0;
+
+			if (isFinishedSentence) {
+				onClose();
+
+				return false;
+			}
+
 			event.preventDefault();
+
+			// results of the first word are not picked for the words typed after it:
+			// "@main today" must not turn into a mention of main
+			if (hasWords && !isAnswered) return true;
 
 			if (nav.hoveredIndex >= 0 && displayedItems[nav.hoveredIndex]) {
 				handleSelect(displayedItems[nav.hoveredIndex]);
@@ -216,7 +253,7 @@
 
 	<Popover.Content
 		align="start"
-		class={['w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl p-0', className]}
+		class={[CHAT_FORM_PATH_PICKER_WIDTH_CLASS, 'rounded-xl p-0', className]}
 		{customAnchor}
 		onCloseAutoFocus={(event) => event.preventDefault()}
 		onOpenAutoFocus={(event) => event.preventDefault()}
@@ -227,7 +264,7 @@
 	>
 		<ChatFormPickerList
 			{emptyMessage}
-			isLoading={search.isSearching}
+			isLoading={search.isSearching && !hasResultsOfSearch}
 			itemKey={(entry) => entry.type + ':' + entry.path}
 			items={displayedItems}
 			scrollTrigger={nav.scrollTrigger}
@@ -240,7 +277,7 @@
 					dataIndex={index}
 					{isSelected}
 					onclick={() => handleSelect(entry)}
-					onmouseenter={() => nav.setHover(index)}
+					onhover={() => nav.setHover(index)}
 				>
 					{@const Icon = entry.type === FileMentionEntryType.DIRECTORY ? Folder : File}
 					<Icon

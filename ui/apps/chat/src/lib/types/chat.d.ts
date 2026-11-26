@@ -50,6 +50,8 @@ export interface ChatUploadedFile {
 	loadError?: string;
 	/** A voice message recorded in the chat form. */
 	voice?: ChatUploadedVoice;
+	/** Path of the server file an `@` mention attached: the attachment lives as long as the mention. */
+	mentionPath?: string;
 }
 
 /** What a voice message recorded in the chat form carries besides its WAV file. */
@@ -251,6 +253,8 @@ export interface ChatCommandsOptions {
 	hasPrompts: () => boolean;
 	/** Gates `/cwd`. */
 	hasCwdTools: () => boolean;
+	/** Gates `/system-message`. */
+	canEditSystemMessage: () => boolean;
 }
 
 /** Protocol-level verbs accepted by the realtime inference control endpoint. Mirrors `CONTROL_ACTION`. */
@@ -263,6 +267,8 @@ export interface ChatFormCommand {
 	keywords?: string[];
 	action: ChatFormCommandAction;
 	disabled: boolean;
+	/** Takes an argument after a space (`/cwd ~/git`); the others end at their name. */
+	takesArgument?: boolean;
 }
 
 /**

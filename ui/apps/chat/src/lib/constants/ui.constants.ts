@@ -73,10 +73,18 @@ export const SYSTEM_MESSAGE_PLACEHOLDER = 'System message';
 export const UI_DATA_ATTRS = {
 	ACTIVE: 'data-active',
 	ACTIVE_TAB: 'data-active-tab',
+	/** On every item of an attachments list. */
+	ATTACHMENT: 'data-attachment',
 	/** On <html> while the main chat form is expanded (a full-screen sheet on a phone). */
 	CHAT_FORM_SHEET: 'data-chat-form-sheet',
 	CONVERSATION_ROW: 'data-conversation-row',
 	HIGHLIGHT_THEME_PREVIEW: 'data-highlight-theme-preview',
+	/** On the mention and the attachment being pointed at, while `MENTION_FOCUS` is set. */
+	MENTION_ACTIVE: 'data-mention-active',
+	/** On the chat form's card while a mention or the attachment it added is hovered. */
+	MENTION_FOCUS: 'data-mention-focus',
+	/** The file path of a mention badge, and of the attachment a mention added. */
+	MENTION_PATH: 'data-mention-path',
 	PICKER_INDEX: 'data-picker-index',
 	RESULT_INDEX: 'data-result-index',
 	THUMBNAIL_INDEX: 'data-thumbnail-index'
