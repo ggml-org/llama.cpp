@@ -9,7 +9,7 @@ import { BuiltInTool } from '#lib/enums/index.ts';
 import { toolsStore } from '#lib/stores/tools.svelte.ts';
 import type { OpenAIToolDefinition } from '#lib/types/index.ts';
 import { tick } from 'svelte';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 
 const FILE_SEARCH_DEF: OpenAIToolDefinition = {
@@ -59,5 +59,36 @@ describe('ChatFormPickerMention file_glob_search gate', () => {
 		expect(document.body.textContent).toContain(
 			'File search is disabled - enable "Search files" in Settings > Tools to use @-mentions'
 		);
+	});
+});
+
+// a mention holds spaces, so a query with one that found nothing is the message going on
+describe('ChatFormPickerMention Enter', () => {
+	const enter = () => new KeyboardEvent('keydown', { cancelable: true, key: 'Enter' });
+
+	it('lets Enter send a sentence that matched nothing, and closes', async () => {
+		const onClose = vi.fn();
+		const screen = render(ChatFormPickerMention, {
+			isOpen: true,
+			onClose,
+			onSelect: () => {},
+			query: 'alice about it'
+		});
+
+		await tick();
+
+		expect(screen.component.handleKeydown(enter())).toBe(false);
+		expect(onClose).toHaveBeenCalled();
+	});
+
+	it('keeps Enter for a single word', async () => {
+		const screen = renderPicker();
+
+		await tick();
+
+		const event = enter();
+
+		expect(screen.component.handleKeydown(event)).toBe(true);
+		expect(event.defaultPrevented).toBe(true);
 	});
 });

@@ -20,6 +20,11 @@ export const CHAT_FORM_PICKER_WIDTH_CLASS =
  */
 export const CHAT_FORM_PATH_PICKER_WIDTH_CLASS = 'w-[min(36rem,var(--bits-popover-anchor-width))]';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
+/** What a markdown link's target ends with: `[name](target)`. */
+export const MARKDOWN_LINK_TARGET_END = ')';
+/** The toast when a file picked with an `@` mention cannot be read from the server. */
+export const MENTION_ATTACH_ERROR = (reason: string) =>
+	`Could not attach the mentioned file: ${reason}`;
 /** Height of an image or PDF thumbnail attached in the chat form: small, under the text. */
 export const CHAT_FORM_ATTACHMENT_IMAGE_HEIGHT_CLASS = 'h-12';
 /** Lines of text from which the main chat form expands into its large editor. */

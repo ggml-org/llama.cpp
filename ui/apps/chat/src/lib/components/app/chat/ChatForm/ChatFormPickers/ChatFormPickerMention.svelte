@@ -91,6 +91,8 @@
 
 	// A smaller window than the WD picker suffices: entries are ranked client-side.
 	const MENTION_SEARCH_LIMIT = 50;
+	// what separates the words of a mention's query, which may hold several
+	const MENTION_WORD_SEPARATOR = ' ';
 
 	const search = useDebouncedSearch({
 		canRun: () => isOpen && fileSearchEnabled,
@@ -195,6 +197,19 @@
 		// result yet (skeletons) or no matches - so the chat form's
 		// Enter-to-submit never fires mid-search.
 		if (isOpen && event.key === KeyboardKey.ENTER) {
+			// a mention holds spaces, so a query with one that found nothing is the message
+			// going on ("ask @alice about it"): Enter closes the picker and sends it
+			const isFinishedSentence =
+				trimmedQuery.includes(MENTION_WORD_SEPARATOR) &&
+				!search.isSearching &&
+				displayedItems.length === 0;
+
+			if (isFinishedSentence) {
+				onClose();
+
+				return false;
+			}
+
 			event.preventDefault();
 
 			if (nav.hoveredIndex >= 0 && displayedItems[nav.hoveredIndex]) {

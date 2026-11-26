@@ -464,14 +464,27 @@
 
 		if (!cardEl || !path) return;
 
-		const active = [...cardEl.querySelectorAll(`[${UI_DATA_ATTRS.MENTION_PATH}]`)].filter(
-			(element) => element.getAttribute(UI_DATA_ATTRS.MENTION_PATH) === path
-		);
+		const card = cardEl;
+		const mark = () => {
+			for (const element of card.querySelectorAll(`[${UI_DATA_ATTRS.MENTION_PATH}]`)) {
+				element.toggleAttribute(
+					UI_DATA_ATTRS.MENTION_ACTIVE,
+					element.getAttribute(UI_DATA_ATTRS.MENTION_PATH) === path
+				);
+			}
+		};
+		// the editor redraws its badges as it likes: a new one is marked too
+		const observer = new MutationObserver(mark);
 
-		for (const element of active) element.setAttribute(UI_DATA_ATTRS.MENTION_ACTIVE, '');
+		mark();
+		observer.observe(card, { childList: true, subtree: true });
 
 		return () => {
-			for (const element of active) element.removeAttribute(UI_DATA_ATTRS.MENTION_ACTIVE);
+			observer.disconnect();
+
+			for (const element of card.querySelectorAll(`[${UI_DATA_ATTRS.MENTION_ACTIVE}]`)) {
+				element.removeAttribute(UI_DATA_ATTRS.MENTION_ACTIVE);
+			}
 		};
 	});
 
@@ -901,7 +914,7 @@
 				'!bg-muted !outline-2 -outline-offset-2 !outline-dashed !outline-border/50 [--glass-edge-focus:transparent] [--glass-edge:transparent]',
 			disabled && 'cursor-not-allowed opacity-60'
 		]}
-		data-mention-focus={focusedMentionPath !== null || undefined}
+		{...{ [UI_DATA_ATTRS.MENTION_FOCUS]: focusedMentionPath !== null || undefined }}
 		data-single-row={isSingleRow || undefined}
 		data-slot="input-area"
 	>

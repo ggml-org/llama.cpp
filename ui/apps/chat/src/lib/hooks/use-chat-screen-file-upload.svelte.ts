@@ -7,7 +7,11 @@
  * as reactive getters so validation tracks the model in real time.
  */
 
-import { FILE_URI_PREFIX } from '#lib/constants/index.ts';
+import {
+	FILE_URI_PREFIX,
+	MARKDOWN_LINK_TARGET_END,
+	MENTION_ATTACH_ERROR
+} from '#lib/constants/index.ts';
 import { ReadMediaService } from '#lib/services/read-media.service.ts';
 import { processFilesToChatUploaded } from '#lib/utils/browser-only.ts';
 import {
@@ -17,6 +21,7 @@ import {
 	isFileTypeSupported,
 	isFileTypeSupportedByModel
 } from '#lib/utils/index.ts';
+import { SvelteSet } from 'svelte/reactivity';
 import { toast } from 'svelte-sonner';
 
 interface UseChatScreenFileUploadOptions {
@@ -43,8 +48,12 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 	// the message as last reported, to tell whether a mention is still in it
 	let messageText = '';
 
+	// mentioned files being read from the server, so a second mention does not read one again
+	const readingPaths = new SvelteSet<string>();
+	// the whole link target, as buildMentionInsertion writes it: `/a/shot.png` is not found
+	// inside `/a/shot.png.bak`
 	const isMentioned = (path: string) =>
-		messageText.includes(FILE_URI_PREFIX + encodeFileLinkPath(path));
+		messageText.includes(FILE_URI_PREFIX + encodeFileLinkPath(path) + MARKDOWN_LINK_TARGET_END);
 
 	async function processFiles(files: File[], mentionPath?: string) {
 		const generallySupported: File[] = [];
@@ -110,8 +119,10 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 
 		if (!mimeType || !isFileTypeSupportedByModel(path, mimeType, options.capabilities())) return;
 
-		// mentioned twice, attached once
-		if (uploadedFiles.some((file) => file.mentionPath === path)) return;
+		// mentioned twice, attached once, also while the first read is still on its way
+		if (readingPaths.has(path) || uploadedFiles.some((file) => file.mentionPath === path)) return;
+
+		readingPaths.add(path);
 
 		try {
 			const file = await ReadMediaService.readFile(path, mimeType);
@@ -121,7 +132,9 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
 
-			toast.error(`Could not attach the mentioned file: ${reason}`);
+			toast.error(MENTION_ATTACH_ERROR(reason));
+		} finally {
+			readingPaths.delete(path);
 		}
 	}
 
