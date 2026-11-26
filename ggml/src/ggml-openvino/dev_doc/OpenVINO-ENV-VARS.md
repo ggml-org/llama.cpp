@@ -11,6 +11,7 @@ The variables for users, and the rules for values, are in [docs/backend/OPENVINO
 | `GGML_OPENVINO_DEBUG_INPUT` | all | Boolean | `0` | Print the input tensors. |
 | `GGML_OPENVINO_DEBUG_OUTPUT` | all | Boolean | `0` | Print the output tensors. |
 | `GGML_OPENVINO_DEBUG_NODE` | all | String | `not set` | Add the named graph nodes as outputs of the compiled model. Separate several names with commas. |
+| `GGML_OPENVINO_DEBUG_DYNAMIC_DIMS` | all | Boolean | `0` | Print each graph node and its sources with their shapes when a graph is decoded. `*` marks the dynamic (token) dimension. |
 | `GGML_OPENVINO_PRINT_CGRAPH_TENSOR_ADDRESS` | all | Boolean | `0` | Print the tensor address map once. |
 | `GGML_OPENVINO_LOG_UNSUPPORTED_OPS` | all | Boolean | `0` | Log each op that the backend does not support, with the tensor details and the reason. |
 | `GGML_OPENVINO_LOG_SUPPORTS_OP` | all | Integer | `0` | Log what `supports_op` accepts and rejects. `1`: summary at exit. `2`: also each call (the first calls are missing). |
@@ -27,6 +28,9 @@ The variables for users, and the rules for values, are in [docs/backend/OPENVINO
 # Dump the GGML graph and the OpenVINO IR of a run
 GGML_OPENVINO_DUMP_CGRAPH=1 GGML_OPENVINO_DUMP_IR=1 \
     ./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512
+
+# Shapes of each graph node, with * at the dynamic (token) dimension. Printed to stdout.
+GGML_OPENVINO_DEBUG_DYNAMIC_DIMS=1 ./build/ReleaseOV/bin/llama-completion -m model.gguf -c 512 -n 4 -no-cnv -p "Hello" > dims.txt
 
 # Log unsupported ops. The lines have the WARN level, which the default log verbosity shows (-lv 2 or higher).
 GGML_OPENVINO_LOG_UNSUPPORTED_OPS=1 ./build/ReleaseOV/bin/llama-cli -m model.gguf -c 512

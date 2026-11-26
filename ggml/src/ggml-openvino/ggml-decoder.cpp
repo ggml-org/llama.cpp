@@ -3271,4 +3271,46 @@ void GgmlOvDecoder::compute_node_dynamic_dims() {
         ggml_tensor * node = m_cgraph->nodes[i];
         visit_node(visit_node, node);
     }
+
+    // GGML_OPENVINO_DEBUG_DYNAMIC_DIMS: print each node and its sources with their shapes, '*' marking the dynamic dim
+    if (ggml_openvino_getenv_int("GGML_OPENVINO_DEBUG_DYNAMIC_DIMS")) {
+        for (int i = 0; i < m_cgraph->n_nodes; i++) {
+            ggml_tensor * node = m_cgraph->nodes[i];
+            int dynamic_dim = m_node_dynamic_dims[node];
+            std::cout << "[" << i << "] " << "node_name: " << node->name << " op: " << ggml_op_name(node->op)
+                      << " shape: [";
+            for (int j = 0; j < 4; j++) {
+                if (j == dynamic_dim) {
+                    std::cout << "*";
+                } else {
+                    std::cout << node->ne[j];
+                }
+                if (j < 3) {
+                    std::cout << ", ";
+                }
+            }
+            std::cout << "]" << '\n';
+            // print the src name & shape with the dynamic dim for debugging
+            for (int j = 0; j < GGML_MAX_SRC; j++) {
+                ggml_tensor * src = node->src[j];
+                if (src == nullptr) {
+                    continue;
+                }
+                int src_dynamic_dim = m_node_dynamic_dims[src];
+                std::cout << "    [" << j << "] src_name: " << src->name << " [";
+                for (int k = 0; k < 4; k++) {
+                    if (k == src_dynamic_dim) {
+                        std::cout << "*";
+                    } else {
+                        std::cout << src->ne[k];
+                    }
+                    if (k < 3) {
+                        std::cout << ", ";
+                    }
+                }
+                std::cout << "]" << '\n';
+            }
+            std::cout << '\n';
+        }
+    }
 }

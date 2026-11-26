@@ -162,6 +162,7 @@ constexpr env_var env_vars[] = {
     {"GGML_OPENVINO_DUMP_IR", env_type::BOOL},
     {"GGML_OPENVINO_DEBUG_INPUT", env_type::BOOL},
     {"GGML_OPENVINO_DEBUG_OUTPUT", env_type::BOOL},
+    {"GGML_OPENVINO_DEBUG_DYNAMIC_DIMS", env_type::BOOL},
     // Force the static (NPU-shape) compute path on any device, e.g. GGML_OPENVINO_DEVICE=CPU,
     // to test the static-shape translation without NPUW/real NPU hardware in the loop.
     {"GGML_OPENVINO_FORCE_STATIC", env_type::BOOL},
