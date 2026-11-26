@@ -1,0 +1,29 @@
+{
+  "name": "@ggml-org/llama-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scripted demo videos of llama.cpp frontend apps, for pull requests and docs.",
+  "homepage": "https://github.com/ggml-org/llama.cpp/tree/master/ui/lib/demo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ggml-org/llama.cpp.git",
+    "directory": "ui/lib/demo"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./cli": "./src/cli.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "@types/node": "24.13.0",
+    "typescript": "6.0.3"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}

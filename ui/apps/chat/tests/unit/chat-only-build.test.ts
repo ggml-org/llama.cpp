@@ -2,7 +2,8 @@
 // agentic settings, and a full build offers them only for a server that has
 // them. The flag is read when the constants load, so each case loads them fresh.
 
-import { SidebarAction } from '#lib/enums/index.ts';
+// loaded once up front, so the first case's fresh load is not the cold one
+import '#lib/constants/index.ts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 async function loadConstants(agentic?: string) {
@@ -78,12 +79,11 @@ describe('agentic mode', () => {
 		expect(toolsStore.allTools.every((tool) => tool.source === ToolSource.BROWSER)).toBe(true);
 	});
 
-	it('leaves the Tools and Agentic settings and the MCP entry out when it is off', async () => {
+	it('leaves the Tools and Agentic settings, Enable MCP among them, out when it is off', async () => {
 		const c = await loadConstants();
 		const slugs = (agentic: boolean) => c.settingsChatSections(agentic).map((s) => s.slug);
 		const keys = (agentic: boolean) =>
 			c.settingsChatSections(agentic).flatMap((s) => (s.fields ?? []).map((field) => field.key));
-		const actions = (agentic: boolean) => c.sidebarFooterItems(agentic).map((item) => item.action);
 		const { AGENTIC, TOOLS } = c.SETTINGS_SECTION_SLUGS;
 
 		expect(slugs(true)).toEqual(expect.arrayContaining([TOOLS, AGENTIC]));
@@ -91,11 +91,8 @@ describe('agentic mode', () => {
 		expect(slugs(false)).not.toContain(AGENTIC);
 		expect(slugs(false).length).toBeGreaterThan(0);
 
-		expect(keys(true)).toContain(c.SETTINGS_KEYS.SHOW_MCP);
-		expect(keys(false)).not.toContain(c.SETTINGS_KEYS.SHOW_MCP);
-
-		expect(actions(true)).toContain(SidebarAction.MCP);
-		expect(actions(false)).not.toContain(SidebarAction.MCP);
+		expect(keys(true)).toContain(c.SETTINGS_KEYS.ENABLE_MCP);
+		expect(keys(false)).not.toContain(c.SETTINGS_KEYS.ENABLE_MCP);
 
 		expect(c.attachmentTooltipText(false)).not.toMatch(/tools|MCP/i);
 	});

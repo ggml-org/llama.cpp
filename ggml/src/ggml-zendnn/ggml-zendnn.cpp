@@ -721,6 +721,11 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
                 return false;
             }
 
+            // the inputs are read as F32; only BF16 weights also take BF16 inputs as they are
+            if (inputs->type != GGML_TYPE_F32 && !(inputs->type == GGML_TYPE_BF16 && weights->type == GGML_TYPE_BF16)) {
+                return false;
+            }
+
             if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
                 return false;
             }

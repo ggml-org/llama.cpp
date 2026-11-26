@@ -5,6 +5,8 @@
  * with dynamic keys while maintaining TypeScript type safety.
  */
 
+import { SettingsPlatform } from '#lib/enums/settings.enums.ts';
+
 /**
  * Type-safe helper to access config properties dynamically
  * Provides better type safety than direct casting to Record
@@ -50,4 +52,19 @@ export function configToParameterRecord<T extends SettingsConfigType>(
 	}
 
 	return record;
+}
+
+/**
+ * Whether a setting is listed on this device: one for a desktop or tablet layout is left off a
+ * phone's settings, and one for a phone is left off the others
+ */
+export function isSettingShownOn(
+	field: { platform?: SettingsPlatform },
+	isMobile: boolean
+): boolean {
+	if (field.platform === SettingsPlatform.DESKTOP) return !isMobile;
+
+	if (field.platform === SettingsPlatform.MOBILE) return isMobile;
+
+	return true;
 }

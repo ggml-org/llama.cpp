@@ -1187,11 +1187,14 @@ void kernel_mul_mv_t_t_short_impl(
         device       char * dst,
         uint3  tgpig,
         ushort tiisg) {
-    const int r0 = tgpig.x*32 + tiisg;
-    const int r1 = tgpig.y;
+    const int n0 = args.nr0;
+    const int n1 = 32/n0;
+
+    const int r0 = tgpig.x*n0 + tiisg%n0;
+    const int r1 = tgpig.y*n1 + tiisg/n0;
     const int im = tgpig.z;
 
-    if (r0 >= args.ne01) {
+    if (tiisg >= n0*n1 || r0 >= args.ne01 || r1 >= args.ne11) {
         return;
     }
 

@@ -23,7 +23,10 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             }
         }
 
-        if (!amd_shader_core_properties || !integer_dot_product || !subgroup_size_control) {
+        if (!subgroup_size_control) {
+            return vk_device_architecture::AMD_GCN;
+        }
+        if (!amd_shader_core_properties) {
             return vk_device_architecture::OTHER;
         }
 
@@ -33,8 +36,10 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
         vk::PhysicalDeviceSubgroupSizeControlPropertiesEXT subgroup_size_control_props;
 
         props2.pNext = &shader_core_props_amd;
-        shader_core_props_amd.pNext = &integer_dot_props;
-        integer_dot_props.pNext = &subgroup_size_control_props;
+        shader_core_props_amd.pNext = &subgroup_size_control_props;
+        if (integer_dot_product) {
+            subgroup_size_control_props.pNext = &integer_dot_props;
+        }
 
         device.getProperties2(&props2);
 
@@ -49,7 +54,7 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
             if (shader_float8) {
                 return vk_device_architecture::AMD_RDNA4;
             }
-            if (integer_dot_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated) {
+            if (integer_dot_product && integer_dot_props.integerDotProduct4x8BitPackedMixedSignednessAccelerated) {
                 return vk_device_architecture::AMD_RDNA3;
             }
             return vk_device_architecture::AMD_RDNA2;
@@ -1215,7 +1220,8 @@ static vk_fa_tuning_params get_fa_tuning_params_scalar(const vk_device& device, 
         // Disable subgroup use due to performance issues when enforcing subgroup sizes
         result.subgroup_size = 32;
         result.disable_subgroups = true;
-    } else if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN) {
+    } else if (device->vendor_id == VK_VENDOR_ID_AMD && device->architecture != AMD_GCN &&
+               device->subgroup_size_control && device->subgroup_min_size <= 32) {
         result.subgroup_size = n_rows < 4 ? 32 : device->subgroup_size;
     } else {
         result.subgroup_size = device->subgroup_size;

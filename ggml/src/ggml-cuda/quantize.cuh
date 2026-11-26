@@ -11,13 +11,15 @@
 static_assert(MATRIX_ROW_PADDING %    CUDA_QUANTIZE_BLOCK_SIZE      == 0, "Risk of out-of-bounds access.");
 static_assert(MATRIX_ROW_PADDING % (4*CUDA_QUANTIZE_BLOCK_SIZE_MMQ) == 0, "Risk of out-of-bounds access.");
 
+// x holds the src1 values, type_src1 is GGML_TYPE_F32 or GGML_TYPE_BF16
+
 void quantize_row_q8_1_cuda(
-        const float * x, void * vy,
+        const void * x, ggml_type type_src1, void * vy,
         int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
 void quantize_mmq_q8_1_cuda(
-        const float * x, const int32_t * ids, void * vy,
+        const void * x, ggml_type type_src1, const int32_t * ids, void * vy,
         ggml_type type_src0, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
@@ -29,7 +31,7 @@ static constexpr int MMQ_FEW_NCOLS     = 8; // src1 columns per column group
 static constexpr int MMQ_FEW_Q8_1_INT4 = 4*WARP_SIZE + 4*4; // int4 per 256 values and column group
 
 void quantize_mmq_few_q8_1_cuda(
-        const float * x, void * vy, mmq_q8_1_ds_layout ds_layout, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
+        const void * x, ggml_type type_src1, void * vy, mmq_q8_1_ds_layout ds_layout, int64_t ne00, int64_t s01, int64_t s02, int64_t s03,
         int64_t ne1, int64_t ne2, int64_t ne3, cudaStream_t stream);
 
 // MUL_MAT_ID: a pair is an expert and one column group of up to MMQ_FEW_NCOLS of its (token, slot) entries. The src1 of pair p is channel p above, its columns past the entries are not written.
@@ -37,10 +39,11 @@ void quantize_mmq_few_q8_1_cuda(
 static constexpr int MMQ_FEW_PAIR_INTS = 2 + MMQ_FEW_NCOLS;
 
 void quantize_mmq_few_id_q8_1_cuda(
-        const float * x, const int32_t * ids, void * vy, int * pairs, mmq_q8_1_ds_layout ds_layout, int64_t ne00, int64_t s11, int64_t s12,
+        const void * x, ggml_type type_src1, const int32_t * ids, void * vy, int * pairs, mmq_q8_1_ds_layout ds_layout, int64_t ne00, int64_t s11, int64_t s12,
         int64_t ne11, int64_t n_experts, int64_t n_expert_used, int64_t n_tokens, int64_t si1, int64_t npairs_max, cudaStream_t stream);
 
-void quantize_mmq_fp4_cuda(const float *   x,
+void quantize_mmq_fp4_cuda(const void *    x,
+                             ggml_type       type_src1,
                              const int32_t * ids,
                              void *          vy,
                              float *         scale,
@@ -57,7 +60,8 @@ void quantize_mmq_fp4_cuda(const float *   x,
                              cudaStream_t    stream);
 
 // quantize each token once and scatter the block to its compact rows (via the inverse map)
-void quantize_scatter_mmq_fp4_cuda(const float *   x,
+void quantize_scatter_mmq_fp4_cuda(const void *    x,
+                                   ggml_type       type_src1,
                                    const int32_t * ids_src1_inv,
                                    void *          vy,
                                    float *         scale,
@@ -71,7 +75,8 @@ void quantize_scatter_mmq_fp4_cuda(const float *   x,
                                    int             n_expert_used,
                                    cudaStream_t    stream);
 
-void quantize_scatter_mmq_q8_1_cuda(const float *   x,
+void quantize_scatter_mmq_q8_1_cuda(const void *    x,
+                                    ggml_type       type_src1,
                                     const int32_t * ids_src1_inv,
                                     void *          vy,
                                     ggml_type       type_src0,

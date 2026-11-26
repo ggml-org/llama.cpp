@@ -414,10 +414,107 @@ def write_trace_packet_to_file(f, packet_bytes):
     # Write as field 1 of top-level Trace message
     f.write(pb_length_delimited(1, packet_bytes))
 
+
 # --- End Protobuf Encoder ---
 
+MERGE_DMA_DEFAULT_DEPTH = 8
 
-def generate_perfetto_trace(filtered_ops, trace_events, output_path):
+
+def merge_dma_events(completed_events: List[Dict[str, Any]], max_depth: int) -> List[Dict[str, Any]]:
+    other_events: List[Dict[str, Any]] = []
+    dma_by_thread: Dict[Any, List[Dict[str, Any]]] = defaultdict(list)
+
+    for e in completed_events:
+        if normalize_event_name(e['event'], e['info']) == "DMA":
+            dma_by_thread[(e['device'], e['thread'])].append(e)
+        else:
+            other_events.append(e)
+
+    if not dma_by_thread:
+        return completed_events
+
+    merged_dma: List[Dict[str, Any]] = []
+    merged_events_cnt = 0
+    merged_bursts_cnt = 0
+
+    for th_events in dma_by_thread.values():
+        th_events.sort(key=lambda e: (e['ts_ns'], e['ts_ns'] + e['dur_ns']))
+
+        clusters: List[List[Dict[str, Any]]] = []
+        cur_cluster = [th_events[0]]
+        cur_end = th_events[0]['ts_ns'] + th_events[0]['dur_ns']
+
+        for e in th_events[1:]:
+            e_end = e['ts_ns'] + e['dur_ns']
+            if e['ts_ns'] < cur_end:
+                cur_cluster.append(e)
+                if e_end > cur_end:
+                    cur_end = e_end
+            else:
+                clusters.append(cur_cluster)
+                cur_cluster = [e]
+                cur_end = e_end
+        clusters.append(cur_cluster)
+
+        for cluster in clusters:
+            if len(cluster) <= max_depth:
+                merged_dma.extend(cluster)
+                continue
+
+            # (-1) sorts before (+1) at equal timestamps so back-to-back slices reuse slots
+            endpoints = []
+            for e in cluster:
+                endpoints.append((e['ts_ns'], 1))
+                endpoints.append((e['ts_ns'] + e['dur_ns'], -1))
+            endpoints.sort()
+
+            depth = 0
+            peak_depth = 0
+            for _, delta in endpoints:
+                depth += delta
+                if depth > peak_depth:
+                    peak_depth = depth
+
+            if peak_depth <= max_depth:
+                merged_dma.extend(cluster)
+                continue
+
+            start_ts = cluster[0]['ts_ns']
+            end_ts = max(e['ts_ns'] + e['dur_ns'] for e in cluster)
+            first = cluster[0]
+            line_nums = [e['line_num'] for e in cluster if e.get('line_num') is not None]
+
+            merged_evt: Dict[str, Any] = {
+                'thread': first['thread'],
+                'event': first['event'],
+                'info': first['info'],
+                'start_cyc': min(e['start_cyc'] for e in cluster),
+                'end_cyc': max(e['end_cyc'] for e in cluster),
+                'ts_ns': start_ts,
+                'dur_ns': max(end_ts - start_ts, 1),
+                'line_num': min(line_nums) if line_nums else None,
+                'device': first['device'],
+                'merged_count': len(cluster),
+                'max_depth': peak_depth,
+            }
+            if any(e.get('missing_start') for e in cluster):
+                merged_evt['missing_start'] = True
+            if any(e.get('missing_stop') for e in cluster):
+                merged_evt['missing_stop'] = True
+
+            merged_dma.append(merged_evt)
+            merged_events_cnt += len(cluster)
+            merged_bursts_cnt += 1
+
+    if merged_bursts_cnt > 0:
+        logger.info(f"Merged {merged_events_cnt} DMA events into {merged_bursts_cnt} slices (max_depth > {max_depth})")
+
+    result = other_events + merged_dma
+    result.sort(key=lambda e: (e['ts_ns'], e['start_cyc']))
+    return result
+
+
+def generate_perfetto_trace(filtered_ops, trace_events, output_path, merge_dma=None):
     if not filtered_ops:
         logger.warning("No operators found after filtering.")
         return
@@ -515,6 +612,9 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         e['ts_ns'] = tm.cycle_to_ns(e['start_cyc'])
         dur_ns = tm.dur_cycles_to_ns(e['start_cyc'], e['end_cyc'] - e['start_cyc'])
         e['dur_ns'] = max(dur_ns, 1)
+
+    if merge_dma is not None:
+        completed_events = merge_dma_events(completed_events, merge_dma)
 
     # Identify HMX threads dynamically from HMX* events
     hmx_threads = {(e['device'], e['thread']) for e in completed_events if e['event'].startswith('HMX')}
@@ -688,7 +788,10 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
         for e in completed_events:
             norm_name = normalize_event_name(e['event'], e['info'])
             if norm_name == "DMA":
-                name = f"DMA {e['info']}"
+                if 'merged_count' in e:
+                    name = f"DMA x{e['merged_count']}"
+                else:
+                    name = f"DMA {e['info']}"
             elif norm_name == "FENCE":
                 name = f"FENCE {e['info']}" if e.get('info') is not None and e['info'] != 0 else "FENCE"
             else:
@@ -702,6 +805,9 @@ def generate_perfetto_trace(filtered_ops, trace_events, output_path):
                 debug_annots.append(make_debug_annotation("line", int_val=e['line_num']))
             if norm_name == "FENCE" and e.get('info') is not None:
                 debug_annots.append(make_debug_annotation("seq", int_val=e['info']))
+            elif norm_name == "DMA" and 'merged_count' in e:
+                debug_annots.append(make_debug_annotation("count", int_val=e['merged_count']))
+                debug_annots.append(make_debug_annotation("max_depth", int_val=e['max_depth']))
             elif norm_name == "DMA" and e.get('info') is not None:
                 debug_annots.append(make_debug_annotation("channel", int_val=e['info']))
             elif e.get('info') is not None and e['info'] != 0:
@@ -731,12 +837,35 @@ def main():
     parser.add_argument("-o", "--output", default="optrace.perfetto-trace", help="Output trace file path (default: optrace.perfetto-trace)")
     parser.add_argument("--filter", type=str, help="Regex filter matching against the original profile-op line")
     parser.add_argument("--device", type=str, help="Device to filter by (e.g. HTP0, HTP0:0) or 'split' to generate separate files per device")
+    parser.add_argument("--merge-dma", type=int, nargs="?", const=MERGE_DMA_DEFAULT_DEPTH, default=None, metavar="MAX_DEPTH",
+                        help=f"Merge overlapping DMA bursts deeper than MAX_DEPTH into a single slice (default: {MERGE_DMA_DEFAULT_DEPTH}, use 1 to merge all)")
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--head", type=int, help="Limit to first N ops")
     group.add_argument("--tail", type=int, help="Limit to last N ops")
 
-    args = parser.parse_args()
+    # Prevent nargs='?' on --merge-dma from consuming the positional logfile when no integer follows
+    raw_args = sys.argv[1:]
+    norm_args = []
+    i = 0
+    while i < len(raw_args):
+        if raw_args[i] == "--":
+            norm_args.extend(raw_args[i:])
+            break
+        if raw_args[i] == "--merge-dma":
+            if i + 1 < len(raw_args) and re.fullmatch(r"-?\d+", raw_args[i + 1]):
+                norm_args.append(f"--merge-dma={raw_args[i + 1]}")
+                i += 2
+                continue
+            norm_args.append(f"--merge-dma={MERGE_DMA_DEFAULT_DEPTH}")
+            i += 1
+            continue
+        norm_args.append(raw_args[i])
+        i += 1
+
+    args = parser.parse_args(norm_args)
+    if args.merge_dma is not None and args.merge_dma < 1:
+        parser.error("--merge-dma MAX_DEPTH must be >= 1")
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
 
     op_filter_re = None
@@ -814,9 +943,9 @@ def main():
             dev_ops = [op for op in ops if device_matches(op['device'], dev)]
             dev_traces = [t for t in traces if device_matches(t['device'], dev)]
             out_path = get_split_output_path(args.output, dev)
-            generate_perfetto_trace(dev_ops, dev_traces, out_path)
+            generate_perfetto_trace(dev_ops, dev_traces, out_path, merge_dma=args.merge_dma)
     else:
-        generate_perfetto_trace(ops, traces, args.output)
+        generate_perfetto_trace(ops, traces, args.output, merge_dma=args.merge_dma)
 
 
 if __name__ == "__main__":

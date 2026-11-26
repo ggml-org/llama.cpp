@@ -19,6 +19,7 @@
 #include <memory>
 #include <random>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -176,6 +177,7 @@ static void usage(char ** argv) {
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
+    LOG("  --rpc <endpoints>        Add RPC servers (comma-separated host:port), must precede -b\n");
     LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
@@ -300,6 +302,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_KIMI_K31
+            || arch == LLM_ARCH_RAON1_MINI
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4
@@ -386,7 +389,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
             arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_KIMI_K31 ||
-            arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_HY_V4_FLASH
+            arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_HY_V4_FLASH || arch == LLM_ARCH_RAON1_MINI
             ) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
@@ -398,7 +401,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
                     : (il == 1 ? 0 : n_head));
         }
         // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
-        if (arch == LLM_ARCH_GLM5_NEXT) {
+        if (arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_RAON1_MINI) {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
             // the MLA cache holds one latent head
             for (uint32_t & n : n_head_per_layer) {
@@ -440,6 +443,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_KIMI_K31
+            || arch == LLM_ARCH_RAON1_MINI
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
             || arch == LLM_ARCH_HY_V4_FLASH
@@ -485,6 +489,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,    1e-6f);
     ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,          1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,       uint32_t(8));
     ms.add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,            (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) ? uint32_t(64) : uint32_t(512));
@@ -544,6 +549,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
 
     if (arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE) {
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, false);
+    }
+
+    if (arch == LLM_ARCH_RAON1_MINI) {
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE, 1.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, true);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT, uint32_t(4));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON, 1e-5f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE, 2.0f);
     }
 
     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
@@ -1209,6 +1222,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_KIMI_K31:
+        case LLM_ARCH_RAON1_MINI:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
@@ -1970,6 +1984,31 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
     return n_failed == 0 ? 0 : 1;
 }
 
+static bool add_rpc_devices(const std::string & endpoints) {
+    ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (rpc_reg == nullptr) {
+        LOG_ERR("%s: RPC backend not available\n", __func__);
+        return false;
+    }
+    typedef ggml_backend_reg_t (*add_server_t)(const char * endpoint);
+    auto add_server = (add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (add_server == nullptr) {
+        LOG_ERR("%s: RPC backend has no ggml_backend_rpc_add_server\n", __func__);
+        return false;
+    }
+    std::stringstream ss(endpoints);
+    std::string endpoint;
+    while (std::getline(ss, endpoint, ',')) {
+        ggml_backend_reg_t reg = add_server(endpoint.c_str());
+        if (reg == nullptr) {
+            LOG_ERR("%s: failed to connect to RPC server %s\n", __func__, endpoint.c_str());
+            return false;
+        }
+        ggml_backend_register(reg);
+    }
+    return true;
+}
+
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -2047,6 +2086,16 @@ int main(int argc, char ** argv) {
                     return 1;
                 }
                 target_backend = ggml_backend_dev_name(dev);
+            } else {
+                usage(argv);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--rpc") == 0) {
+            if (i + 1 < argc) {
+                // must precede -b so that the RPC devices can be selected by name
+                if (!add_rpc_devices(argv[++i])) {
+                    return 1;
+                }
             } else {
                 usage(argv);
                 return 1;

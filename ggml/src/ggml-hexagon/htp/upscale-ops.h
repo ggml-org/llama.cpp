@@ -44,7 +44,6 @@ struct htp_upscale_kernel_params {
     float    invscale1;
 
     uint32_t n_hvx;
-    uint32_t chunks_per_group;
 
     uint32_t dst_nrows_per_chunk;
     uint32_t chunks_per_slice;

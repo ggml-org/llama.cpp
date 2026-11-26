@@ -51,7 +51,12 @@ export {
 } from './code';
 
 // Config helpers
-export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
+export {
+	setConfigValue,
+	getConfigValue,
+	configToParameterRecord,
+	isSettingShownOn
+} from './config-helpers';
 
 // CORS Proxy
 export { buildProxiedIconUrl, buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
@@ -64,6 +69,7 @@ export {
 	filterModelOptions,
 	groupFavoriteOptions,
 	groupModelOptions,
+	pickQuickModels,
 	windowLocalGroups,
 	type GroupedModelOptions,
 	type ModelItem,
@@ -355,7 +361,7 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
-export { getToolUi } from './tool-ui';
+export { getToolArgNames, getToolDisplay, getToolUi } from './tool-ui';
 
 // Chat command picker
 
