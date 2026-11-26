@@ -11,8 +11,8 @@ on:
       '**/*.cuh',
       'ggml/src/ggml-hip/CMakeLists.txt',
       'ggml/src/ggml-cuda/vendors/hip.h',
-      'scripts/hip/gcn-cdna-vgpr-check.py',
-      'scripts/hip/gcn-cdna-metrics-check.py'
+      'scripts/hip/gcn-cdna-metrics.py',
+      'scripts/hip/test_gcn_cdna_metrics.py'
     ]
 
   pull_request:
@@ -23,8 +23,8 @@ on:
       '**/*.cuh',
       'ggml/src/ggml-hip/CMakeLists.txt',
       'ggml/src/ggml-cuda/vendors/hip.h',
-      'scripts/hip/gcn-cdna-vgpr-check.py',
-      'scripts/hip/gcn-cdna-metrics-check.py'
+      'scripts/hip/gcn-cdna-metrics.py',
+      'scripts/hip/test_gcn_cdna_metrics.py'
     ]
 
 cache-mode: none
@@ -55,7 +55,10 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3 python3-venv python3-pip jq
+          sudo apt-get install -y build-essential git cmake rocblas-dev hipblas-dev libssl-dev python3 python3-venv python3-pip python3-yaml jq
+
+      - name: Test HIP kernel metrics scripts
+        run: python3 -m unittest discover -s scripts/hip -p 'test_gcn_cdna_metrics.py'
 
       - name: ccache
         uses: ggml-org/ccache-action@v1.2.24
@@ -93,38 +96,40 @@ jobs:
             -DGPU_TARGETS=gfx908 \
             -DGGML_HIP=ON \
             -DGGML_HIP_EXPORT_METRICS=On \
-            -DCMAKE_HIP_FLAGS="" \
+            -DCMAKE_HIP_FLAGS="-fsave-optimization-record=yaml" \
             -DCMAKE_BUILD_TYPE=Release
           cd build
           make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
-          python3 ../scripts/hip/gcn-cdna-vgpr-check.py metrics.log
+          python3 ../scripts/hip/gcn-cdna-metrics.py vgpr ggml/src/ggml-hip
 
       # On master pushes, cache the metrics log as the baseline for PR checks.
       - name: Save master metrics baseline
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
-        run: cp build/metrics.log hip-baseline-metrics.log
+        run: |
+          mkdir -p hip-baseline-metrics
+          find build/ggml/src/ggml-hip -type f -name '*.opt.yaml' -exec cp --parents {} hip-baseline-metrics/ \;
 
       - name: Cache master metrics baseline
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
         uses: actions/cache/save@v5
         with:
-          path: hip-baseline-metrics.log
-          key: hip-quality-check-master-metrics-${{ github.sha }}
+          path: hip-baseline-metrics
+          key: hip-quality-check-master-yaml-${{ github.sha }}
 
       # On PRs, restore the baseline metrics log cached from the master tip.
       # The PR build reuses the same build as the VGPR spill check above.
       - name: Get master tip SHA
         if: ${{ github.event_name == 'pull_request' }}
         id: master_sha
-        run: echo "sha=$(git ls-remote origin refs/heads/master | cut -f1)" >> "$GITHUB_OUTPUT"
+        run: echo "sha=${{ github.event.pull_request.base.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Restore master metrics baseline
         if: ${{ github.event_name == 'pull_request' }}
         id: baseline_cache
         uses: actions/cache/restore@v5
         with:
-          path: hip-baseline-metrics.log
-          key: hip-quality-check-master-metrics-${{ steps.master_sha.outputs.sha }}
+          path: hip-baseline-metrics
+          key: hip-quality-check-master-yaml-${{ steps.master_sha.outputs.sha }}
 
       # Fallback when the master tip has no cached baseline yet.
       - name: Checkout baseline (master)
@@ -143,21 +148,22 @@ jobs:
             -DGPU_TARGETS=gfx908 \
             -DGGML_HIP=ON \
             -DGGML_HIP_EXPORT_METRICS=On \
-            -DCMAKE_HIP_FLAGS="" \
+            -DCMAKE_HIP_FLAGS="-fsave-optimization-record=yaml" \
             -DCMAKE_BUILD_TYPE=Release
           cd build
           make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
-          cp metrics.log ../../hip-baseline-metrics.log
+          mkdir -p ../../hip-baseline-metrics
+          find ggml/src/ggml-hip -type f -name '*.opt.yaml' -exec cp --parents {} ../../hip-baseline-metrics/ \;
 
       - name: Check for occupancy regressions vs master
         if: ${{ github.event_name == 'pull_request' }}
         id: occupancy_check
         run: |
-          # The PR metrics.log comes from the VGPR spill check build above, so
+          # The PR optimization records come from the VGPR spill check build above, so
           # this step adds no extra build when the baseline cache hits.
-          python3 scripts/hip/gcn-cdna-metrics-check.py hip-baseline-metrics.log build/metrics.log \
+          python3 scripts/hip/gcn-cdna-metrics.py compare hip-baseline-metrics build/ggml/src/ggml-hip \
             --dump hip-kernel-metrics-deltas.tsv || check_failed=true
-          python3 scripts/hip/gcn-cdna-metrics-report.py hip-kernel-metrics-deltas.tsv \
+          python3 scripts/hip/gcn-cdna-metrics.py report hip-kernel-metrics-deltas.tsv \
             -o hip-kernel-metrics-report.md
           if [ -n "$check_failed" ]; then
             echo "check_failed=true" >> "$GITHUB_OUTPUT"
