@@ -2766,6 +2766,25 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     if (device->coopmat_support) {
         spec_fn_t cm1_spec = [&](const std::vector<uint32_t>& wt, bool a) { return ggml_vk_mul_mm_spec(wt, a); };
 
+#if defined(GGML_VULKAN_TILEDK_GLSLC_SUPPORT)
+        auto tilek_create = [&](ggml_type type, const char * name, size_t len, const void * data) {
+            const uint32_t tilek_bk = ggml_blck_size(type);
+            const std::vector<uint32_t> tilek_warptile = {
+                device->subgroup_size, device->coopmat_m, device->coopmat_n, tilek_bk,
+                device->coopmat_m, device->coopmat_n, 1,
+                device->coopmat_m, device->coopmat_n, device->coopmat_k, device->subgroup_size,
+            };
+            ggml_vk_create_pipeline(device, device->pipeline_matmul_tiledk_f16[type], name,
+                len, data, "main", 4, sizeof(vk_mat_mat_push_constants),
+                { device->coopmat_m, device->coopmat_n, 1 }, cm1_spec(tilek_warptile, true),
+                tilek_bk, false, true, device->subgroup_size);
+        };
+
+        if (device->tiledK_support) {
+            tilek_create(GGML_TYPE_Q4_0, "matmul_q4_0_f16_tiledk_f16acc", matmul_q4_0_f16_tiledk_f16acc_cm1_len, matmul_q4_0_f16_tiledk_f16acc_cm1_data);
+        }
+#endif
+
         // Intel coopmat1 pins each pipeline's required subgroup size to its warptile WARP element.
         const bool cm1_pin = device->vendor_id == VK_VENDOR_ID_INTEL;
 
@@ -3722,6 +3741,11 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     ggml_vk_create_pipeline(device, device->pipeline_contig_cpy_32, "contig_cpy_32", contig_cpy_32_len, contig_cpy_32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_contig_cpy_f32_f16, "contig_cpy_f32_f16", contig_cpy_f32_f16_len, contig_cpy_f32_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+#if defined(GGML_VULKAN_TILEDK_GLSLC_SUPPORT)
+    if (device->tiledK_support) {
+        ggml_vk_create_pipeline(device, device->pipeline_contig_cpy_f32_f16_tiledk, "contig_cpy_f32_f16_tilek", contig_cpy_f32_f16_tilek_len, contig_cpy_f32_f16_tilek_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
+    }
+#endif
     ggml_vk_create_pipeline(device, device->pipeline_contig_cpy_16, "contig_cpy_16", contig_cpy_16_len, contig_cpy_16_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_contig_cpy_f16_f32, "contig_cpy_f16_f32", contig_cpy_f16_f32_len, contig_cpy_f16_f32_data, "main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_contig_cpy_f32_bf16,"contig_cpy_f32_bf16",contig_cpy_f32_bf16_len,contig_cpy_f32_bf16_data,"main", 2, sizeof(vk_op_unary_push_constants), {512, 1, 1}, {}, 1);
@@ -5426,12 +5450,25 @@ vk_device ggml_vk_get_device(size_t idx) {
                 GGML_LOG_DEBUG("ggml_vulkan: WARNING: No suitable matrix core mode found. Disabling matrix cores.\n");
                 device->coopmat_support = false;
             }
+#if defined(GGML_VULKAN_TILEDK_GLSLC_SUPPORT)
+            device->tiledK_support = device->architecture == vk_device_architecture::QUALCOMM_ADRENO &&
+                                    device->coopmat_support &&
+                                    device->coopmat_m == 64 &&
+                                    device->coopmat_n == 64 &&
+                                    device->coopmat_k == 16 &&
+                                    device->subgroup_size == 64 &&
+                                    device->coopmat_acc_f16_support;
+#endif
+
         }
 
         if (device->coopmat_support) {
             device_extensions.push_back("VK_KHR_cooperative_matrix");
         }
 #endif
+        if (device->tiledK_support) {
+            device_extensions.push_back("VK_QCOM_cooperative_matrix_conversion");
+        }
         device->name = GGML_VK_NAME + std::to_string(idx);
 
         device_create_info
@@ -7223,13 +7260,29 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     ggml_type f16_type = src0->type == GGML_TYPE_BF16 ? GGML_TYPE_BF16 : GGML_TYPE_F16;
 
     const bool is_coopmat = ctx->device->coopmat_support || ctx->device->coopmat2;
-    const bool can_quantize_y = (ctx->device->integer_dot_product || ctx->device->coopmat_int_support) &&
+    const vk_pipeline tilek_pipeline = ctx->device->pipeline_matmul_tiledk_f16[src0->type];
+    // TileK column strips cannot use the generic N-chunk buffer offset.
+    const uint64_t tilek_max_n = tilek_pipeline != nullptr ?
+        uint64_t(ctx->device->properties.limits.maxComputeWorkGroupCount[1]) * tilek_pipeline->wg_denoms[1] : 0;
+    const bool tilek_b = ctx->device->tiledK_support &&
+                         tilek_pipeline != nullptr &&
+                         ctx->device->pipeline_contig_cpy_f32_f16_tiledk != nullptr &&
+                         ne11 <= tilek_max_n &&
+                         src1->type == GGML_TYPE_F32 &&
+                         ggml_vk_dim01_contiguous(src0) &&
+                         ggml_is_contiguous(src1) &&
+                         ne10 % ggml_blck_size(src0->type) == 0 &&
+                         ne10 % ctx->device->coopmat_k == 0 &&
+                         ggml_vk_get_mul_mat_mat_f16acc(ctx, src0->type, GGML_TYPE_F16, ggml_prec_get_acc(dst));
+    const bool can_quantize_y = !tilek_b &&
+                                (ctx->device->integer_dot_product || ctx->device->coopmat_int_support) &&
                                 src1->type == GGML_TYPE_F32 && ggml_is_contiguous(src1) && (ne11 * ne10) % 4 == 0 && ggml_vk_src1_prec_allows_q8(dst);
     // coopmat shaders are fast enough that memory bandwidth reduction from f16 activations helps
     const bool prefer_f16_b = is_coopmat && ggml_is_quantized(src0->type) && src1->type == GGML_TYPE_F32;
 
-    const ggml_type y_kernel_type = ggml_vk_mul_mat_b_type(ctx, src0->type, src1, f16_type,
-                                        ggml_prec_get_acc(dst), false, can_quantize_y, prefer_f16_b);
+    const ggml_type y_kernel_type = tilek_b ? GGML_TYPE_F16 :
+        ggml_vk_mul_mat_b_type(ctx, src0->type, src1, f16_type,
+                              ggml_prec_get_acc(dst), false, can_quantize_y, prefer_f16_b);
 
     const bool quantize_y       = y_kernel_type == GGML_TYPE_Q8_1;
     const bool y_f32_kernel     = y_kernel_type == GGML_TYPE_F32;
@@ -7237,10 +7290,10 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
 
     ggml_type mmp_type_a = src0->type;
     const ggml_type mmp_type_b = y_kernel_type;
-    const std::vector<vk_matmul_pipeline_pair> * mmp_map =
+    const std::vector<vk_matmul_pipeline_pair> * mmp_map = tilek_b ? nullptr :
         ggml_vk_get_mul_mat_mat_pipeline_map(ctx, mmp_type_a, mmp_type_b, ggml_prec_get_acc(dst));
 
-    const bool qx_needs_dequant = mmp_map == nullptr || x_non_contig;
+    const bool qx_needs_dequant = !tilek_b && (mmp_map == nullptr || x_non_contig);
     const bool qy_needs_dequant = y_needs_reformat;
 
     if (qx_needs_dequant) {
@@ -7249,35 +7302,44 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
         mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, mmp_type_a, mmp_type_b, ggml_prec_get_acc(dst));
     }
 
-    GGML_ASSERT(mmp_map != nullptr);
+    vk_pipeline pipeline;
+    uint32_t split_k;
+    uint32_t stream_k_groups = 0;
+    if (tilek_b) {
+        pipeline = tilek_pipeline;
+        GGML_ASSERT(ne10 % pipeline->align == 0);
+        split_k = ggml_vk_guess_split_k(ctx, ne01, ne11, ne10, disable_split_k, pipeline, false);
+    } else {
+        GGML_ASSERT(mmp_map != nullptr);
 
-    const std::vector<vk_matmul_pipeline_pair> * regular_mmp_map = mmp_map;
-    bool use_stream_k = ctx->device->coopmat2 && !ctx->device->disable_stream_k && !disable_split_k;
-    if (use_stream_k) {
-        mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, mmp_type_a, mmp_type_b, ggml_prec_get_acc(dst), false, true);
-        if (mmp_map == nullptr) {
+        const std::vector<vk_matmul_pipeline_pair> * regular_mmp_map = mmp_map;
+        bool use_stream_k = ctx->device->coopmat2 && !ctx->device->disable_stream_k && !disable_split_k;
+        if (use_stream_k) {
+            mmp_map = ggml_vk_get_mul_mat_mat_pipeline_map(ctx, mmp_type_a, mmp_type_b, ggml_prec_get_acc(dst), false, true);
+            if (mmp_map == nullptr) {
+                mmp_map = regular_mmp_map;
+                use_stream_k = false;
+            }
+        }
+
+        const uint32_t kpad = quantize_y ? 0 : ggml_vk_align_size(ne10, ggml_vk_guess_matmul_pipeline_align_map(ctx, *mmp_map, ne01, ne11, false));
+        const bool aligned = !quantize_y && ne10 == kpad && ne01 > 8 && ne11 > 8;
+        if (use_stream_k && !aligned) {
             mmp_map = regular_mmp_map;
             use_stream_k = false;
         }
+
+        pipeline = ggml_vk_guess_matmul_pipeline_map(ctx, *mmp_map, ne01, ne11, aligned, false);
+
+        const bool narrow_n = mmp_map->back().narrow_n_max != 0 && ne11 <= mmp_map->back().narrow_n_max;
+        split_k = ggml_vk_guess_split_k(ctx, ne01, ne11, ne10, disable_split_k, pipeline, narrow_n);
+        stream_k_groups = use_stream_k ? ggml_vk_guess_stream_k_groups(ctx, pipeline, ne01, ne11, ne10, stride_d, ne12 * ne13, split_k, disable_split_k) : 0;
+        if (use_stream_k && stream_k_groups == 0) {
+            pipeline = ggml_vk_guess_matmul_pipeline_map(ctx, *regular_mmp_map, ne01, ne11, aligned, false);
+        }
     }
 
-    const uint32_t kpad = quantize_y ? 0 : ggml_vk_align_size(ne10, ggml_vk_guess_matmul_pipeline_align_map(ctx, *mmp_map, ne01, ne11, false));
-    const bool aligned = !quantize_y && ne10 == kpad && ne01 > 8 && ne11 > 8;
     const bool needs_64b_indexing = ggml_nbytes(src0) > ctx->device->properties.limits.maxStorageBufferRange;
-    if (use_stream_k && !aligned) {
-        mmp_map = regular_mmp_map;
-        use_stream_k = false;
-    }
-
-    vk_pipeline pipeline = ggml_vk_guess_matmul_pipeline_map(ctx, *mmp_map, ne01, ne11, aligned, false);
-
-    const bool narrow_n = mmp_map->back().narrow_n_max != 0 && ne11 <= mmp_map->back().narrow_n_max;
-    const uint32_t split_k = ggml_vk_guess_split_k(ctx, ne01, ne11, ne10, disable_split_k, pipeline, narrow_n);
-    const uint32_t stream_k_groups = use_stream_k ? ggml_vk_guess_stream_k_groups(ctx, pipeline, ne01, ne11, ne10, stride_d, ne12 * ne13, split_k, disable_split_k) : 0;
-    if (use_stream_k && stream_k_groups == 0) {
-        pipeline = ggml_vk_guess_matmul_pipeline_map(ctx, *regular_mmp_map, ne01, ne11, aligned, false);
-    }
-
     if (needs_64b_indexing) {
         pipeline = ggml_vk_get_64b_indexing_pipeline(ctx, pipeline);
     }
@@ -7304,7 +7366,9 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     } else {
         to_fp16_vk_0 = ggml_vk_get_to_fp16(ctx, src0->type);
     }
-    if (y_needs_reformat) {
+    if (tilek_b) {
+        to_fp16_vk_1 = ctx->device->pipeline_contig_cpy_f32_f16_tiledk;
+    } else if (y_needs_reformat) {
         to_fp16_vk_1 = ggml_vk_get_cpy_pipeline(ctx, src1, nullptr, y_kernel_type);
     } else {
         to_fp16_vk_1 = ggml_vk_get_to_fp16(ctx, src1->type);
