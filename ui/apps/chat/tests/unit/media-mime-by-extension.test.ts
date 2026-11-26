@@ -9,6 +9,7 @@ describe('getMediaMimeTypeByExtension', () => {
 		);
 		expect(getMediaMimeTypeByExtension('voice.mp3')).toBe(MimeTypeAudio.MP3_MPEG);
 		expect(getMediaMimeTypeByExtension('clip.webm')).toBe(MimeTypeVideo.WEBM);
+		expect(getMediaMimeTypeByExtension('Screen Recording 1.mov')).toBe(MimeTypeVideo.QUICKTIME);
 	});
 
 	it('returns null for anything that is not media', () => {

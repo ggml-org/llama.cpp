@@ -33,6 +33,11 @@ export const AUDIO_FILE_TYPES = {
 } as const;
 
 export const VIDEO_FILE_TYPES = {
+	// QuickTime, what macOS records the screen as: the server decodes it with ffmpeg like the rest
+	[FileTypeVideo.MOV]: {
+		extensions: [FileExtensionVideo.MOV],
+		mimeTypes: [MimeTypeVideo.QUICKTIME]
+	},
 	[FileTypeVideo.MP4]: {
 		extensions: [FileExtensionVideo.MP4],
 		mimeTypes: [MimeTypeVideo.MP4]
