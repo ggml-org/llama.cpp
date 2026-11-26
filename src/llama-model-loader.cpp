@@ -1333,7 +1333,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
 
         const ggml_tensor * scale_meta = nullptr;
         ggml_tensor user_scale_meta = {};
-        if (!(flags & TENSOR_NO_SCALE) && (op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID)) {
+        if (is_matmul_weight && (op == GGML_OP_MUL_MAT || op == GGML_OP_MUL_MAT_ID)) {
             const std::string scale_name = LLM_TN_IMPL(tn.arch, tn.tensor, "scale", tn.bid, tn.xid).str();
             scale_meta = get_tensor_meta(scale_name.c_str());
             if (!scale_meta && files.empty()) {
@@ -1351,6 +1351,11 @@ struct ggml_tensor * llama_model_loader::create_tensor(
             if (scale_meta && op == GGML_OP_MUL_MAT && !ggml_is_scalar(scale_meta) &&
                     !(ggml_is_vector(scale_meta) && scale_meta->ne[0] == t_meta->ne[1])) {
                 throw std::runtime_error(format("weight scale tensor '%s' must be scalar or have one value per output channel", scale_name.c_str()));
+            }
+            if (scale_meta && op == GGML_OP_MUL_MAT_ID && !ggml_is_scalar(scale_meta) &&
+                    !(ggml_is_vector(scale_meta) && scale_meta->ne[0] == t_meta->ne[2]) &&
+                    !(scale_meta->ne[0] == t_meta->ne[1] && scale_meta->ne[1] == t_meta->ne[2] && scale_meta->ne[2] == 1 && scale_meta->ne[3] == 1)) {
+                throw std::runtime_error(format("weight scale tensor '%s' must be scalar, per expert or per output channel and expert", scale_name.c_str()));
             }
         }
 
