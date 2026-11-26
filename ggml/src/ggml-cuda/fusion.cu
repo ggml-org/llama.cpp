@@ -2,6 +2,7 @@
 #include "graph.cuh"
 #include "binbcast.cuh"
 #include "dsv4-hc.cuh"
+#include "fattn.cuh"
 #include "fp8.cuh"
 #include "gated_delta_net.cuh"
 #include "inkling2.cuh"
@@ -1989,6 +1990,44 @@ static int ggml_cuda_try_fuse_inkling2(ggml_backend_cuda_context * cuda_ctx, ggm
     }
 }
 
+static bool ggml_cuda_match_top_k_mask_fattn(const ggml_cgraph * cgraph, const int i, int & n_ops) {
+    const ggml_tensor * tkm = cgraph->nodes[i];
+    if (tkm->op != GGML_OP_TOP_K_MASK) {
+        return false;
+    }
+
+    auto fa_uses_only_as_mask = [](const ggml_tensor * fa, const ggml_tensor * tkm_node, const ggml_tensor * mask_node) {
+        if (fa->src[3] != mask_node) {
+            return false;
+        }
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            if (s != 3 && (fa->src[s] == tkm_node || fa->src[s] == mask_node)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    const ggml_op ops3[] = { GGML_OP_TOP_K_MASK, GGML_OP_RESHAPE, GGML_OP_FLASH_ATTN_EXT };
+    const int     out3[] = { i + 2 };
+    if (ggml_can_fuse_subgraph(cgraph, i, 3, ops3, out3, 1) &&
+            cgraph->nodes[i + 1]->src[0] == tkm &&
+            fa_uses_only_as_mask(cgraph->nodes[i + 2], tkm, cgraph->nodes[i + 1])) {
+        n_ops = 3;
+        return true;
+    }
+
+    const ggml_op ops2[] = { GGML_OP_TOP_K_MASK, GGML_OP_FLASH_ATTN_EXT };
+    const int     out2[] = { i + 1 };
+    if (ggml_can_fuse_subgraph(cgraph, i, 2, ops2, out2, 1) &&
+            fa_uses_only_as_mask(cgraph->nodes[i + 1], tkm, tkm)) {
+        n_ops = 2;
+        return true;
+    }
+
+    return false;
+}
+
 // try and fuse nodes and return the number of nodes to skip
 int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgraph, int i) {
     if (int n = ggml_cuda_try_fuse_inkling2(cuda_ctx, cgraph, i)) {
@@ -1996,6 +2035,19 @@ int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgrap
     }
 
     ggml_tensor * node = cgraph->nodes[i];
+
+    // top_k_mask -> [reshape ->] sparse flash_attn_ext
+    if (node->op == GGML_OP_TOP_K_MASK && cuda_ctx->stream_context().concurrent_events.empty()) {
+        int n_ops = 0;
+        if (ggml_cuda_match_top_k_mask_fattn(cgraph, i, n_ops)) {
+            const int fa_idx = i + n_ops - 1;
+            if (ggml_cuda_check_fusion_memory_ranges(cgraph, i, n_ops, &fa_idx, 1) &&
+                    ggml_cuda_flash_attn_ext_can_fuse_top_k_mask(cuda_ctx->device, node, cgraph->nodes[fa_idx])) {
+                ggml_cuda_flash_attn_ext_top_k_mask_fused(*cuda_ctx, node, cgraph->nodes[fa_idx]);
+                return n_ops - 1;
+            }
+        }
+    }
 
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
@@ -2919,6 +2971,16 @@ void ggml_cuda_fusion_add_alloc_deps(ggml_backend_cuda_context * cuda_ctx, ggml_
                     params->user_data, const_cast<ggml_tensor *>(match.expert_scale), match.dst);
             }
             i += match.node_count - 1;
+        }
+
+        if (cgraph->nodes[i]->op == GGML_OP_TOP_K_MASK) {
+            int n_ops = 0;
+            if (ggml_cuda_match_top_k_mask_fattn(cgraph, i, n_ops) &&
+                    ggml_cuda_flash_attn_ext_can_fuse_top_k_mask(cuda_ctx->device, cgraph->nodes[i], cgraph->nodes[i + n_ops - 1])) {
+                add_alloc_deps(i, i + n_ops - 1);
+                i += n_ops - 1;
+                continue;
+            }
         }
 
         if (cgraph->nodes[i]->op == GGML_OP_UNARY || cgraph->nodes[i]->op == GGML_OP_SOFT_MAX ||
