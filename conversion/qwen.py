@@ -879,7 +879,7 @@ class DFlashModel(Qwen3Model):
                 target_hparams = {**target_hparams, **target_hparams.get("text_config", {})}
                 self.hparams["vocab_size"] = target_hparams["unpadded_vocab_size"]
                 self.hparams["eos_token_id"] = target_hparams["eos_token_id"]
-                # the loop core runs num_passes times
+                # the loop core runs num_passes times, other looping targets need their own visit count
                 self._target_n_visits = target_hparams["num_hidden_layers"]
                 if (loop := target_hparams.get("loop_config")) is not None:
                     self._target_n_visits += (loop["num_passes"] - 1) * (loop["core_end"] - loop["core_start"])
