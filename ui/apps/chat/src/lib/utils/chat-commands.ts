@@ -37,6 +37,13 @@ export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[]
 			disabled: !options.canCompact(),
 			keywords: ['summarize', 'context'],
 			name: 'compact'
+		},
+		{
+			action: ChatFormCommandAction.SYSTEM_MESSAGE,
+			description: 'Edit the system message',
+			disabled: !options.canEditSystemMessage(),
+			keywords: ['system prompt', 'instructions'],
+			name: 'system-message'
 		}
 	];
 }

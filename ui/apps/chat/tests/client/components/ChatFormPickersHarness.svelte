@@ -17,6 +17,7 @@
 
 	const pickers = useChatFormPickers({
 		canCompact: () => true,
+		canEditSystemMessage: () => true,
 		editsCwdInline: () => true,
 		focusInput: () => {},
 		getCaretOffset: () => caretOffset,
@@ -29,6 +30,9 @@
 		hasPrompts: () => true,
 		onCompact: () => {
 			calls.push('onCompact');
+		},
+		onSystemMessage: () => {
+			calls.push('onSystemMessage');
 		},
 		openModelSelector: () => {
 			calls.push('openModelSelector');

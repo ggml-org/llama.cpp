@@ -41,6 +41,10 @@ export interface UseChatFormPickersOptions {
 	canCompact: () => boolean;
 	/** Runs `/compact`. */
 	onCompact: () => void;
+	/** Gates `/system-message`. */
+	canEditSystemMessage: () => boolean;
+	/** Runs `/system-message`: the form turns into the system message editor. */
+	onSystemMessage: () => void;
 	getCwd: () => string | null;
 	/** Mention search fallback scope. */
 	getServerHome: () => string | null;
@@ -78,6 +82,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 	const availableCommands = $derived(
 		getChatCommands({
 			canCompact: opts.canCompact,
+			canEditSystemMessage: opts.canEditSystemMessage,
 			hasCwdTools: opts.hasCwdTools,
 			hasPrompts: opts.hasPrompts,
 			showModelSelector: opts.getShowModelSelector()
@@ -125,6 +130,12 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 				isWorkingDirectoryPickerOpen = false;
 				opts.setValue('');
 				opts.openModelSelector();
+
+				break;
+			case ChatFormCommandAction.SYSTEM_MESSAGE:
+				isWorkingDirectoryPickerOpen = false;
+				opts.setValue('');
+				opts.onSystemMessage();
 
 				break;
 		}

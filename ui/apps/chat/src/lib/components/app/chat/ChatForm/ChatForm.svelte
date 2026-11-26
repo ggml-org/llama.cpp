@@ -187,6 +187,7 @@
 
 	const pickers = useChatFormPickers({
 		canCompact: () => chatStore.canCompact(conversationsStore.activeMessages),
+		canEditSystemMessage: () => !!onSystemPromptClick && !systemMode,
 		// a phone picks in a drawer with its own search field, and a touch screen opens no
 		// typed pickers (see opensOnInput)
 		editsCwdInline: () => !deviceStore.isMobile && !deviceStore.isTouch,
@@ -210,6 +211,7 @@
 				.some((s) => s.enabled && prefs.isServerToolsEnabled(s.id) && s.url.trim());
 		},
 		onCompact: () => chatStore.compactConversation(),
+		onSystemMessage: () => onSystemPromptClick?.({ files: uploadedFiles, message: value }),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		// TODO: no typed pickers with an on-screen keyboard for now: each mobile browser moves
 		// the page its own way as it opens, so a list by the form can not stay clear of the
@@ -835,7 +837,9 @@
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
 				EXPANDED_SHEET_FILL
 			],
-			systemMode && '!border-2 !border-dashed !border-border/50 !bg-muted',
+			// a dashed outline stands in for the card's edge, drawn inside it: the card keeps its size
+			systemMode &&
+				'!bg-muted !outline-2 -outline-offset-2 !outline-dashed !outline-border/50 [--glass-edge-focus:transparent] [--glass-edge:transparent]',
 			disabled && 'cursor-not-allowed opacity-60'
 		]}
 		data-single-row={isSingleRow || undefined}

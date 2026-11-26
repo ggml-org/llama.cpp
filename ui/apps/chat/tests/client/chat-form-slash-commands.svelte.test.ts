@@ -47,6 +47,27 @@ describe('slash command dispatch', () => {
 		expect(pickers.isCommandPickerOpen).toBe(false);
 	});
 
+	it('opens the system message editor on /system-message and consumes the token', async () => {
+		const screen = render(ChatFormPickersHarness);
+
+		await tick();
+
+		screen.component.type('/system');
+		await tick();
+
+		const pickers = screen.component.getPickers();
+		const command = pickers.availableCommands.find((c) => c.name === 'system-message');
+
+		if (!command) throw new Error('system-message command missing');
+
+		pickers.handleCommandSelect(command);
+		await tick();
+
+		expect(screen.component.getValue()).toBe('');
+		expect(screen.component.getCalls()).toContain('onSystemMessage');
+		expect(pickers.isCommandPickerOpen).toBe(false);
+	});
+
 	it('seeds the prompt picker search from the token args on selection', async () => {
 		const screen = render(ChatFormPickersHarness);
 
