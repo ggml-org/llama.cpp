@@ -1,0 +1,157 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_EXT_shader_16bit_storage : require
+
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+
+#extension GL_KHR_cooperative_matrix : enable
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+
+#extension GL_QCOM_cooperative_matrix_conversion : require
+
+#include "types.glsl"
+#include "tiledk_layout.glsl"
+
+#define TILES_PER_BLOCK (QUANT_K / TILEK)
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+
+layout(binding = 0) readonly  buffer A_PACKED16 { A_TYPE_PACKED16 data_a_packed16[]; };
+layout(binding = 1) readonly  buffer B          { float16_t data_b[]; };
+layout(binding = 2) writeonly buffer D          { float data_d[]; };
+
+layout(push_constant) uniform parameter
+{
+    uint M;
+    uint N;
+    uint K;
+    uint stride_a;
+    uint stride_b;
+    uint stride_d;
+
+    uint batch_stride_a;
+    uint batch_stride_b;
+    uint batch_stride_d;
+
+    uint base_work_group_z;
+    uint num_batches;
+    uint k_split;
+    uint ne02;
+    uint ne12;
+    uint broadcast2;
+    uint broadcast3;
+    uint padded_N;
+} p;
+
+layout(constant_id = 0)  const uint BLOCK_SIZE = 64;
+layout(constant_id = 1)  const uint BM = 64;
+layout(constant_id = 2)  const uint BN = 64;
+layout(constant_id = 3)  const uint BK = 32;
+layout(constant_id = 4)  const uint WM = 64;
+layout(constant_id = 5)  const uint WN = 64;
+layout(constant_id = 6)  const uint WMITER = 1;
+layout(constant_id = 7)  const uint TM = 64;
+layout(constant_id = 8)  const uint TN = 64;
+layout(constant_id = 9)  const uint TK = 16;
+layout(constant_id = 10) const uint WARP = 64;
+layout(constant_id = 11) const bool ALIGNED = true;
+
+void main() {
+    if (BM != TM || BN != TN || TK != TILEK || gl_NumSubgroups != 1) {
+        return;
+    }
+
+    const uint batch_idx = gl_WorkGroupID.z + p.base_work_group_z;
+
+    const uint i13 = batch_idx / p.ne12;
+    const uint i12 = batch_idx % p.ne12;
+
+    const uint i03 = i13 / p.broadcast3;
+    const uint i02 = i12 / p.broadcast2;
+
+    const uint batch_idx_a = i03 * p.ne02 + i02;
+
+    const uint blocks_m = (p.M + BM - 1) / BM;
+    const uint ir = gl_WorkGroupID.x % blocks_m;
+    const uint ik = gl_WorkGroupID.x / blocks_m;
+    const uint ic = gl_WorkGroupID.y;
+
+    const uint lane = gl_SubgroupInvocationID;
+
+    const uint start_k = ik * p.k_split;
+    const uint end_k = min(p.K, (ik + 1) * p.k_split);
+
+    uint ib = (batch_idx_a * p.batch_stride_a + (ir * BM + lane) * p.stride_a + start_k) / QUANT_K;
+    uint pos_b = batch_idx * p.batch_stride_b + start_k * p.N + (ic * BN + lane) * TILEK;
+
+    coopmat<float16_t, gl_ScopeSubgroup, TM, TK, gl_MatrixUseA> matA;
+    coopmat<float16_t, gl_ScopeSubgroup, TK, TN, gl_MatrixUseB> matB;
+    coopmat<float16_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> matC =
+        coopmat<float16_t, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(0.0f);
+
+    float16_t vecA[QUANT_K];
+    float16_t vecA_tile[TK];
+    float16_t vecB[TK];
+
+    for (uint k = start_k; k < end_k; k += QUANT_K) {
+        const float16_t d = data_a_packed16[ib].d;
+        [[unroll]] for (uint i = 0; i < QUANT_K / 8; i++) {
+            const uint vui = uint(data_a_packed16[ib].qs[2 * i]) | (uint(data_a_packed16[ib].qs[2 * i + 1]) << 16);
+            const f16vec4 v0 = (f16vec4(unpack8((vui >> 0) & 0x0F0F0F0F)) - float16_t(8.0f)) * d;
+            const f16vec4 v1 = (f16vec4(unpack8((vui >> 4) & 0x0F0F0F0F)) - float16_t(8.0f)) * d;
+            vecA[4 * i + 0]  = v0.x;
+            vecA[4 * i + 1]  = v0.y;
+            vecA[4 * i + 2]  = v0.z;
+            vecA[4 * i + 3]  = v0.w;
+            vecA[4 * i + 16] = v1.x;
+            vecA[4 * i + 17] = v1.y;
+            vecA[4 * i + 18] = v1.z;
+            vecA[4 * i + 19] = v1.w;
+        }
+        ib += 1;
+
+        [[unroll]] for (uint t = 0; t < TILES_PER_BLOCK; t++) {
+            extractSubArrayQCOM(vecA, t * TILEK, vecA_tile);
+
+            [[unroll]] for (uint kk = 0; kk < TK; kk++) {
+                vecB[kk] = data_b[pos_b + kk];
+            }
+            pos_b += TILEK * p.N;
+
+            vectorToCoopmatQCOM(vecA_tile, matA);
+            vectorToCoopmatQCOM(vecB, matB);
+
+            matC = coopMatMulAdd(matA, matB, matC);
+        }
+    }
+
+    const uint dr = ir * BM;
+    const uint dc = ic * BN;
+
+    const uint offsets = batch_idx * p.batch_stride_d + ik * p.batch_stride_d * p.num_batches;
+
+    const bool is_aligned = p.stride_d % 4 == 0;
+    const bool is_in_bounds = dr + TM <= p.M && dc + TN <= p.N;
+
+    if (is_aligned && is_in_bounds) {
+        coopmat<float, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator> cm_dtype =
+            coopmat<float, gl_ScopeSubgroup, TM, TN, gl_MatrixUseAccumulator>(matC);
+        coopMatStore(cm_dtype, data_d, offsets + dc * p.stride_d + dr, p.stride_d, gl_CooperativeMatrixLayoutColumnMajor);
+        return;
+    }
+
+    if (dr + lane >= p.M) {
+        return;
+    }
+
+    float16_t vecC[TN];
+    coopmatToVectorQCOM(matC, vecC);
+
+    [[unroll]] for (uint col = 0; col < TN; col++) {
+        if (dc + col < p.N) {
+            data_d[offsets + (dc + col) * p.stride_d + dr + lane] = float(vecC[col]);
+        }
+    }
+}

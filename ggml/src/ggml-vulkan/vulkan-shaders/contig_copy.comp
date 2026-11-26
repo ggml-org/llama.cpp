@@ -9,6 +9,24 @@ const uint num_threads = 128;
 
 layout(local_size_x = num_threads, local_size_y = 1, local_size_z = 1) in;
 
+#if defined(DST_TILEK)
+#include "tiledk_layout.glsl"
+
+uint dst_idx_contig(uint idx) {
+    const uint i13 = fastdiv(idx, p.ne1_012mp, fastdiv_L(p.ne1_Ls, 0));
+    const uint i13_offset = i13 * p.ne12*p.ne11*p.ne10;
+    const uint i12 = fastdiv(idx - i13_offset, p.ne1_01mp, fastdiv_L(p.ne1_Ls, 1));
+    const uint i12_offset = i12*p.ne11*p.ne10;
+    const uint i11 = fastdiv(idx - i13_offset - i12_offset, p.ne1_0mp, fastdiv_L(p.ne1_Ls, 2));
+    const uint i10 = idx - i13_offset - i12_offset - i11*p.ne10;
+    return get_doffset() + i13_offset + i12_offset + tiledk_first_idx(i11, i10, p.ne11);
+}
+#else
+uint dst_idx_contig(uint idx) {
+    return get_doffset() + idx;
+}
+#endif
+
 void main() {
     uint idx = get_idx();
 
@@ -20,14 +38,14 @@ void main() {
         [[unroll]] for (uint i = 0; i < num_iter; ++i) {
 
 #if defined(DATA_A_BF16)
-            data_d[get_doffset() + idx] = D_TYPE(bf16_to_fp32(uint32_t(data_a[get_aoffset() + idx])));
+            data_d[dst_idx_contig(idx)] = D_TYPE(bf16_to_fp32(uint32_t(data_a[get_aoffset() + idx])));
 #elif defined(DATA_D_BF16)
             float f = float(data_a[get_aoffset() + idx]);
-            data_d[get_doffset() + idx] = D_TYPE(fp32_to_bf16(f));
+            data_d[dst_idx_contig(idx)] = D_TYPE(fp32_to_bf16(f));
 #elif !defined(OPTIMIZATION_ERROR_WORKAROUND)
-            data_d[get_doffset() + idx] = D_TYPE(data_a[get_aoffset() + idx]);
+            data_d[dst_idx_contig(idx)] = D_TYPE(data_a[get_aoffset() + idx]);
 #else
-            data_d[get_doffset() + idx] = data_a[get_aoffset() + idx];
+            data_d[dst_idx_contig(idx)] = data_a[get_aoffset() + idx];
 #endif
             idx += num_threads;
         }
@@ -38,14 +56,14 @@ void main() {
             }
 
 #if defined(DATA_A_BF16)
-            data_d[get_doffset() + idx] = D_TYPE(bf16_to_fp32(uint32_t(data_a[get_aoffset() + idx])));
+            data_d[dst_idx_contig(idx)] = D_TYPE(bf16_to_fp32(uint32_t(data_a[get_aoffset() + idx])));
 #elif defined(DATA_D_BF16)
             float f = float(data_a[get_aoffset() + idx]);
-            data_d[get_doffset() + idx] = D_TYPE(fp32_to_bf16(f));
+            data_d[dst_idx_contig(idx)] = D_TYPE(fp32_to_bf16(f));
 #elif !defined(OPTIMIZATION_ERROR_WORKAROUND)
-            data_d[get_doffset() + idx] = D_TYPE(data_a[get_aoffset() + idx]);
+            data_d[dst_idx_contig(idx)] = D_TYPE(data_a[get_aoffset() + idx]);
 #else
-            data_d[get_doffset() + idx] = data_a[get_aoffset() + idx];
+            data_d[dst_idx_contig(idx)] = data_a[get_aoffset() + idx];
 #endif
             idx += num_threads;
         }
