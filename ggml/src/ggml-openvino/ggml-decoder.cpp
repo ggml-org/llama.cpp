@@ -806,8 +806,14 @@ int GgmlOvDecoder::compute_op_case(const ggml_tensor * node) const {
             } else if (GgmlOvDecoder::is_conv_state_writeback(node)) {
                 op_case = 2;
                 break;
-            } else if (is_conv_states_all_tensor(node->view_src) && node->src[1] != nullptr &&
-                       node->src[1]->op == GGML_OP_VIEW && node->src[1]->view_src == node->view_src) {
+            } else if (node->src[1] != nullptr && node->src[1]->op == GGML_OP_VIEW &&
+                       node->src[1]->view_src == node->view_src &&
+                       (is_conv_states_all_tensor(node->view_src) ||
+                        (node->view_src->op == GGML_OP_NONE && ggml_is_contiguous(node->src[1]) &&
+                         !is_recurrent_cache(node->view_src) &&
+                         strncmp(node->view_src->name, "cache_", strlen("cache_")) != 0))) {
+                // View writeback into a contiguous block of a plain (non-KV, non-recurrent) tensor at
+                // a static offset, e.g. the mamba-style conv state copy into its cache row.
                 op_case = 4;
                 break;
             } else if (node->src[0]->src[0]->op == GGML_OP_GET_ROWS && node->src[1] != nullptr &&
