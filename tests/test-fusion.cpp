@@ -377,7 +377,9 @@ int main(int argc, char ** argv) {
 
     for (const auto & model_path : models) {
         const std::string arch = get_arch(model_path);
-        const bool moe = arch.find("moe") != std::string::npos;
+        // test-llama-archs writes the variants of an arch as <arch>-dense.gguf and <arch>-moe.gguf, the arch name says nothing about it
+        const std::string stem = std::filesystem::path(model_path).stem().string();
+        const bool moe = stem.size() >= 4 && stem.compare(stem.size() - 4, 4, "-moe") == 0;
 
         llama_model_ptr model;
         llama_model_ptr model_cpu;
