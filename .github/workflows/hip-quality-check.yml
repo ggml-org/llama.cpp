@@ -155,7 +155,25 @@ jobs:
         run: |
           # The PR metrics.log comes from the VGPR spill check build above, so
           # this step adds no extra build when the baseline cache hits.
-          python3 scripts/hip/gcn-cdna-occupancy-check.py hip-baseline-metrics.log build/metrics.log
+          python3 scripts/hip/gcn-cdna-occupancy-check.py hip-baseline-metrics.log build/metrics.log \
+            --report hip-kernel-metrics-report.md || check_failed=true
+          if [ -n "$check_failed" ]; then
+            echo "check_failed=true" >> "$GITHUB_OUTPUT"
+          fi
+          exit 0
+
+      - name: Upload kernel metrics report
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: hip-kernel-metrics-report
+          path: hip-kernel-metrics-report.md
+
+      - name: Fail on regressions
+        if: ${{ github.event_name == 'pull_request' && steps.occupancy_check.outputs.check_failed == 'true' }}
+        run: |
+          echo "Kernel metrics regressions detected, see the hip-kernel-metrics-report artifact"
+          exit 1
 
       - name: ccache-buckets-save
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
