@@ -39,7 +39,7 @@ Also `ffmpeg`, and `npm ci` in `ui/lib/ui` for Llama UI stories. `demo:pr` needs
 
 Scripts get `test` and `expect` from `helpers.ts`. Drive the page with `demo.*` (visible cursor, human timing), assert with `expect`, set the scene with `test.use`:
 
-- `demo.click`, `demo.hover`, `demo.type`, `demo.press`, `demo.scroll`, `demo.pause`, `demo.caption(text)`, `demo.zoom(target)` (pinch onto a small detail).
+- `demo.click`, `demo.hover`, `demo.type`, `demo.press`, `demo.scroll`, `demo.pause`, `demo.caption(text)` (a chip under the window), `demo.zoom(target, scale)` (the camera moves onto a small detail and back), `demo.zoomIn(target, scale)` ... `demo.zoomOut()` (the camera stays on it across the actions between).
 - `test.use({ settings: {...} })` seeds UI settings, `startPath: '/#/...'` starts on a route.
 - Fixtures, so no real data or third-party server is needed:
     - **MCP servers:** two fixture servers (Weather, Notes) are always configured; see `demo/fixtures/demo-config.ts`.
@@ -49,6 +49,8 @@ Scripts get `test` and `expect` from `helpers.ts`. Drive the page with `demo.*` 
 
 Without `mockServer` the app talks to the llama-server at `DEMO_SERVER_ORIGIN` (default `:9931`, started from `build/bin/llama-server` when none runs). Sending a message there loads a model: do not do that on someone's running server without asking.
 
+The video is rendered from the recording, not the raw screencast: the app in a window on a Llama brand ground, camera moves with motion blur, captions under the window (see "The render" in the harness README). Write captions in the brand's voice: plain words, real numbers, no emoji. `DEMO_POLISH_LOGO=end` adds a Llama logo card, for a video that goes out on its own; `DEMO_POLISH=0` gives the plain screencast.
+
 ### Try it locally
 
 Save it as `demo/<name>.demo.ts` (git-ignored), importing from `./helpers.ts`, and run:
@@ -57,7 +59,7 @@ Save it as `demo/<name>.demo.ts` (git-ignored), importing from `./helpers.ts`, a
 npm run demo:record -- demo/<name>
 ```
 
-Add `DEMO_STORYBOOK=ui` (or `chat`) when the script has a `story`. `DEMO_SCALE=1` records faster while iterating. The mp4 lands in `demo/videos/`; check a few frames before going further:
+Add `DEMO_STORYBOOK=ui` (or `chat`) when the script has a `story`. `DEMO_POLISH=0` records faster while iterating (the render takes about three times the video's length). The mp4 lands in `demo/videos/`; check a few frames before going further:
 
 ```bash
 ffmpeg -loglevel error -ss 3 -i demo/videos/<name>.mp4 -frames:v 1 demo/videos/<name>-3s.png

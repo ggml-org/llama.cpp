@@ -33,7 +33,7 @@ const VIDEOS_DIR = resolve(import.meta.dirname, 'videos');
 const APP_READY_TIMEOUT_MS = 90000;
 /** How far below the viewport's top a pinch has to start for Chromium to zoom at all. */
 const ZOOM_TOP_INSET_PX = 64;
-/** In polish mode, the timeline of each page's demo: what the render plays over the footage. */
+/** The timeline of each page's demo, which the polished render plays over the footage. */
 const timelines = new WeakMap<Page, PolishEvent[]>();
 
 /**
@@ -386,7 +386,7 @@ export class Demo {
 	/**
 	 * Pinches in on `target`, a control or a point in the viewport, holds about `ms`, and pinches
 	 * back out to 1x: a two-finger zoom onto a detail too small to read in the frame. On a touch
-	 * device the fingertips show. In polish mode the camera moves in and out instead.
+	 * device the fingertips show. In the polished render the camera moves in and out instead.
 	 */
 	async zoom(target: Locator | { x: number; y: number }, scale = 2.5, ms = 1400): Promise<void> {
 		if (this.timeline) {
@@ -431,8 +431,8 @@ export class Demo {
 	}
 
 	/**
-	 * Polish mode only: moves the camera in on `target` and keeps it there while the demo goes on,
-	 * until `zoomOut` or the next `zoomIn`. A plain recording ignores it, as the cursor cannot act
+	 * Moves the camera in on `target` and keeps it there while the demo goes on,
+	 * until `zoomOut` or the next `zoomIn`. A plain recording (DEMO_POLISH=0) ignores it, as the cursor cannot act
 	 * on a pinched page.
 	 */
 	async zoomIn(target: Locator | { x: number; y: number }, scale = 2.5): Promise<void> {
@@ -444,7 +444,7 @@ export class Demo {
 		await this.page.waitForTimeout(CAMERA_MOVE_MS);
 	}
 
-	/** Polish mode only: moves the camera back out to the whole page. */
+	/** Moves the camera back out to the whole page. */
 	async zoomOut(): Promise<void> {
 		if (!this.timeline) return;
 

@@ -16,6 +16,7 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
  *   DEMO_SERVER_ORIGIN  llama-server the UI proxies to (default: http://localhost:9931)
  *   DEMO_LLAMA_SERVER   llama-server binary started when none runs there (default: build/bin)
  *   DEMO_COLOR_SCHEME   light | dark (default: light)
+ *   DEMO_POLISH         0 for the plain screencast (default: the branded render, see polish.ts)
  *   DEMO_STORYBOOK      ui | chat: also start that Storybook (Llama UI's or Llama Chat's), for story demos
  *   DEMO_STORYBOOK_PORT port for it (default: 6007)
  */

@@ -11,7 +11,7 @@ demo/
 ├── storage.ts  storage targets (hf://, file://)
 ├── helpers.ts  `test` with a `demo` fixture: cursor, captions, human-like timing
 ├── recorder.ts screencast recording and mp4 export
-├── polish.ts   polish mode: the promo render
+├── polish.ts   the render: window, ground, camera, captions
 ├── fixtures/   fixture MCP servers, seeded settings and demo conversations
 └── videos/     output (git-ignored)
 ```
@@ -31,7 +31,7 @@ demo/
 
 `gh` is only needed for `demo:pr`, and `hf` only with the bucket or dataset below. Without them, the video stays in `demo/videos/`.
 
-Videos are recorded through Chromium's screencast at `DEMO_SCALE` (2x by default, so 2880x1800) and 60 fps, starting once the page has settled.
+The page is recorded through Chromium's screencast at `DEMO_SCALE` (2x by default, so 2880x1800) and 60 fps, starting once the page has settled. The video is then rendered from those frames at 1920x1080, or 1080x1920 for a portrait viewport (see [The render](#the-render)).
 
 ### Hugging Face bucket (videos, previews, scripts)
 
@@ -116,19 +116,13 @@ Records every `scripts/docs/*.demo.ts` from the storage target and uploads `vide
 
 ## Writing a demo
 
-Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting, with timing varied like a person's (seeded per demo, so re-takes match); `demo.scroll` turns the mouse wheel over a target; `demo.zoom` pinches in on a control or a point to show a detail too small to read in the frame, holds, and pinches back out (with the fingertips drawn on a touch device); `demo.caption` shows a caption at the top of the frame. For voice input, `demo.microphone()` gives the page a microphone that hears nothing but `demo.speak(text)`, which reads the text in a synthetic voice (macOS `say`) and shows it as a caption, since the video has no sound. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
+Scripts get `test` and `expect` from `helpers.ts` without importing them. `demo.click`, `demo.hover` and `demo.type` glide a visible cursor to the target before acting, with timing varied like a person's (seeded per demo, so re-takes match); `demo.scroll` turns the mouse wheel over a target; `demo.zoom` moves the camera in on a control or a point to show a detail too small to read in the frame, holds, and moves back out; `demo.zoomIn` and `demo.zoomOut` do the two halves, to keep the camera on a detail while the demo goes on; `demo.caption` shows a caption under the window. For voice input, `demo.microphone()` gives the page a microphone that hears nothing but `demo.speak(text)`, which reads the text in a synthetic voice (macOS `say`) and shows it as a caption, since the video has no sound. Use `test.use({ settings, startPath })` to seed other settings or start on another route.
 
-## Polish mode
+## The render
 
-For a video that has to look good on its own, e.g. in a post, record with `DEMO_POLISH=1`:
+A video is not the raw screencast. The app sits in a rounded window on a ground of the Llama brand (the day sky, or the night sky for a dark recording), a phone's viewport gets a phone's rounder corners, and captions are chips under the window, in Llama Sans. `demo.zoom` moves a camera with eased moves and motion blur. The grounds, the fonts and the lockup come from `@ggml-org/llama-brand`, which the app already depends on, and sizes follow the brand's grid (u = the short side / 24, a margin of 2u).
 
-```bash
-DEMO_POLISH=1 npm run demo:record -- demo/<name>
-```
-
-The same script then gives a 1920x1080 video with the app in a rounded window on a gradient. `demo.zoom` moves a camera instead of pinching the page, with eased moves and motion blur, and `demo.caption` and `demo.speak` put their captions under the window instead of over the app. It is off by default, so PR and docs demos stay plain; `demo:pr` and `demo:docs` take the same variable.
-
-A camera can also stay on a detail while the demo goes on: `await demo.zoomIn(target, scale)` moves in, and `await demo.zoomOut()` moves back out. A plain recording ignores both, as the cursor cannot act on a pinched page.
+To keep the camera on a detail across several actions:
 
 ```ts
 await demo.zoomIn(page.getByRole('dialog'), 1.5);
@@ -136,7 +130,15 @@ await demo.type(search, 'Inkling-2-Mini');
 await demo.zoomOut();
 ```
 
-The render needs nothing more than the plain one: the demo's Chromium draws each frame on a canvas from the recorded frames and the script's timeline, and `ffmpeg` encodes them. It takes a few times as long as the video.
+| Variable             | Values                                    | Default                                |
+| -------------------- | ----------------------------------------- | -------------------------------------- |
+| `DEMO_POLISH`        | `0` for the plain screencast              | on                                     |
+| `DEMO_POLISH_GROUND` | `day`, `night`, `light`, `dark`, `sand`   | `day`, or `night` for a dark recording |
+| `DEMO_POLISH_LOGO`   | `start`, `end`, `both`: a Llama logo card | none                                   |
+
+With `DEMO_POLISH=0` the video is the screencast as recorded: `demo.zoom` pinches the page (with the fingertips drawn on a touch device), captions show over the app, and `demo.zoomIn` and `demo.zoomOut` do nothing, as the cursor cannot act on a pinched page.
+
+The render needs no extra tool: a page in the demo's Chromium lays out each frame from the recorded frames and the script's timeline, and `ffmpeg` encodes them. It takes about three times as long as the video.
 
 ## A mocked llama-server
 
