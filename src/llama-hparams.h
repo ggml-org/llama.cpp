@@ -305,6 +305,7 @@ struct llama_hparams {
     uint32_t dflash_conv_group_size  = 0;
     uint32_t dflash_selector_rank    = 0;
     uint32_t dflash_selector_top_k   = 0;
+    bool     dflash_softcap_post     = false; // DFlash2 softcaps the selector scores instead of the logits
     bool     dspark_f_rnn            = false; // rnn markov head reads f_rnn from embd_state
     uint32_t lilicorr_hidden_size    = 0;
     uint32_t lilicorr_candidate_topk = 0;
