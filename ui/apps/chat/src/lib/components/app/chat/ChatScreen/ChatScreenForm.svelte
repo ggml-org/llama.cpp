@@ -12,6 +12,8 @@
 	interface Props {
 		class?: string;
 		disabled?: boolean;
+		/** An attachment is on its way (a mentioned file being read): sending waits for it. */
+		isAttaching?: boolean;
 		isLoading?: boolean;
 		onFileRemove?: (fileId: string) => void;
 		onFileMention?: (path: string) => void;
@@ -26,6 +28,7 @@
 	let {
 		class: className,
 		disabled = false,
+		isAttaching = false,
 		isLoading = false,
 		onFileMention,
 		onFileRemove,
@@ -71,7 +74,7 @@
 		if (!isSystemMode) untrack(() => onMessageChange?.(text));
 	});
 
-	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
+	let hasLoadingAttachments = $derived(isAttaching || uploadedFiles.some((f) => f.isLoading));
 	let message = $state('');
 	let previousIsLoading = $derived(isLoading);
 

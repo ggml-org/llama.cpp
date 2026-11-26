@@ -158,6 +158,10 @@ export function useChatScreenFileUpload(options: UseChatScreenFileUploadOptions)
 		handleFileMention,
 		handleFileRemove,
 		handleFileUpload,
+		/** A mentioned file is still being read: the message waits for it before it is sent. */
+		get isReadingMention() {
+			return readingPaths.size > 0;
+		},
 		get showFileErrorDialog() {
 			return showFileErrorDialog;
 		},

@@ -78,6 +78,8 @@
 	let searchError = $state<string | null>(null);
 	// the running search has shown its nearest matches: the list stands in for the skeleton
 	let hasResultsOfSearch = $state(false);
+	// the query the listed results answer: a longer one typed since has not been searched yet
+	let resultsQuery = $state('');
 
 	// Coerce the depth setting to a positive integer; an invalid value
 	// would otherwise reach the server as max_depth 0 = unlimited.
@@ -112,6 +114,7 @@
 				if (!isCurrent()) return;
 
 				hasResultsOfSearch = true;
+				resultsQuery = query;
 				searchResults = res.error ? [] : res.entries.map(toEntry);
 				searchError = res.error ?? null;
 			};
@@ -133,6 +136,7 @@
 			} catch (err) {
 				if (!isCurrent() || signal.aborted) return;
 
+				resultsQuery = query;
 				searchResults = [];
 				searchError = err instanceof Error ? err.message : String(err);
 			}
@@ -199,10 +203,11 @@
 		if (isOpen && event.key === KeyboardKey.ENTER) {
 			// a mention holds spaces, so a query with one that found nothing is the message
 			// going on ("ask @alice about it"): Enter closes the picker and sends it
+			const hasWords = trimmedQuery.includes(MENTION_WORD_SEPARATOR);
+			// with no file search there is nothing to wait for
+			const isAnswered = !fileSearchEnabled || resultsQuery === trimmedQuery;
 			const isFinishedSentence =
-				trimmedQuery.includes(MENTION_WORD_SEPARATOR) &&
-				!search.isSearching &&
-				displayedItems.length === 0;
+				hasWords && isAnswered && !search.isSearching && displayedItems.length === 0;
 
 			if (isFinishedSentence) {
 				onClose();
@@ -211,6 +216,10 @@
 			}
 
 			event.preventDefault();
+
+			// results of the first word are not picked for the words typed after it:
+			// "@main today" must not turn into a mention of main
+			if (hasWords && !isAnswered) return true;
 
 			if (nav.hoveredIndex >= 0 && displayedItems[nav.hoveredIndex]) {
 				handleSelect(displayedItems[nav.hoveredIndex]);

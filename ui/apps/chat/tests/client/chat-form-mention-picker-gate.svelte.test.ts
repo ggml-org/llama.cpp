@@ -6,6 +6,7 @@
 import ChatFormPickerMention from '#lib/components/app/chat/ChatForm/ChatFormPickers/ChatFormPickerMention.svelte';
 import { DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY } from '#lib/constants/index.ts';
 import { BuiltInTool } from '#lib/enums/index.ts';
+import { ToolsService } from '#lib/services/tools.service.ts';
 import { toolsStore } from '#lib/stores/tools.svelte.ts';
 import type { OpenAIToolDefinition } from '#lib/types/index.ts';
 import { tick } from 'svelte';
@@ -34,6 +35,7 @@ function renderPicker() {
 }
 
 afterEach(() => {
+	vi.restoreAllMocks();
 	setServerTools([]);
 	toolsStore.setToolEnabled(FILE_SEARCH_KEY, true);
 	localStorage.removeItem(DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY);
@@ -90,5 +92,37 @@ describe('ChatFormPickerMention Enter', () => {
 
 		expect(screen.component.handleKeydown(event)).toBe(true);
 		expect(event.defaultPrevented).toBe(true);
+	});
+
+	it("does not pick the first word's results for the words typed after it", async () => {
+		setServerTools([FILE_SEARCH_DEF]);
+		// the glob spells each letter as a class (`[tT][oO]...`): the upper-case one tells the word
+		vi.spyOn(ToolsService, 'executeToolRaw').mockImplementation(async (_tool, params) => ({
+			base: '/home/demo',
+			entries: /T.*O.*D.*A.*Y/.test(String((params as { include: string }).include))
+				? []
+				: [{ path: 'main.ts', type: 'file' }]
+		}));
+
+		const onSelect = vi.fn();
+		const onClose = vi.fn();
+		const screen = render(ChatFormPickerMention, {
+			isOpen: true,
+			onClose,
+			onSelect,
+			query: 'main'
+		});
+
+		await expect.element(screen.getByText('main.ts').first()).toBeVisible();
+		await screen.rerender({ query: 'main today' });
+
+		// the longer query has not been searched yet: Enter neither picks main nor sends
+		expect(screen.component.handleKeydown(enter())).toBe(true);
+		expect(onSelect).not.toHaveBeenCalled();
+
+		// once it found nothing, Enter sends the message
+		await expect.poll(() => screen.component.handleKeydown(enter())).toBe(false);
+		expect(onSelect).not.toHaveBeenCalled();
+		expect(onClose).toHaveBeenCalled();
 	});
 });
