@@ -1021,6 +1021,10 @@ public:
     // return true if the graph was updated and can be reused
     bool can_reuse(const llm_graph_params & params);
 
+    // true if a graph built with the new parameters would have the same topology as the existing graph,
+    // the first check of can_reuse, which does not depend on the state of the memory
+    bool allow_reuse(const llm_graph_params & params) const { return this->params.allow_reuse(params); }
+
     llm_graph_input_i * add_input(llm_graph_input_ptr input);
 
     void add_fused_node(llm_graph_fused_node result);
@@ -1032,6 +1036,9 @@ public:
     const std::vector<llm_graph_fused_node> & get_fused_nodes() const { return fused_nodes; }
 
     void set_params(const llm_graph_params & params);
+
+    // the scheduler the graph was built for
+    ggml_backend_sched_t get_sched() const { return params.sched; }
 
     // important graph nodes
     ggml_tensor * t_inp_tokens  = nullptr;

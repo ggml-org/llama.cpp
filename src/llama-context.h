@@ -277,7 +277,8 @@ public:
     llm_graph_result * get_gf_res_reserve() const;
 
     // returns the result of ggml_backend_sched_graph_compute_async execution
-    ggml_status graph_compute(ggml_cgraph * gf, bool batched);
+    // sched: the scheduler the graph is allocated in, nullptr for the main one
+    ggml_status graph_compute(ggml_cgraph * gf, bool batched, ggml_backend_sched_t sched = nullptr);
 
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(
@@ -286,15 +287,19 @@ public:
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
 private:
-    llm_graph_result * get_gf_res_prev();
+    struct gf_res_arena;
+
+    // the arena of the graphs with the topology of params, see gf_res_arena
+    gf_res_arena & get_gf_res_prev(const llm_graph_params & params);
 
     llm_graph_params graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype) const;
+                          llm_graph_type   gtype,
+                    ggml_backend_sched_t   sched) const;
 
-    llm_graph_cb graph_get_cb() const;
+    llm_graph_cb graph_get_cb(ggml_backend_sched_t sched) const;
 
     // parameters defining the backend scheduler instance
     struct sched_params {
@@ -450,11 +455,34 @@ private:
     std::vector<ggml_backend_buffer_type_t> backend_buft;
     std::vector<size_t>                     backend_buf_exp_size; // expected buffer sizes
 
-    // Separate arenas give batches with and without outputs distinct CUDA graph cache keys.
-    std::array<llm_graph_result_ptr, 2> gf_res_prev;
+    // The arenas of the most recently used graph topologies (llm_graph_params::allow_reuse), up to gf_res_max of them.
+    // Each one keeps its graph and, through the graph, its CUDA graphs. When all are taken, the least recently used
+    // arena takes the new topology. An arena for ubatches smaller than n_ubatch also gets its own scheduler, which
+    // shares the compute buffers of the main one, so alternating ubatch shapes (speculative decoding, several
+    // sequences) keep their graphs allocated and reuse them instead of rebuilding and re-splitting them at every
+    // change. Full ubatches (prefill) use the main scheduler.
+    struct gf_res_arena {
+        llm_graph_result_ptr   res;
+        ggml_backend_sched_ptr sched;             // created on first use, kept when the arena takes a new topology
+        bool                   on_main   = false; // the last graph of res was allocated in the main scheduler
+        bool                   allocated = false; // res is allocated in that scheduler
+        uint64_t               last_used = 0;
+    };
+    std::vector<gf_res_arena> gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
 
+    uint32_t gf_res_max  = 16;
+    uint64_t gf_res_tick = 0;
+
+    // the arenas get their own schedulers, false when the main scheduler pipelines consecutive ubatches over several
+    // devices, or when its compute buffers cannot keep the graphs of several schedulers (ggml_backend_sched_share_buffers)
+    bool gf_res_scheds = true;
+
+    // the graph allocated in the main scheduler
     llm_graph_result * gf_res_prev_active = nullptr;
+
+    // forget which graphs are allocated, after the graph results were reset
+    void gf_res_invalidate();
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
