@@ -175,6 +175,56 @@ describe('runGlobSearchWithChildren with a relative path', () => {
 	});
 });
 
+describe('runGlobSearchWithChildren with a rooted path', () => {
+	it('looks further down when the folder itself holds no such name', async () => {
+		mockExecute
+			.mockResolvedValueOnce({ base: '/Users/rootDeep', entries: [] })
+			.mockResolvedValueOnce({
+				base: '/Users/rootDeep',
+				entries: [
+					{ path: '.cache/llama.cpp', type: 'dir' },
+					{ path: 'git/llama.cpp', type: 'dir' }
+				]
+			});
+
+		const res = await runGlobSearchWithChildren(
+			'~/llama.cpp',
+			'/Users/rootDeep/Desktop',
+			3,
+			50,
+			new AbortController().signal
+		);
+
+		expect(mockExecute.mock.calls.map((call) => call[1])).toMatchObject([
+			{ max_depth: 1, path: '~' },
+			{ max_depth: 3, path: '~' }
+		]);
+		expect(res.entries.map((e) => e.path)).toEqual([
+			'/Users/rootDeep/git/llama.cpp',
+			'/Users/rootDeep/.cache/llama.cpp'
+		]);
+	});
+
+	it('stays in the folder when it holds a match', async () => {
+		mockExecute.mockResolvedValueOnce({
+			base: '/Users/rootNear',
+			entries: [{ path: 'whisper.cpp', type: 'dir' }]
+		});
+
+		const res = await runGlobSearchWithChildren(
+			'~/whisper.cpp',
+			'/Users/rootNear/Desktop',
+			3,
+			50,
+			new AbortController().signal,
+			{ descendOnTrailingSeparator: true }
+		);
+
+		expect(mockExecute).toHaveBeenCalledTimes(1);
+		expect(res.entries.map((e) => e.path)).toEqual(['/Users/rootNear/whisper.cpp']);
+	});
+});
+
 describe('runGlobSearchWithChildren edge cases', () => {
 	it('follows a backslash path from a Windows scope', async () => {
 		const scope = 'C:/rootH';

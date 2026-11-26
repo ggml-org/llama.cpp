@@ -100,7 +100,30 @@ export async function runGlobSearchWithChildren(
 
 	query = toScopeSeparators(query, scopePath);
 
-	if (splitPathQuery(query) || !query.includes(PATH_SEPARATOR)) return search(query);
+	const pathQuery = splitPathQuery(query);
+
+	if (pathQuery) {
+		const direct = await search(query);
+		const canLookDeeper = !!pathQuery.last && searchDepth > SEARCH.PATH_NAV_MAX_DEPTH;
+
+		if (direct.error || direct.entries.length > 0 || !canLookDeeper) return direct;
+
+		// no such name in that folder (`~/llama.cpp`): look for it further down (`~/git/llama.cpp`)
+		const deep = await runGlobSearch(
+			{ ...direct.args, maxDepth: searchDepth },
+			options.type ?? GlobSearchType.ALL,
+			limit,
+			signal
+		);
+
+		if (deep.error) return direct;
+
+		const ranked = rankEntries(deep.entries, direct.args.rankQuery);
+
+		return { ...direct, base: deep.base, entries: ranked.map((e) => toEntryResult(e, deep.base)) };
+	}
+
+	if (!query.includes(PATH_SEPARATOR)) return search(query);
 
 	// A relative path (`ui/lib/voi`) is also followed from the scope itself: the
 	// server's glob matches it only below some other folder, never at the top.
@@ -242,7 +265,7 @@ export async function runFolderSearch(
 		const res = await runGlobSearchWithChildren(
 			toHomeRelativeQuery(query, home),
 			scope,
-			SEARCH.PATH_NAV_MAX_DEPTH,
+			SEARCH.MAX_DEPTH,
 			SEARCH.LIMIT,
 			signal,
 			{ type }

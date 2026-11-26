@@ -450,8 +450,9 @@ class ToolsStore {
 
 			this._serverHome = typeof res.base === 'string' ? res.base : null;
 		} catch {
-			// searches still work via a literal `~`, only `~` abbreviation degrades
-			this._serverHome = null;
+			// searches still work via a literal `~`, only `~` abbreviation degrades. Left
+			// unresolved, so the next caller asks again instead of keeping the failure
+			return null;
 		}
 
 		return this._serverHome;
