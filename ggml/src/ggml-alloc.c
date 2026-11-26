@@ -419,14 +419,21 @@ static size_t ggml_vbuffer_size(struct vbuffer * buf) {
     return size;
 }
 
-static struct vbuffer * ggml_vbuffer_alloc(ggml_backend_buffer_type_t buft, const struct ggml_dyn_tallocr * talloc, enum ggml_backend_buffer_usage usage) {
+// with min_sizes, every chunk n is at least min_sizes[n] bytes
+static struct vbuffer * ggml_vbuffer_alloc(ggml_backend_buffer_type_t buft, const struct ggml_dyn_tallocr * talloc, const size_t * min_sizes, enum ggml_backend_buffer_usage usage) {
     struct vbuffer * buf = (struct vbuffer *)calloc(1, sizeof(struct vbuffer));
     if (buf == NULL) {
         return NULL;
     }
 
-    for (int n = 0; n < talloc->n_chunks; n++) {
-        size_t chunk_size = talloc->chunks[n]->max_size;
+    for (int n = 0; n < GGML_VBUFFER_MAX_CHUNKS; n++) {
+        size_t chunk_size = n < talloc->n_chunks ? talloc->chunks[n]->max_size : 0;
+        if (min_sizes != NULL && min_sizes[n] > chunk_size) {
+            chunk_size = min_sizes[n];
+        }
+        if (n >= talloc->n_chunks && chunk_size == 0) {
+            break;
+        }
         buf->chunks[n] = ggml_backend_buft_alloc_buffer(buft, chunk_size);
         if (buf->chunks[n] == NULL) {
             ggml_vbuffer_free(buf);
@@ -447,6 +454,11 @@ static void ggml_vbuffer_reset(struct vbuffer * buf) {
     for (int i = 0; i < GGML_VBUFFER_MAX_CHUNKS && buf->chunks[i]; ++i) {
         ggml_backend_buffer_reset(buf->chunks[i]);
     }
+}
+
+// true if a reset frees state of the tensors in the buffer (e.g. tensor extras)
+static bool ggml_vbuffer_has_reset(struct vbuffer * buf) {
+    return buf->chunks[0] != NULL && buf->chunks[0]->iface.reset != NULL;
 }
 
 
@@ -477,9 +489,18 @@ struct node_alloc {
     struct tensor_alloc src[GGML_MAX_SRC];
 };
 
+// the compute buffers of one or more allocators, see ggml_gallocr_share_buffers
+struct ggml_gallocr_buffers {
+    int n_refs;
+    struct vbuffer ** buffers; // [n_buffers]
+    uint64_t gen; // incremented when an allocator reallocates a buffer, or resets a buffer whose reset frees tensor state
+};
+
 struct ggml_gallocr {
     ggml_backend_buffer_type_t * bufts; // [n_buffers]
-    struct vbuffer ** buffers; // [n_buffers]
+    struct ggml_gallocr_buffers * shared;
+    struct vbuffer ** buffers; // [n_buffers], shared->buffers
+    uint64_t alloc_gen; // shared->gen at the last ggml_gallocr_alloc_graph, UINT64_MAX if none
     struct ggml_dyn_tallocr ** buf_tallocs; // [n_buffers]
     int n_buffers;
 
@@ -500,8 +521,13 @@ ggml_gallocr_t ggml_gallocr_new_n(ggml_backend_buffer_type_t * bufts, int n_bufs
     galloc->bufts = calloc(n_bufs, sizeof(ggml_backend_buffer_type_t));
     GGML_ASSERT(galloc->bufts != NULL);
 
-    galloc->buffers = calloc(n_bufs, sizeof(struct vbuffer *));
-    GGML_ASSERT(galloc->buffers != NULL);
+    galloc->shared = calloc(1, sizeof(struct ggml_gallocr_buffers));
+    GGML_ASSERT(galloc->shared != NULL);
+    galloc->shared->n_refs = 1;
+    galloc->shared->buffers = calloc(n_bufs, sizeof(struct vbuffer *));
+    GGML_ASSERT(galloc->shared->buffers != NULL);
+    galloc->buffers = galloc->shared->buffers;
+    galloc->alloc_gen = UINT64_MAX;
 
     galloc->buf_tallocs = calloc(n_bufs, sizeof(struct ggml_dyn_tallocr *));
     GGML_ASSERT(galloc->buf_tallocs != NULL);
@@ -533,25 +559,72 @@ ggml_gallocr_t ggml_gallocr_new(ggml_backend_buffer_type_t buft) {
     return ggml_gallocr_new_n(&buft, 1);
 }
 
+static void ggml_gallocr_buffers_release(struct ggml_gallocr_buffers * shared, int n_buffers) {
+    if (--shared->n_refs > 0) {
+        return;
+    }
+    for (int i = 0; i < n_buffers; i++) {
+        // skip if already freed
+        bool freed = false;
+        for (int j = 0; j < i; j++) {
+            if (shared->buffers[j] == shared->buffers[i]) {
+                freed = true;
+                break;
+            }
+        }
+        if (!freed) {
+            ggml_vbuffer_free(shared->buffers[i]);
+        }
+    }
+    free(shared->buffers);
+    free(shared);
+}
+
+bool ggml_gallocr_share_buffers(ggml_gallocr_t galloc, ggml_gallocr_t src) {
+    GGML_ASSERT(galloc != src);
+    GGML_ASSERT(galloc->n_buffers == src->n_buffers);
+    for (int i = 0; i < galloc->n_buffers; i++) {
+        GGML_ASSERT(galloc->bufts[i] == src->bufts[i]);
+    }
+
+    if (galloc->shared == src->shared) {
+        return true;
+    }
+
+    for (int i = 0; i < src->n_buffers; i++) {
+        if (src->buffers[i] != NULL && ggml_vbuffer_has_reset(src->buffers[i])) {
+            return false;
+        }
+    }
+
+    ggml_gallocr_buffers_release(galloc->shared, galloc->n_buffers);
+
+    galloc->shared = src->shared;
+    galloc->shared->n_refs++;
+    galloc->buffers = galloc->shared->buffers;
+
+    // the previous assignments refer to the old buffers, plan the next graph again
+    galloc->n_nodes   = 0;
+    galloc->n_leafs   = 0;
+    galloc->alloc_gen = UINT64_MAX;
+
+    return true;
+}
+
+bool ggml_gallocr_alloc_is_valid(ggml_gallocr_t galloc) {
+    return galloc->alloc_gen == galloc->shared->gen;
+}
+
 void ggml_gallocr_free(ggml_gallocr_t galloc) {
     if (galloc == NULL) {
         return;
     }
 
+    if (galloc->shared != NULL) {
+        ggml_gallocr_buffers_release(galloc->shared, galloc->n_buffers);
+    }
+
     for (int i = 0; i < galloc->n_buffers; i++) {
-        if (galloc->buffers != NULL) {
-            // skip if already freed
-            bool freed = false;
-            for (int j = 0; j < i; j++) {
-                if (galloc->buffers[j] == galloc->buffers[i]) {
-                    freed = true;
-                    break;
-                }
-            }
-            if (!freed) {
-                ggml_vbuffer_free(galloc->buffers[i]);
-            }
-        }
         if (galloc->buf_tallocs != NULL) {
             // skip if already freed
             bool freed = false;
@@ -570,7 +643,6 @@ void ggml_gallocr_free(ggml_gallocr_t galloc) {
     ggml_hash_set_free(&galloc->hash_set);
     free(galloc->hash_values);
     free(galloc->bufts);
-    free(galloc->buffers);
     free(galloc->buf_tallocs);
     free(galloc->node_allocs);
     free(galloc->leaf_allocs);
@@ -920,6 +992,11 @@ static bool ggml_gallocr_reserve_n_impl(
                 realloc = true;
             }
         }
+        const bool shared = galloc->shared->n_refs > 1;
+        if (realloc && shared && no_alloc) {
+            // only measuring, keep the buffer of the other allocators
+            realloc = false;
+        }
         if (realloc) {
 #ifndef NDEBUG
             {
@@ -930,11 +1007,20 @@ static bool ggml_gallocr_reserve_n_impl(
                 }
             }
 #endif
+            // a shared buffer keeps the size of every chunk, the other allocators may need it
+            // free the old buffer first, so that growing it does not need room for both
+            size_t prev_sizes[GGML_VBUFFER_MAX_CHUNKS] = { 0 };
+            if (shared && galloc->buffers[i] != NULL) {
+                for (int c = 0; c < GGML_VBUFFER_MAX_CHUNKS; c++) {
+                    prev_sizes[c] = ggml_vbuffer_chunk_size(galloc->buffers[i], c);
+                }
+            }
             ggml_vbuffer_free(galloc->buffers[i]);
-            if (no_alloc) {
-                galloc->buffers[i] = NULL;
-            } else {
-                galloc->buffers[i] = ggml_vbuffer_alloc(galloc->bufts[i], galloc->buf_tallocs[i], GGML_BACKEND_BUFFER_USAGE_COMPUTE);
+            galloc->buffers[i] = NULL;
+            // the tensors allocated in the old buffer are no longer valid
+            galloc->shared->gen++;
+            if (!no_alloc) {
+                galloc->buffers[i] = ggml_vbuffer_alloc(galloc->bufts[i], galloc->buf_tallocs[i], shared ? prev_sizes : NULL, GGML_BACKEND_BUFFER_USAGE_COMPUTE);
                 if (galloc->buffers[i] == NULL) {
                     GGML_LOG_ERROR("%s: failed to allocate %s buffer of size %zu\n", __func__, ggml_backend_buft_name(galloc->bufts[i]), new_size);
                     return false;
@@ -1068,8 +1154,13 @@ bool ggml_gallocr_alloc_graph(ggml_gallocr_t galloc, struct ggml_cgraph * graph)
     for (int i = 0; i < galloc->n_buffers; i++) {
         if (galloc->buffers[i] != NULL) {
             ggml_vbuffer_reset(galloc->buffers[i]);
+            if (galloc->shared->n_refs > 1 && ggml_vbuffer_has_reset(galloc->buffers[i])) {
+                // the reset also freed the state of the tensors of the other allocators
+                galloc->shared->gen++;
+            }
         }
     }
+    galloc->alloc_gen = galloc->shared->gen;
 
     // allocate the graph tensors from the previous assignments
     // leafs
