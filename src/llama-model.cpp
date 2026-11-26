@@ -457,7 +457,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     }
 
     static const std::regex pattern_q_weight        ("blk\\.\\d*\\.attn_q.weight");
-    static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v).weight");
+    static const std::regex pattern_kv_weight       ("blk\\.\\d*\\.attn_(k|v)(_conv)?\\.weight");
     static const std::regex pattern_v_exps_weight   ("blk\\.\\d*\\.attn_v_exps.weight"); // K2 Horizon MoVA
     static const std::regex pattern_qkv_weight      ("blk\\.\\d*\\.attn_qkv.weight");
     static const std::regex pattern_qkv_gate_weight ("blk\\.\\d*\\.attn_qkv_gate.weight");
@@ -479,7 +479,7 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
     static const std::regex pattern_attn_gate_weight("blk\\.\\d*\\.attn_gate.weight");
     static const std::regex pattern_attn_rel        ("blk\\.\\d*\\.attn_rel.weight");
     static const std::regex pattern_attn_head       ("blk\\.\\d*\\.attn_(q_clip|rel_clip|sink_proj).weight");
-    static const std::regex pattern_attn_conv       ("blk\\.\\d*\\.attn_(k|v)_conv(_proj)?\\.weight");
+    static const std::regex pattern_attn_conv_proj  ("blk\\.\\d*\\.attn_(k|v)_conv_proj\\.weight");
 
     static const std::regex pattern_ssm_dt          ("blk\\.\\d*\\.ssm_dt.bias");
     static const std::regex pattern_ssm_a           ("blk\\.\\d*\\.ssm_a");
@@ -628,9 +628,9 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         }
 
-        if (std::regex_match(tensor_name, pattern_attn_conv) ||
+        if (std::regex_match(tensor_name, pattern_attn_conv_proj) ||
                 std::regex_match(tensor_name, pattern_attn_rel) || std::regex_match(tensor_name, pattern_attn_head)) {
-            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1);
+            return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_1, "attn_output.weight");
         }
 
         // standard attention
@@ -679,8 +679,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
                 std::regex_match(tensor_name, pattern_spgb_cache)) {
             if (is_inkling2) {
                 // the kv history can be split, attn/ffn history needs to stay mirrored
-                return get_tensor_config_impl(std::regex_match(tensor_name, pattern_s_cache) ?
-                        GGML_BACKEND_SPLIT_AXIS_MIRRORED : GGML_BACKEND_SPLIT_AXIS_0);
+                if (std::regex_match(tensor_name, pattern_s_cache)) {
+                    return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+                }
+                return get_tensor_config_impl(GGML_BACKEND_SPLIT_AXIS_0, "attn_output.weight");
             }
             if (ud->model->arch == LLM_ARCH_LFM2 || ud->model->arch == LLM_ARCH_LFM2MOE || ud->model->arch == LLM_ARCH_LFM3) {
                 // the LFM2 shortconv block runs fully mirrored, so its conv state must be mirrored too
@@ -1018,13 +1020,10 @@ struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const str
             // three stay in lockstep per device
             const int64_t granularity_v  = (granularity_kv / hparams.n_embd_head_k(il)) * hparams.n_embd_head_v(il);
 
-            if (std::regex_match(tensor_name, pattern_attn_conv)) {
+            if (std::regex_match(tensor_name, pattern_attn_conv_proj)) {
                 const bool is_v = tensor_name.find("attn_v") != std::string::npos;
-                const int64_t granularity = is_v ? granularity_v : granularity_kv;
-                if (tensor_name.find("_conv_proj") != std::string::npos) {
-                    return {hparams.n_shortconv_l_cache * granularity / (is_v ? hparams.n_embd_head_v(il) : hparams.n_embd_head_k(il))};
-                }
-                return {granularity};
+                const int64_t granularity = is_v ? granularity_v / hparams.n_embd_head_v(il) : granularity_kv / hparams.n_embd_head_k(il);
+                return {hparams.n_shortconv_l_cache * granularity};
             }
             if (std::regex_match(tensor_name, pattern_attn_rel)) {
                 return {hparams.n_relative * granularity_head};
