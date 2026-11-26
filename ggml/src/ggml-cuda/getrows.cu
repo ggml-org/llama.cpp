@@ -13,7 +13,7 @@ static __global__ void k_get_rows(
 
     ggml_cuda_pdl_sync();
     for (int64_t z = blockIdx.z; z < ne11*(int64_t)ne12_fdv.z; z += gridDim.z) {
-        for (int64_t i00 = 2*(blockIdx.y*blockDim.x + threadIdx.x); i00 < ne00; i00 += gridDim.y*blockDim.x) {
+        for (int64_t i00 = 2*(blockIdx.y*blockDim.x + threadIdx.x); i00 < ne00; i00 += 2*gridDim.y*blockDim.x) {
             // The x and y dimensions of the grid are swapped because the maximum allowed grid size for x is higher.
             const int i10 =  blockIdx.x;
             const uint2 dm  = fast_div_modulo((uint32_t)z, ne12_fdv);
