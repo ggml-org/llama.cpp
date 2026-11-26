@@ -16,6 +16,8 @@ ARG NODE_VERSION=24
 FROM docker.io/node:$NODE_VERSION AS web
 
 ARG APP_VERSION
+# true builds the UI with sharing conversations to Hugging Face, as the llama-server images do
+ARG VITE_PUBLIC_HUGGING_FACE=false
 
 WORKDIR /app/ui/apps/chat
 

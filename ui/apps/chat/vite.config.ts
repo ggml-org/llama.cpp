@@ -27,6 +27,13 @@ const LLAMA_HARNESS_CHAT_ONLY_ENTRY = resolve(
 	__dirname,
 	'src/lib/stores/agentic/harness-chat-only.ts'
 );
+// what a build without sharing to Hugging Face (a build that is not asked for it with
+// VITE_PUBLIC_HUGGING_FACE=true) gets in place of the package's Svelte entry: an account that is
+// never signed in, and components that draw nothing
+const LLAMA_HUGGINGFACE_DISABLED_ENTRY = resolve(
+	__dirname,
+	'src/lib/stores/huggingface-disabled.ts'
+);
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const browserBaseConfig: any = {
 	enabled: true,
@@ -43,15 +50,25 @@ const browserBaseConfig: any = {
 // `npm run build` runs without the env var default to ./dist.
 const outDir = process.env.LLAMA_UI_OUT_DIR ?? './dist';
 
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
 	const env = loadEnv(mode, process.cwd(), 'VITE_PUBLIC_');
 	const SERVER_ORIGIN = env.VITE_PUBLIC_SERVER_ORIGIN || 'http://localhost:9931';
+	// A build has sharing to Hugging Face only when asked for: VITE_PUBLIC_HUGGING_FACE=true. The
+	// dev server, the tests and Storybook have it unless told otherwise (=false).
+	const huggingFace = env.VITE_PUBLIC_HUGGING_FACE
+		? env.VITE_PUBLIC_HUGGING_FACE === 'true'
+		: command === 'serve';
 
 	return {
 		build: {
 			assetsInlineLimit: 32000,
 			chunkSizeWarningLimit: 3072,
 			minify: true
+		},
+
+		// what the app reads as HUGGING_FACE_ENABLED, so it agrees with the alias below
+		define: {
+			'import.meta.env.VITE_PUBLIC_HUGGING_FACE': JSON.stringify(String(huggingFace))
 		},
 
 		plugins: [
@@ -97,7 +114,9 @@ export default defineConfig(({ mode }) => {
 				{ find: /^@ggml-org\/llama-voice$/, replacement: resolve(LLAMA_VOICE_SOURCE, 'index.ts') },
 				{
 					find: /^@ggml-org\/llama-huggingface\/svelte$/,
-					replacement: resolve(LLAMA_HUGGINGFACE_ROOT, 'src/svelte/index.ts')
+					replacement: huggingFace
+						? resolve(LLAMA_HUGGINGFACE_ROOT, 'src/svelte/index.ts')
+						: LLAMA_HUGGINGFACE_DISABLED_ENTRY
 				},
 				{
 					find: /^@ggml-org\/llama-huggingface$/,

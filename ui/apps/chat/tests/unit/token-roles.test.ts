@@ -22,6 +22,8 @@ const BRACKET_SIZE = /(?<![\w-])text-\[[\d.]+(?:px|rem)\]/g;
 const TAILWIND_SHADOW = /(?<![\w-])shadow-(?:2xs|xs|sm|md|lg|xl|2xl)(?![\w-])/g;
 const CORNER_ROLE =
 	/(?<![\w-])rounded(?:-[a-z]{1,2})?-(?:control|panel|card|container|surface)(?![\w])/g;
+// sharing is one icon everywhere, the box with an arrow leaving it: see Sharing in DESIGN.md
+const SHARE2_ICON = /(?<![\w-])(?:Share2|share-2)(?![\w-])/g;
 
 function sources(dir: string): string[] {
 	return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -58,5 +60,11 @@ describe('shadows and corners', () => {
 
 	it('uses no corner role', () => {
 		expect(matches(CORNER_ROLE)).toEqual([]);
+	});
+});
+
+describe('icons', () => {
+	it('shares with no other icon than Share', () => {
+		expect(matches(SHARE2_ICON)).toEqual([]);
 	});
 });

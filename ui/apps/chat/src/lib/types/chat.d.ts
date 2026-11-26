@@ -328,6 +328,8 @@ export interface ChatMessageActionsContext {
 	setShowForkDialog: (show: boolean) => void;
 	navigateToSibling: (siblingId: string) => void;
 	forkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
+	/** Shares the conversation up to this message; absent in a build without sharing. */
+	share?: () => void;
 }
 
 export interface ChatMessageEditState {
