@@ -520,8 +520,8 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
 struct common_chat_prompt_preset {
     std::string system;
     std::string user;
-    bool has_language       = false; // the preset already names the requested language
-    bool has_context        = false; // the user text already holds the context
+    bool has_language       = false; // the preset already handles the language, do not append it
+    bool has_context        = false; // the preset already handles the context, use preset.user
     bool media_first        = false; // the media goes before the user text
     bool needs_audio_length = false; // the user text depends on the audio length, call again with it
 };

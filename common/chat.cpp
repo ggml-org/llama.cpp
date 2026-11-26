@@ -890,6 +890,11 @@ static bool is_vibevoice_asr_template(const std::string & src) {
     return src.find("transcribes audio input into text output in JSON format") != std::string::npos;
 }
 
+// Qwen3-ASR: the template marks the transcript boundary with <asr_text>
+static bool is_qwen3_asr_template(const std::string & src) {
+    return src.find("<asr_text>") != std::string::npos;
+}
+
 // LFM3-Audio: language code -> name
 static std::string lfm3_language_name(const std::string & language) {
     static const std::map<std::string, std::string> names = {
@@ -936,6 +941,13 @@ common_chat_prompt_preset common_chat_get_asr_prompt(const common_chat_templates
             }
             asr_preset.media_first        = true;
             asr_preset.needs_audio_length = true;
+        } else if (is_qwen3_asr_template(src)) {
+            // Context belongs in the system turn and the user turn is audio only.
+            // Language is detected from the audio, so do not append it to the user text.
+            asr_preset.system       = context;
+            asr_preset.user         = "";
+            asr_preset.has_context  = true;
+            asr_preset.has_language = true;
         }
     }
 

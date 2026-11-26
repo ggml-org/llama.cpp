@@ -2213,6 +2213,68 @@ static void test_convert_responses_to_chatcmpl() {
     }
 }
 
+// Qwen3-ASR expects conditioning text in the system turn, not next to the audio
+static void test_convert_transcriptions_to_chatcmpl() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/Qwen3-ASR.jinja");
+
+    json input = json::parse(R"({
+        "model": "qwen3-asr",
+        "prompt": "previous segment transcript"
+    })");
+
+    std::map<std::string, uploaded_file> in_files;
+    uploaded_file file;
+    file.data = raw_buffer{ 1, 2, 3 };
+    in_files["file"] = file;
+
+    std::vector<raw_buffer> out_files;
+    json result = convert_transcriptions_to_chatcmpl(input, tmpls.get(), in_files, out_files);
+
+    const auto & messages = result.at("messages");
+    assert_equals((size_t)2, messages.size());
+
+    assert_equals(std::string("system"), messages[0].at("role").get<std::string>());
+    assert_equals(std::string("previous segment transcript"), messages[0].at("content").get<std::string>());
+
+    assert_equals(std::string("user"), messages[1].at("role").get<std::string>());
+    const auto & user_content = messages[1].at("content").get<std::string>();
+    assert_not_contains(user_content, "previous segment transcript");
+    // the audio marker must still be there so the server can splice the media in
+    assert_equals(std::string(get_media_marker()), user_content);
+
+    assert_equals((size_t)1, out_files.size());
+
+    // a supplied language must not be appended back into the user turn
+    {
+        json input_lang = json::parse(R"({
+            "model": "qwen3-asr",
+            "prompt": "previous segment transcript",
+            "language": "ja"
+        })");
+        std::vector<raw_buffer> out_files_lang;
+        json result_lang = convert_transcriptions_to_chatcmpl(input_lang, tmpls.get(), in_files, out_files_lang);
+        const auto & messages_lang = result_lang.at("messages");
+        assert_equals((size_t)2, messages_lang.size());
+        assert_equals(std::string("previous segment transcript"), messages_lang[0].at("content").get<std::string>());
+        const auto & user_lang = messages_lang[1].at("content").get<std::string>();
+        assert_not_contains(user_lang, "previous segment transcript");
+        assert_not_contains(user_lang, "language");
+    }
+
+    // no prompt means no system message and an audio-only user turn
+    {
+        json input_empty = json::parse(R"({ "model": "qwen3-asr" })");
+        std::vector<raw_buffer> out_files_empty;
+        json result_empty = convert_transcriptions_to_chatcmpl(input_empty, tmpls.get(), in_files, out_files_empty);
+        const auto & messages_empty = result_empty.at("messages");
+        assert_equals((size_t)1, messages_empty.size());
+        assert_equals(std::string("user"), messages_empty[0].at("role").get<std::string>());
+        assert_equals(std::string(get_media_marker()), messages_empty[0].at("content").get<std::string>());
+    }
+}
+
 // Shared LFM2 parser cases - all variants use one output format and parser
 static void test_lfm2_parser(const std::string & template_path, bool detailed_debug) {
     auto tst = peg_tester(template_path, detailed_debug);
@@ -9515,6 +9577,7 @@ int main(int argc, char ** argv) {
         test_msg_token_delimiters_split();
         test_tools_oaicompat_json_conversion();
         test_convert_responses_to_chatcmpl();
+        test_convert_transcriptions_to_chatcmpl();
         test_developer_role_to_system_workaround();
         test_translate_gemma();
         test_deepseek_v4_thinking_retention();
