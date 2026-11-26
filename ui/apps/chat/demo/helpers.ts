@@ -3,10 +3,10 @@
  * llama-server set the scene, or a Storybook story stands in for the app.
  */
 
-import { Demo, prepareDemoPage, recordDemo } from '../../../lib/demo/src/index.ts';
 import { demoMcpServerSettings } from './fixtures/demo-config.ts';
 import { mockLlamaServer, type MockServerOptions } from './fixtures/llama-server.ts';
 import { generateTrace } from './fixtures/traces.ts';
+import { Demo, prepareDemoPage, recordDemo } from '@ggml-org/llama-demo';
 import { type Locator, type Page, test as base, type TestInfo } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';

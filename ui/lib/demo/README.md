@@ -1,6 +1,6 @@
 # @ggml-org/llama-demo
 
-Scripted demo videos of the llama.cpp frontend apps, for pull requests and docs: a Playwright script drives the app like a person, and the harness records it and renders an mp4 with an animated GIF preview. It lives in llama.cpp at `ui/lib/demo`. It is not published to npm: apps in this repo run it from source.
+Scripted demo videos of the llama.cpp frontend apps, for pull requests and docs: a Playwright script drives the app like a person, and the harness records it and renders an mp4 with an animated GIF preview. It lives in llama.cpp at `ui/lib/demo`. It is a private package, not published to npm: an app in this repo adds it as a local dependency and imports it by name.
 
 - **PR demos** live in the PR description, as a `ts demo` code block.
 - **Docs demos** live in the storage target, under `scripts/docs/`.
@@ -19,6 +19,14 @@ src/
 Playwright is only a type here: the app passes in its page and test, so the harness loads no Playwright of its own, and runs with nothing installed in this folder. `npm ci` here is only for `npm run check`.
 
 ## In an app
+
+Add it to the app's `devDependencies` as a local package, which npm links to this folder, so no copy is installed and nothing is published:
+
+```json
+"@ggml-org/llama-demo": "file:../../lib/demo"
+```
+
+Then import it by name: `@ggml-org/llama-demo` for the fixtures' parts (`Demo`, `prepareDemoPage`, `recordDemo`) and `@ggml-org/llama-demo/cli` for `runDemoCli`. Node runs its TypeScript sources directly, through the link.
 
 An app has a `demo/` folder with three files ([Llama Chat's](../../apps/chat/demo/README.md) is the example):
 

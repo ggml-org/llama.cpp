@@ -9,8 +9,8 @@
  * Settings come from ui/apps/chat/.env (see .env.example).
  */
 
-import { runDemoCli } from '../../../lib/demo/src/cli.ts';
 import { DEMO_TRACES, generateTrace } from './fixtures/traces.ts';
+import { runDemoCli } from '@ggml-org/llama-demo/cli';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';

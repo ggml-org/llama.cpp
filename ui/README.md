@@ -22,8 +22,8 @@ ui/
 - [`lib/harness`](lib/harness/README.md) is the agentic loop: plain TypeScript with no UI and no dependencies. An app
   gives it an inference client and tools, and reads its events.
 - [`lib/demo`](lib/demo/README.md) records scripted demo videos of the apps for PRs and docs, and renders them on the
-  Llama brand. It is Node TypeScript that an app's `demo/` folder runs from source, with the app's own Playwright; it is
-  not published to npm.
+  Llama brand. It is Node TypeScript that an app adds as a local `file:` dependency and imports by name, with the app's own
+  Playwright; it is private, not published to npm.
 - [`apps/chat`](apps/chat/README.md) talks to llama-server, stores conversations and runs the agentic loop through the
   harness. CMake builds it into llama-server (see `scripts/ui-assets.cmake`), and it is published to npm as
   `@ggml-org/llama-chat` (with `llama-chat` as its short name), so `npx llama-chat` runs it against any llama-server.
