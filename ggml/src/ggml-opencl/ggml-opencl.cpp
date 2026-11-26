@@ -33,6 +33,17 @@ typedef const void * (*get_adreno_bin_kernel_func_t)(
 
 #include <CL/cl.h>
 
+// cl_qcom_onchip_global_memory, not in the Khronos headers
+#ifndef CL_MEM_ONCHIP_GLOBAL_QCOM
+#define CL_MEM_ONCHIP_GLOBAL_QCOM        0x41A2
+#endif
+#ifndef CL_MEM_ONCHIP_GLOBAL_OFFSET_QCOM
+#define CL_MEM_ONCHIP_GLOBAL_OFFSET_QCOM 0x41A3
+#endif
+#ifndef CL_DEVICE_ONCHIP_GLOBAL_MEM_SIZE_QCOM
+#define CL_DEVICE_ONCHIP_GLOBAL_MEM_SIZE_QCOM 0x41A4
+#endif
+
 #include <inttypes.h>
 #include <string.h>
 
@@ -455,6 +466,7 @@ struct ggml_backend_opencl_context;
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
 static void ggml_cl_adreno_xmem_attn_release_scratch(ggml_backend_opencl_context * backend_ctx);
+static void ggml_cl_fa_malu_release(ggml_backend_opencl_context * backend_ctx);
 #endif
 
 // backend device context
@@ -588,6 +600,8 @@ struct ggml_opencl_fa_kernels {
     // FA bin kernels
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     cl_kernel kernel_flash_attn_f32_f16_bin;
+    cl_kernel kernel_flash_attn_f32_f16_d128_malu    = nullptr;
+    cl_kernel kernel_flash_attn_f32_f16_d128_q1_malu = nullptr;
 
     cl_kernel kernel_repack_q_for_wmm;
     cl_kernel kernel_repack_k_for_wmm;
@@ -641,6 +655,14 @@ struct ggml_cl_adreno_xmem_attn_state {
     cl_kernel kernel_pv_gemm = nullptr;
 
     ggml_cl_adreno_xmem_attn_scratch scratch;
+};
+
+struct ggml_cl_fa_malu_state {
+    bool enabled = false;
+    size_t gmem_size = 0;
+    cl_mem gmem = nullptr;
+    cl_mem gmem_sub[3] = {};
+    cl_mem gmem_img[3] = {};
 };
 #endif
 
@@ -910,6 +932,7 @@ struct ggml_backend_opencl_context {
     ggml_opencl_fa_kernels fa;
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
     ggml_cl_adreno_xmem_attn_state adreno_xmem_attn;
+    ggml_cl_fa_malu_state fa_malu;
 #endif
     cl_kernel kernel_top_k_f32, kernel_top_k_merge_f32;
     cl_kernel kernel_top_k_mask[2], kernel_top_k_mask_fill[2];
@@ -1640,6 +1663,7 @@ struct ggml_backend_opencl_context {
             dequant_f16_pool.clear();
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
             ggml_cl_adreno_xmem_attn_release_scratch(this);
+            ggml_cl_fa_malu_release(this);
 #endif
         }
     }
@@ -2463,6 +2487,22 @@ static std::string ggml_opencl_make_compile_opts(const ggml_backend_opencl_conte
 
     return compile_opts;
 }
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+// prefill MALU FA stages Q (f16) in on-chip GMEM, work-group i uses slot i % GGML_CL_FA_MALU_Q_SLOTS (WG_IN_GMEM in the kernel),
+// one slot of 4 sub-groups x 64 rows x 128 dims
+static constexpr size_t GGML_CL_FA_MALU_GMEM_MAX = 6u * 1024 * 1024;
+static constexpr size_t GGML_CL_FA_MALU_KV_GMEM  = 128 * 64;
+static constexpr size_t GGML_CL_FA_MALU_Q_SLOT   = 4 * 64 * 128;
+static constexpr size_t GGML_CL_FA_MALU_Q_SLOTS  = 72;
+static constexpr size_t GGML_CL_FA_MALU_GMEM_MIN = (GGML_CL_FA_MALU_Q_SLOTS * GGML_CL_FA_MALU_Q_SLOT + 2 * GGML_CL_FA_MALU_KV_GMEM) * sizeof(ggml_fp16_t);
+
+// decode MALU FA keeps the scores of one row in local memory, from offset GGML_CL_FA_MALU_DEC_OFFSET.
+// The bin kernel flash_attn_f32_f16_d128_q1_malu is built with -DMAX_CTX_SIZE=7168 -DBDLM_OFFSET=512 to match.
+static constexpr int GGML_CL_FA_MALU_DEC_LOCAL  = 1024 * 7;
+static constexpr int GGML_CL_FA_MALU_DEC_OFFSET = 512;
+static constexpr int GGML_CL_FA_MALU_DEC_MAX_KV = GGML_CL_FA_MALU_DEC_LOCAL - GGML_CL_FA_MALU_DEC_OFFSET;
+#endif
 
 static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     if (backend_ctx->kernels_loaded) {
@@ -8289,6 +8329,22 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
     }
     load_cl_kernels_gemm_coopk(backend_ctx);
     load_cl_kernels_coopmat(backend_ctx);
+
+    // flash_attn_f32_f16_d128_malu, flash_attn_f32_f16_d128_q1_malu
+    if (backend_ctx->fa_malu.enabled) {
+        size_t bin_size = 0;
+        const char * kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("flash_attn_f32_f16_d128_malu", &bin_size);
+        cl_program prog = build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, "", bin_size);
+        CL_CHECK((backend_ctx->fa.kernel_flash_attn_f32_f16_d128_malu = clCreateKernel(prog, "flash_attn_f32_f16", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+
+        kernel_bin = (const char *)backend_ctx->get_adreno_bin_kernel("flash_attn_f32_f16_d128_q1_malu", &bin_size);
+        prog = build_program_from_binary(backend_ctx->context, backend_ctx->device, kernel_bin, "", bin_size);
+        CL_CHECK((backend_ctx->fa.kernel_flash_attn_f32_f16_d128_q1_malu = clCreateKernel(prog, "flash_attn_f32_f16_q1", &err), err));
+        CL_CHECK(clReleaseProgram(prog));
+        GGML_LOG_CONT(".");
+    }
 #endif // GGML_OPENCL_USE_ADRENO_KERNELS
     GGML_LOG_CONT("\n");
     backend_ctx->kernels_loaded = true;
@@ -9928,6 +9984,33 @@ static ggml_backend_opencl_context * ggml_cl_init(ggml_backend_dev_t dev) {
         }
     }
 #endif // GGML_OPENCL_USE_ADRENO_BIN_KERNELS
+
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    {
+        const char * env = getenv("GGML_OPENCL_FA_WITH_MALU");
+        const bool requested = env && atoi(env) != 0;
+        size_t pf_size = 0;
+        size_t q1_size = 0;
+        backend_ctx->fa_malu.enabled = requested && backend_ctx->gpu_family == GPU_FAMILY::ADRENO &&
+                                       strstr(backend_ctx->device_name.c_str(), "850") &&
+                                       use_adreno_bin_kernels(backend_ctx.get()) &&
+                                       backend_ctx->get_adreno_bin_kernel("flash_attn_f32_f16_d128_malu", &pf_size) && pf_size > 0 &&
+                                       backend_ctx->get_adreno_bin_kernel("flash_attn_f32_f16_d128_q1_malu", &q1_size) && q1_size > 0;
+        if (requested && !backend_ctx->fa_malu.enabled) {
+            GGML_LOG_WARN("ggml_opencl: FA MALU needs Adreno 850 and its kernels in the bin kernel library, it is disabled\n");
+        }
+        if (backend_ctx->fa_malu.enabled) {
+            cl_ulong gmem = 0;
+            size_t   ret  = 0;
+            if (clGetDeviceInfo(device, CL_DEVICE_ONCHIP_GLOBAL_MEM_SIZE_QCOM, sizeof(gmem), &gmem, &ret) != CL_SUCCESS || ret > sizeof(gmem)) {
+                gmem = 0;
+            }
+            backend_ctx->fa_malu.gmem_size = MIN((size_t) gmem, GGML_CL_FA_MALU_GMEM_MAX);
+            backend_ctx->fa_malu.enabled   = backend_ctx->fa_malu.gmem_size >= GGML_CL_FA_MALU_GMEM_MIN;
+            GGML_LOG_INFO("ggml_opencl: on-chip GMEM %zu KB, FA MALU uses %zu KB\n", (size_t) gmem / 1024, backend_ctx->fa_malu.gmem_size / 1024);
+        }
+    }
+#endif // GGML_OPENCL_USE_ADRENO_KERNELS
 
     cl_int err;
 
@@ -12503,6 +12586,10 @@ static bool ggml_cl_mul_mat_can_use_fwht(const ggml_backend_opencl_context * bac
            ggml_is_contiguous_rows(b) && ggml_is_contiguous(op) && ggml_are_same_shape(b, op);
 }
 
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+static bool ggml_cl_flash_attn_malu_can_use(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * dst);
+#endif
+
 static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
     ggml_backend_opencl_device_context * dev_ctx     = (ggml_backend_opencl_device_context *)dev->context;
     ggml_backend_opencl_context *        backend_ctx = dev_ctx->backend_ctx;
@@ -12989,6 +13076,9 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 return false;
             }
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+            if (ggml_cl_flash_attn_malu_can_use(backend_ctx, op)) {
+                return true;
+            }
             if (use_fa_bin_kernels_prefill(backend_ctx, op->src[0], op->src[1], op->src[2])) {
                 return true;
             }
@@ -24342,6 +24432,190 @@ static bool ggml_cl_flash_attn_decompose_dispatch(
     return true;
 }
 
+#ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+static bool ggml_cl_flash_attn_malu_can_use(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * dst) {
+    const ggml_tensor * q    = dst->src[0];
+    const ggml_tensor * k    = dst->src[1];
+    const ggml_tensor * v    = dst->src[2];
+    const ggml_tensor * mask = dst->src[3];
+    const float softcap = ((const float *) dst->op_params)[2];
+
+    // no softcap or sinks; decode keeps the scores of one row in local memory; prefill reads mask rows as half4
+    return backend_ctx->fa_malu.enabled &&
+           q->type == GGML_TYPE_F32 && k->type == GGML_TYPE_F16 && v->type == GGML_TYPE_F16 &&
+           q->ne[0] == 128 && v->ne[0] == 128 && dst->src[4] == nullptr && softcap == 0.0f &&
+           (q->ne[1] == 1 ? k->ne[1] <= GGML_CL_FA_MALU_DEC_MAX_KV : (mask == nullptr || mask->ne[0] % 4 == 0));
+}
+
+static cl_mem ggml_cl_fa_malu_image(cl_context context, cl_mem_flags flags, cl_mem buf, size_t nbytes, cl_channel_order order, cl_channel_type type) {
+    const cl_image_format fmt = { order, type };
+    cl_image_desc desc = {};
+    desc.image_type  = CL_MEM_OBJECT_IMAGE1D_BUFFER;
+    desc.image_width = nbytes / ((order == CL_RGBA ? 4 : 1) * (type == CL_FLOAT ? sizeof(float) : sizeof(ggml_fp16_t)));
+    desc.buffer      = buf;
+    cl_int err;
+    cl_mem img = clCreateImage(context, flags, &fmt, &desc, NULL, &err);
+    CL_CHECK(err);
+    return img;
+}
+
+static cl_mem ggml_cl_fa_malu_sub_buffer(const ggml_tensor * t) {
+    const ggml_tensor_extra_cl * extra = (const ggml_tensor_extra_cl *) t->extra;
+    cl_buffer_region region = { extra->offset + t->view_offs, ggml_nbytes(t) };
+    cl_int err;
+    cl_mem buf = clCreateSubBuffer(extra->data_device, CL_MEM_READ_WRITE, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+    CL_CHECK(err);
+    return buf;
+}
+
+static void ggml_cl_fa_malu_release(ggml_backend_opencl_context * ctx) {
+    auto & s = ctx->fa_malu;
+    for (int i = 0; i < 3; ++i) {
+        ggml_cl_release_mem(s.gmem_img[i]);
+        ggml_cl_release_mem(s.gmem_sub[i]);
+    }
+    ggml_cl_release_mem(s.gmem);
+}
+
+// the GMEM staging buffers are shared by all MALU prefill calls, the queue runs them in order
+static void ggml_cl_fa_malu_gmem_init(ggml_backend_opencl_context * ctx) {
+    if (ctx->fa_malu.gmem) {
+        return;
+    }
+    const size_t n_elem[3] = {
+        GGML_CL_FA_MALU_Q_SLOTS * GGML_CL_FA_MALU_Q_SLOT,
+        GGML_CL_FA_MALU_KV_GMEM,
+        GGML_CL_FA_MALU_KV_GMEM,
+    };
+    const cl_channel_order order[3] = { CL_RGBA, CL_RGBA, CL_R };
+
+    cl_int err;
+    cl_mem_properties prop[] = {CL_MEM_ONCHIP_GLOBAL_QCOM, 1, CL_MEM_ONCHIP_GLOBAL_OFFSET_QCOM, 0, 0};
+    ctx->fa_malu.gmem = clCreateBufferWithProperties(ctx->context, prop, CL_MEM_READ_WRITE, ctx->fa_malu.gmem_size, NULL, &err);
+    CL_CHECK(err);
+
+    cl_buffer_region region = {0, 0};
+    for (int i = 0; i < 3; ++i) {
+        region.size = n_elem[i] * sizeof(ggml_fp16_t);
+        ctx->fa_malu.gmem_sub[i] = clCreateSubBuffer(ctx->fa_malu.gmem, 0, CL_BUFFER_CREATE_TYPE_REGION, &region, &err);
+        CL_CHECK(err);
+        ctx->fa_malu.gmem_img[i] = ggml_cl_fa_malu_image(ctx->context, CL_MEM_READ_WRITE, ctx->fa_malu.gmem_sub[i], region.size, order[i], CL_HALF_FLOAT);
+        region.origin += region.size;
+    }
+}
+
+static void ggml_cl_flash_attn_malu(ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst) {
+    const ggml_tensor * v = dst->src[2];
+    const ggml_tensor * mask = dst->src[3];
+
+    ggml_backend_opencl_context *backend_ctx = (ggml_backend_opencl_context *)backend->context;
+    cl_context context = backend_ctx->context;
+
+    const int n_q = q->ne[1];
+    const int n_kv = k->ne[1];
+    const int n_head = q->ne[2];
+    const int n_head_kv = k->ne[2];
+    const int n_batch = q->ne[3];
+
+    cl_kernel kernel = n_q == 1 ? backend_ctx->fa.kernel_flash_attn_f32_f16_d128_q1_malu : backend_ctx->fa.kernel_flash_attn_f32_f16_d128_malu;
+
+    const cl_ulong q_nb1 = q->nb[1], q_nb2 = q->nb[2], q_nb3 = q->nb[3];
+    const cl_ulong k_nb1 = k->nb[1], k_nb2 = k->nb[2], k_nb3 = k->nb[3];
+    const cl_ulong v_nb1 = v->nb[1], v_nb2 = v->nb[2], v_nb3 = v->nb[3];
+    const cl_ulong o_nb1 = dst->nb[1], o_nb2 = dst->nb[2], o_nb3 = dst->nb[3];
+    const cl_ulong mask_nb1 = mask ? mask->nb[1] : 0;
+    const cl_ulong mask_nb2 = mask ? mask->nb[2] : 0;
+    const cl_ulong mask_nb3 = mask ? mask->nb[3] : 0;
+    const int mask_ne2 = mask ? mask->ne[2] : 1; // decode takes head % mask_ne2 and batch % mask_ne3 even without a mask
+    const int mask_ne3 = mask ? mask->ne[3] : 1;
+
+    const float * params = (const float *)dst->op_params;
+    const float scale    = params[0];
+    const float max_bias = params[1];
+
+    const int n_head_log2_val = n_head > 0 ? 1u << (int)floorf(log2f((float)n_head)) : 0;
+    const float n_head_log2_f = n_head_log2_val > 0 ? (float)n_head_log2_val : 1.0f;
+    const float m0 = powf(2.0f, -(max_bias) / n_head_log2_f);
+    const float m1 = powf(2.0f, -(max_bias / 2.0f) / n_head_log2_f);
+
+    if (n_q > 1) {
+        ggml_cl_fa_malu_gmem_init(backend_ctx);
+    }
+
+    // decode reads every tensor by 32-bit words and the mask by halfs; prefill reads q, k, o and the mask by 4 channels, v by halfs
+    const cl_channel_order order = n_q == 1 ? CL_R : CL_RGBA;
+    const cl_channel_type  kv_type = n_q == 1 ? CL_FLOAT : CL_HALF_FLOAT;
+    cl_mem buf_q    = ggml_cl_fa_malu_sub_buffer(q);
+    cl_mem buf_k    = ggml_cl_fa_malu_sub_buffer(k);
+    cl_mem buf_v    = ggml_cl_fa_malu_sub_buffer(v);
+    cl_mem buf_o    = ggml_cl_fa_malu_sub_buffer(dst);
+    cl_mem buf_mask = mask ? ggml_cl_fa_malu_sub_buffer(mask) : nullptr;
+    cl_mem img_q    = ggml_cl_fa_malu_image(context, CL_MEM_READ_ONLY, buf_q, ggml_nbytes(q), order, CL_FLOAT);
+    cl_mem img_k    = ggml_cl_fa_malu_image(context, CL_MEM_READ_ONLY, buf_k, ggml_nbytes(k), order, kv_type);
+    cl_mem img_v    = ggml_cl_fa_malu_image(context, CL_MEM_READ_ONLY, buf_v, ggml_nbytes(v), CL_R, kv_type);
+    cl_mem img_o    = ggml_cl_fa_malu_image(context, CL_MEM_WRITE_ONLY, buf_o, ggml_nbytes(dst), order, CL_FLOAT);
+    cl_mem img_mask = mask ? ggml_cl_fa_malu_image(context, CL_MEM_READ_ONLY, buf_mask, ggml_nbytes(mask), order, CL_HALF_FLOAT) : nullptr;
+
+    // without a mask the kernels do not read it, any image will do
+    cl_mem   mask_arg = mask ? img_mask : img_k;
+    cl_int   enable_mask = mask ? 1 : 0;
+
+    // both kernels take the same leading args, decode does not read n_q, q_nb1 and mask_nb1
+    cl_uint arg = 0;
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_mem),   &img_q));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_mem),   &img_k));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_mem),   &img_v));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_mem),   &img_o));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(float),    &scale));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(int),      &n_q));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(int),      &n_kv));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(int),      &n_head));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &q_nb1));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &q_nb2));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &q_nb3));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &k_nb1));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &k_nb2));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &k_nb3));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &v_nb1));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &v_nb2));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &v_nb3));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &o_nb1));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &o_nb2));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &o_nb3));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(float),    &max_bias));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(float),    &m0));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(float),    &m1));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(int),      &n_head_log2_val));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(int),      &n_head_kv));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_mem),   &mask_arg));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(int),      &enable_mask));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &mask_nb1));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &mask_nb2));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_ulong), &mask_nb3));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(int),      &mask_ne2));
+    CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(int),      &mask_ne3));
+    if (n_q > 1) {
+        for (int i = 0; i < 3; ++i) {
+            CL_CHECK(clSetKernelArg(kernel, arg++, sizeof(cl_mem), &backend_ctx->fa_malu.gmem_img[i]));
+        }
+    }
+
+    size_t local_work_size[3]  = { 64, 1, 1 };
+    size_t global_work_size[3] = { 64, (size_t) n_head * n_batch, 1 };
+    if (n_q > 1) {
+        local_work_size[1]  = 4;
+        global_work_size[1] = CEIL_DIV(n_q, 64);
+        global_work_size[2] = (size_t) n_batch * n_head;
+    }
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
+
+    for (cl_mem * m : { &img_q, &img_k, &img_v, &img_o, &img_mask, &buf_q, &buf_k, &buf_v, &buf_o, &buf_mask }) {
+        ggml_cl_release_mem(*m);
+    }
+}
+
+#endif
+
 static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, const ggml_tensor * k, ggml_tensor * dst) {
     const ggml_tensor * v = dst->src[2];
     const ggml_tensor * mask = dst->src[3];
@@ -24370,6 +24644,10 @@ static void ggml_cl_flash_attn(ggml_backend_t backend, const ggml_tensor * q, co
     const int n_batch = q->ne[3];
 
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS
+    if (ggml_cl_flash_attn_malu_can_use(backend_ctx, dst)) {
+        ggml_cl_flash_attn_malu(backend, q, k, dst);
+        return;
+    }
     if (ggml_cl_adreno_xmem_attn_can_use(backend_ctx, q, k, dst)) {
         ggml_cl_adreno_xmem_attn_run(backend, q, k, dst);
         return;
