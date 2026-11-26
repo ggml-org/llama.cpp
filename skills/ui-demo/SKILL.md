@@ -5,7 +5,7 @@ description: Demo, test and document a change in Llama Chat (ui/apps/chat) or Ll
 
 # Demo, test and document a UI change
 
-One scripted flow serves three ends: a **demo** video in the PR, a Playwright **check** in `tests/e2e`, and **docs** media. The harness is `ui/apps/chat/demo/` (read its `README.md` once). Everything below runs from `ui/apps/chat`.
+One scripted flow serves three ends: a **demo** video in the PR, a Playwright **check** in `tests/e2e`, and **docs** media. The harness is `ui/lib/demo/`, and Llama Chat's fixtures for it are in `ui/apps/chat/demo/` (read both `README.md` files once). Everything below runs from `ui/apps/chat`.
 
 Use it when a change in `ui/apps/chat` or `ui/lib/ui` is visible: a new or changed screen, flow or component. Skip it for refactors with no visible effect.
 
