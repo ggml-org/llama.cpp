@@ -83,8 +83,16 @@ jobs:
         run: npm ci
         working-directory: ui/apps/chat
 
+      # the app's demo helpers import the demo harness (ui/lib/demo), whose sources resolve
+      # @playwright/test and its other types from its own node_modules
+      - name: Install demo harness dependencies
+        id: setup-demo
+        if: ${{ steps.setup.conclusion == 'success' }}
+        run: npm ci
+        working-directory: ui/lib/demo
+
       - name: Run type checking
-        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        if: ${{ always() && steps.setup.conclusion == 'success' && steps.setup-demo.conclusion == 'success' }}
         run: npm run check
         working-directory: ui/apps/chat
 
