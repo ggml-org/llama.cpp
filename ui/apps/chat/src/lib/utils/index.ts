@@ -125,6 +125,7 @@ export {
 } from './formatters';
 
 // IME utilities
+export { hasPointerMoved } from './has-pointer-moved';
 export { isIMEComposing } from './is-ime-composing';
 export { shouldTypeToFocus } from './type-to-focus';
 

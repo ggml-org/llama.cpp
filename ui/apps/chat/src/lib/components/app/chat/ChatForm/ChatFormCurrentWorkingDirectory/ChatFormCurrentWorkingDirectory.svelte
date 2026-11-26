@@ -167,26 +167,16 @@
 				return;
 			}
 
-			// A stale search must not touch the list: the next one is already running.
-			let hasShown = false;
-
+			// Every round of results starts with its first folder highlighted. A stale
+			// search must not touch the list: the next one is already running.
 			const show = (res: GlobSearchChildResult) => {
 				if (!isCurrent()) return;
 
-				// the deeper results join a list already on screen: the highlighted folder
-				// stays highlighted, wherever it lands
-				const highlighted = hasShown ? queryResults[nav.hoveredIndex] : undefined;
-
-				hasShown = true;
 				searchScope = res.exactDir ?? res.args.path;
 				queryResults = res.entries.map((e) => e.path).slice(0, SEARCH.MAX_RESULTS_SHOWN);
 				searchError = res.error ?? null;
 
-				const kept = highlighted === undefined ? -1 : queryResults.indexOf(highlighted);
-
-				if (kept >= 0) {
-					nav.reset(kept);
-				} else if (queryResults.length > 0) {
+				if (queryResults.length > 0) {
 					nav.reset(0);
 					nav.bumpScroll(); // scroll the list back to the top (first item is hovered)
 				} else {

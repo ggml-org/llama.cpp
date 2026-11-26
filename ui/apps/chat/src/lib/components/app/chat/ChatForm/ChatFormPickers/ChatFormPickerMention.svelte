@@ -245,7 +245,7 @@
 					dataIndex={index}
 					{isSelected}
 					onclick={() => handleSelect(entry)}
-					onmouseenter={() => nav.setHover(index)}
+					onhover={() => nav.setHover(index)}
 				>
 					{@const Icon = entry.type === FileMentionEntryType.DIRECTORY ? Folder : File}
 					<Icon
