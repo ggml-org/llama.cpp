@@ -20,6 +20,28 @@
 // The macro on the following line shifts it by a factor of 2**3=8, as was needed to fix https://github.com/ggml-org/llama.cpp/issues/18606 .
 #define FATTN_KQ_MAX_OFFSET (3.0f*0.6931f)
 
+struct fattn_indexed_bias {
+    const float   * table;
+    const int32_t * indices;
+    int64_t n_bins;
+    int64_t n_keys;
+    int64_t query_stride;
+
+    __device__ fattn_indexed_bias for_head(int64_t first_query, int head) const {
+        return {table + first_query*query_stride + head*n_bins, indices + first_query*n_keys, n_bins, n_keys, query_stride};
+    }
+
+    __device__ float add(float mask, int query, int key) const {
+        const int bin = indices[query*n_keys + key];
+        return bin >= 0 && bin < n_bins ? mask + table[query*query_stride + bin] : mask;
+    }
+};
+
+// ggml-cpu returns zero for the 0/0 of a fully masked query.
+static __device__ __forceinline__ float fattn_normalize(float value, float rowsum) {
+    return value == 0.0f && rowsum == 0.0f ? 0.0f : value/rowsum;
+}
+
 using fattn_kernel_t = void (*)(
         const float2 * __restrict__ Q,
         const char   * __restrict__ K,
@@ -42,7 +64,8 @@ using fattn_kernel_t = void (*)(
                             const int32_t s11,  const int32_t s12,  const int64_t s13,
                             const int32_t s21,  const int32_t s22,  const int64_t s23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t s31,  const int64_t s32,  const int64_t s33);
+                            const int32_t s31,  const int64_t s32,  const int64_t s33,
+        const fattn_indexed_bias bias);
 
 typedef float (*vec_dot_KQ_t)(
     const char * __restrict__ K_c, const void * __restrict__ Q_v, const int * __restrict__ Q_q8 , const void * __restrict__ Q_ds);
@@ -1110,7 +1133,7 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
     }
 
     // Write back final result:
-    *dst = dst_val / rowsum;
+    *dst = fattn_normalize(dst_val, rowsum);
 }
 
 // General fixup kernel for the case where the number of blocks per tile is not uniform across tiles
@@ -1221,7 +1244,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
     }
 
     // Write back final result:
-    *dst = dst_val / rowsum;
+    *dst = fattn_normalize(dst_val, rowsum);
 }
 
 template<int D> // D == head size
@@ -1279,7 +1302,7 @@ static __global__ void flash_attn_combine_results(
         VKQ_denominator += KQ_max_scale * meta[l].y;
     }
 
-    dst[tid] = VKQ_numerator / VKQ_denominator;
+    dst[tid] = fattn_normalize(VKQ_numerator, VKQ_denominator);
 }
 
 template <int DV, int ncols1, int ncols2, typename T_K_stride, typename T_V_stride>
@@ -1300,6 +1323,10 @@ void launch_fattn(
     const ggml_tensor * mask    = dst->src[3];
     const ggml_tensor * sinks   = dst->src[4];
     const ggml_tensor * kv_rows = dst->src[5];
+
+    const bool has_bias = ggml_flash_attn_ext_has_indexed_bias(dst);
+    const ggml_tensor * bias_table   = has_bias ? dst->src[6] : nullptr;
+    const ggml_tensor * bias_indices = has_bias ? dst->src[7] : nullptr;
 
     // with kv_rows the kernel iterates over the mask columns and reads K/V rows through kv_rows
     const int64_t n_kv_cols = kv_rows ? kv_rows->ne[0] : K->ne[1];
@@ -1433,7 +1460,9 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths, or kv_rows lists that end with padding.
-    const bool scan_mask = !use_sparse && mask && mask->ne[2] == 1 && n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
+    // The scan reads ncols1 mask rows per tile, including the last tile.
+    const bool scan_mask = !has_bias && !use_sparse && mask && mask->ne[2] == 1 && mask->ne[1]/ncols1 >= ntiles_x &&
+        n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
     if (scan_mask) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);
         const int64_t s33 = mask->nb[3] / sizeof(half2);
@@ -1591,7 +1620,12 @@ void launch_fattn(
         mask ? mask->ne[1] : 0, mask ? mask->ne[2] : 0, mask ? mask->ne[3] : 0,
         mask ? int32_t(mask->nb[1] / sizeof(half)) : 0,
         mask ? int64_t(mask->nb[2] / sizeof(half)) : 0,
-        mask ? int64_t(mask->nb[3] / sizeof(half)) : 0
+        mask ? int64_t(mask->nb[3] / sizeof(half)) : 0,
+        fattn_indexed_bias{has_bias ? (const float   *) bias_table->data : nullptr,
+                           has_bias ? (const int32_t *) bias_indices->data : nullptr,
+                           has_bias ? bias_table->ne[0] : 0,
+                           has_bias ? bias_indices->ne[0] : 0,
+                           has_bias ? bias_table->ne[0]*bias_table->ne[1] : 0}
     );
     CUDA_CHECK(cudaGetLastError());
 
