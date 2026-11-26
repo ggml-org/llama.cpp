@@ -2756,7 +2756,10 @@ std::vector<std::string> GgmlOvDecoder::get_output_names(int node_idx) const {
         // the written state block plus the full updated cache (see translate_cpy op_case 13)
         return {m_node_info_list[node_idx].node_name, get_tensor_ov_name(m_cgraph, node->view_src)};
     }
-    if (node->op == GGML_OP_GATED_DELTA_NET && (!m_model_params.has_rs_rollback || node->op_params[0] > 1)) {
+    // Naive (op test) graphs have no runtime slot inputs for the native state writeback, so they keep the packed
+    // [attention | state] output, which the consumers slice through the generic view path.
+    if (!m_naive && node->op == GGML_OP_GATED_DELTA_NET &&
+        (!m_model_params.has_rs_rollback || node->op_params[0] > 1)) {
         std::string attn_name;
         std::string state_name;
         for (int i = node_idx + 1; i < m_cgraph->n_nodes; i++) {
