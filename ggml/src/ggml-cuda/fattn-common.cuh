@@ -1110,7 +1110,7 @@ static __global__ void flash_attn_stream_k_fixup_uniform(
     }
 
     // Write back final result:
-    *dst = dst_val / rowsum;
+    *dst = rowsum > 0.0f ? dst_val / rowsum : 0.0f;
 }
 
 // General fixup kernel for the case where the number of blocks per tile is not uniform across tiles
@@ -1221,7 +1221,7 @@ static __global__ void flash_attn_stream_k_fixup_general(
     }
 
     // Write back final result:
-    *dst = dst_val / rowsum;
+    *dst = rowsum > 0.0f ? dst_val / rowsum : 0.0f;
 }
 
 template<int D> // D == head size
