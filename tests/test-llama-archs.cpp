@@ -19,6 +19,7 @@
 #include <memory>
 #include <random>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -176,6 +177,7 @@ static void usage(char ** argv) {
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
+    LOG("  --rpc <endpoints>        Add RPC servers (comma-separated host:port), must precede -b\n");
     LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
@@ -1982,6 +1984,31 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
     return n_failed == 0 ? 0 : 1;
 }
 
+static bool add_rpc_devices(const std::string & endpoints) {
+    ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (rpc_reg == nullptr) {
+        LOG_ERR("%s: RPC backend not available\n", __func__);
+        return false;
+    }
+    typedef ggml_backend_reg_t (*add_server_t)(const char * endpoint);
+    auto add_server = (add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (add_server == nullptr) {
+        LOG_ERR("%s: RPC backend has no ggml_backend_rpc_add_server\n", __func__);
+        return false;
+    }
+    std::stringstream ss(endpoints);
+    std::string endpoint;
+    while (std::getline(ss, endpoint, ',')) {
+        ggml_backend_reg_t reg = add_server(endpoint.c_str());
+        if (reg == nullptr) {
+            LOG_ERR("%s: failed to connect to RPC server %s\n", __func__, endpoint.c_str());
+            return false;
+        }
+        ggml_backend_register(reg);
+    }
+    return true;
+}
+
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -2059,6 +2086,16 @@ int main(int argc, char ** argv) {
                     return 1;
                 }
                 target_backend = ggml_backend_dev_name(dev);
+            } else {
+                usage(argv);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--rpc") == 0) {
+            if (i + 1 < argc) {
+                // must precede -b so that the RPC devices can be selected by name
+                if (!add_rpc_devices(argv[++i])) {
+                    return 1;
+                }
             } else {
                 usage(argv);
                 return 1;
