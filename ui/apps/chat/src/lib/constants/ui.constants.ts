@@ -5,19 +5,17 @@ import {
 	SHORTCUT_SEARCH,
 	SHORTCUT_SETTINGS
 } from './keyboard-shortcuts.constants';
-import { MCP_SERVERS_ROUTE_ID, MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
+import { MODELS_ROUTE_ID, SETTINGS_ROUTE_ID } from './routes.constants';
 import Search from '@lucide/svelte/icons/search';
 import Settings from '@lucide/svelte/icons/settings';
 import SquarePen from '@lucide/svelte/icons/square-pen';
-import McpLogo from '#lib/components/app/mcp/McpLogo.svelte';
 import { SidebarAction, ToolSource } from '#lib/enums/index.ts';
 import type { DesktopIconStripItem } from '#lib/types/index.ts';
 
+export { COLLAPSIBLE_TRANSITION_MS } from '@ggml-org/llama-ui/constants';
+
 /** Delay before a copied affordance resets from its check to the copy icon. */
 export const COPY_FEEDBACK_RESET_MS = 1500;
-
-/** How long a collapsible block's body takes to expand or collapse. */
-export const COLLAPSIBLE_TRANSITION_MS = 200;
 
 /**
  * Parts of a message where right-click keeps the browser's own menu (open or
@@ -25,6 +23,18 @@ export const COLLAPSIBLE_TRANSITION_MS = 200;
  */
 export const NATIVE_CONTEXT_MENU_SELECTOR =
 	'a, img, video, audio, pre, code, input, textarea, [contenteditable="true"]';
+
+/**
+ * Open overlays that take Escape themselves, so what is under them leaves the key alone.
+ * Not tooltips and hover cards, which only close on it.
+ */
+export const OPEN_OVERLAY_SELECTOR = [
+	'[role="dialog"][data-state="open"]',
+	'[role="alertdialog"][data-state="open"]',
+	'[role="menu"][data-state="open"]',
+	'[role="listbox"][data-state="open"]',
+	'[data-slot="popover-content"][data-state="open"]'
+].join(', ');
 
 /**
  * A sidebar section under a dragged chat, or one being moved: the faint tint
@@ -41,9 +51,12 @@ export const SIDEBAR_SECTION_PREVIEW_COUNT = 6;
 /**
  * The "Show less" row of an opened section stays at the bottom of the sidebar
  * while the section scrolls under it, with room below it and a fade above
- * (see app.css). "Show more" is a plain row.
+ * (see app.css). "Show more" is a plain row. A phone's list keeps 1.5rem clear at
+ * its end for the fade above the pinned keys, which a sticky row stops short of, so
+ * there the row sticks into it and its surface fills it to the edge.
  */
-export const SIDEBAR_SHOW_MORE_ROW_CLASS = 'sidebar-show-more sticky bottom-0 z-10 pb-2';
+export const SIDEBAR_SHOW_MORE_ROW_CLASS =
+	'sidebar-show-more sticky bottom-0 z-10 pb-2 max-md:-bottom-6 max-md:pb-6';
 
 /** Ids of the sidebar's conversation sections, for their folded state. */
 export const SIDEBAR_SECTION_IDS = {
@@ -173,12 +186,6 @@ export const SIDEBAR_FOOTER_ITEMS: DesktopIconStripItem[] = [
 		icon: MODEL_ICON,
 		keys: SHORTCUT_MODELS,
 		tooltip: 'Models'
-	},
-	{
-		action: SidebarAction.MCP,
-		activeRouteId: MCP_SERVERS_ROUTE_ID,
-		icon: McpLogo,
-		tooltip: 'MCP'
 	},
 	{
 		action: SidebarAction.SETTINGS,

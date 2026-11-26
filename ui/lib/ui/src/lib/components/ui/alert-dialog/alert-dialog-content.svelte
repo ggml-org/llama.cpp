@@ -19,11 +19,11 @@
 	<AlertDialogPrimitive.Content
 		bind:ref
 		class={cn(
-			'fixed z-[999999] grid gap-4 border matte-float-modal p-6 duration-200',
+			'fixed z-999999 grid gap-4 border matte-float-modal p-6 duration-200',
 			// centered on every screen: an alert is short, so a phone shows it as a card of its
 			// own height rather than as a drawer from the bottom, which it is not. The phone's
 			// 90% is a width, so a caller's max-w-* still caps it on wider screens
-			'top-[50%] left-[50%] max-h-[calc(100dvh-2rem)] w-[90%] translate-x-[-50%] translate-y-[-50%] overflow-y-auto rounded-xl sm:w-full sm:max-w-lg',
+			'top-1/2 left-1/2 max-h-[calc(100dvh-2rem)] w-[90%] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl sm:w-full sm:max-w-lg',
 			'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=closed]:fill-mode-forwards',
 			'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95',
 			className

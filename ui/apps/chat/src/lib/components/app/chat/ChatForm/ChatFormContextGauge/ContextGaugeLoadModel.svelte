@@ -12,13 +12,17 @@
 </script>
 
 {#if modelId !== null && !isLoading}
-	<div class="flex flex-col gap-2 border-t border-border/50 pt-2 text-xs text-muted-foreground">
+	<div
+		class="flex flex-col gap-2 border-t border-border/50 pt-2 text-caption text-muted-foreground"
+	>
 		<span>Available context size is only visible once the model is loaded.</span>
 
 		<Button class="self-start" onclick={onLoad} size="sm" variant="outline">Load model</Button>
 	</div>
 {:else if isLoading}
-	<div class="flex items-center gap-2 border-t border-border/50 pt-2 text-xs text-muted-foreground">
+	<div
+		class="flex items-center gap-2 border-t border-border/50 pt-2 text-caption text-muted-foreground"
+	>
 		<Loader2 class="size-icon-sm animate-spin" />
 
 		<span>Loading model...</span>

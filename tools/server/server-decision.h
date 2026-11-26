@@ -89,7 +89,8 @@ struct server_decision_context {
     }
 
     // throw std::invalid_argument on bad input
-    std::vector<server_decision_question> parse_questions(const json & body) const;
+    // support_audio_input: false if the server has no audio encoder, a spoken question is then rejected
+    std::vector<server_decision_question> parse_questions(const json & body, bool support_audio_input) const;
 
     // the state as the model reads it, done once per request; returns the state for most models
     json prepare_state(const json & state) const;

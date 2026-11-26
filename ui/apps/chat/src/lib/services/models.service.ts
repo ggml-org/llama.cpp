@@ -10,7 +10,6 @@ import { API_MODELS, MODEL_ID, type ModelSidecar } from '#lib/constants/index.ts
 import { ServerModelStatus } from '#lib/enums/index.ts';
 import type { ModelSidecarBadge, ParsedModelId } from '#lib/types/models.js';
 import { getAuthHeaders } from '#lib/utils/api-headers.ts';
-import { withBase } from '#lib/utils/base-path.ts';
 import {
 	apiDelete,
 	apiFetch,
@@ -22,6 +21,7 @@ import {
 	sidecarFromFileToken,
 	splitSseRecords
 } from '#lib/utils/index.ts';
+import { serverUrl } from '#lib/utils/server-config.ts';
 
 export class ModelsService {
 	private static readonly SSE_RECONNECT_MS = 1000;
@@ -360,7 +360,7 @@ export class ModelsService {
 
 		while (!signal.aborted) {
 			try {
-				const response = await fetch(withBase(API_MODELS.SSE), {
+				const response = await fetch(serverUrl(API_MODELS.SSE), {
 					headers: getAuthHeaders(),
 					signal
 				});

@@ -167,6 +167,14 @@ int ggml_openvino_npu_decode_bucket();
 // clamped to ctx.
 int ggml_openvino_static_kv_window(int rows, int ctx);
 
+// Rows the dynamic GPU graph attends for a batch of n_tokens tokens per sequence, clamped to ctx. The GPU plugin keeps
+// memory for each attended length, so a long context should use a few lengths:
+//   prompt batches (more than 16 tokens): the next power of two, as ggml_openvino_static_kv_window(). The memory kept
+//   per length grows with the batch size.
+//   decode batches: the next multiple of 2^k / 4 (2^k <= rows < 2^(k+1)) and of 256, four lengths per power of two.
+//   Decode reads every attended row, so it keeps the masked rows to at most 25% instead of up to 100%.
+int ggml_openvino_gpu_kv_window(int rows, int ctx, int n_tokens);
+
 // On-demand NPU KV cache (GGML_OPENVINO_NPU_KV_ON_DEMAND): the ggml KV buffer stays non-resident and the
 // NPU binds per-tensor L0 storage that grows (base*2^k rows, base = decode bucket or 1024) with the rows in use.
 bool ggml_openvino_npu_kv_on_demand_enabled();
@@ -206,6 +214,9 @@ bool ggml_openvino_is_gpu();
 // Read n_seq_active and attention_size(_swa) from the KQ mask shape (off with GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK=1)
 bool ggml_openvino_shape_from_mask_enabled();
 
+// Manual GQA attention instead of SDPA (GGML_OPENVINO_MANUAL_GQA_ATTN, on GPU by default)
+bool ggml_openvino_manual_gqa_enabled();
+
 // GDN q pre-scale for eligible graphs on the NPU static path. On by default;
 // GGML_OPENVINO_GDN_Q_SCALE=0 (or a negative or non-numeric value) turns it off.
 bool ggml_openvino_gdn_prescale_enabled();
@@ -242,6 +253,7 @@ size_t ggml_openvino_max_alloc_size(const std::string & device);
 // release:  madvise(MADV_DONTNEED) all registered buffers, dropping their RSS.
 // released: true once release has run (used to fail-fast on post-release recompile).
 void ggml_openvino_register_weight_buffer(void * data, size_t size);
+void ggml_openvino_unregister_weight_buffer(const void * data);
 void ggml_openvino_release_weight_buffers();
 bool ggml_openvino_weight_buffers_released();
 

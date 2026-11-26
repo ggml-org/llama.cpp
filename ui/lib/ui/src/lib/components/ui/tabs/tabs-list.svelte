@@ -4,13 +4,13 @@
 
 	// default: the segmented track, 2px around the triggers, as tall as a default control
 	export const tabsListVariants = tv({
-		base: 'group/tabs-list relative inline-flex w-fit items-center justify-center text-(--tabs-text) group-data-[orientation=horizontal]/tabs:h-control-md group-data-[orientation=vertical]/tabs:h-fit group-data-[orientation=vertical]/tabs:flex-col',
+		base: 'group/tabs-list relative inline-flex w-fit items-center justify-center text-(--fg-soft) group-data-[orientation=horizontal]/tabs:h-control-md group-data-[orientation=vertical]/tabs:h-fit group-data-[orientation=vertical]/tabs:flex-col',
 		defaultVariants: {
 			variant: 'default'
 		},
 		variants: {
 			variant: {
-				default: 'gap-0.5 rounded-panel bg-(--tabs-track) p-0.5 shadow-(--tabs-track-shadow)',
+				default: 'gap-0.5 rounded-lg bg-(--surface-muted) p-0.5 shadow-(--elevation-inset)',
 				line: 'gap-1 bg-transparent'
 			}
 		}
@@ -159,8 +159,8 @@
 		class={cn(
 			'pointer-events-none absolute top-0 left-0',
 			variant === 'line'
-				? 'rounded-full bg-(--tabs-line-active)'
-				: 'rounded-control bg-(--tabs-background-active) shadow-(--tabs-shadow-active)',
+				? 'rounded-full bg-(--fg-default)'
+				: 'rounded-md bg-(--surface-lifted) shadow-(--elevation-control)',
 			!indicator && 'hidden'
 		)}
 		data-slot="tabs-indicator"

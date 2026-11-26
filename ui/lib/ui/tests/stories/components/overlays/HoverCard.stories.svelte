@@ -16,7 +16,7 @@
 		<HoverCard.Root open>
 			<HoverCard.Trigger>
 				{#snippet child({ props })}
-					<a {...props} class="text-sm underline-offset-4 hover:underline" href="#hover-card"
+					<a {...props} class="text-body-sm underline-offset-4 hover:underline" href="#hover-card"
 						>ggml-org/Qwen3.8-27B-GGUF</a
 					>
 				{/snippet}
@@ -24,9 +24,9 @@
 
 			<HoverCard.Content class="w-72">
 				<div class="space-y-1">
-					<p class="text-sm font-medium">Qwen3.8-27B</p>
+					<p class="text-label">Qwen3.8-27B</p>
 
-					<p class="text-sm text-muted-foreground">
+					<p class="text-body-sm text-muted-foreground">
 						131k context, tool use and vision. Quantized to Q4_K_M, 16.4 GB.
 					</p>
 				</div>

@@ -5,8 +5,8 @@ export const PROMPT_TRIGGER_PREFIX = '/';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
 /** Lines of text from which the main chat form expands into its large editor. */
 export const CHAT_FORM_EXPAND_MIN_LINES = 4;
-/** Below this text height (a 24px line and change) the main chat form keeps to one row. */
-export const CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX = 36;
+/** Below this text height (a line and change) the main chat form keeps to one row. */
+export const CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES = 1.5;
 
 /**
  * How far the chat form floats above the bottom of the screen: a phone browser's toolbar is
@@ -65,3 +65,9 @@ export const CHAT_FORM_EASE_OUT = 'cubic-bezier(0.32, 0.72, 0, 1)';
 
 /** The phone's corner keys and header stepping aside for the expanded form, and back. */
 export const CHAT_FORM_CHROME_FADE_MS = 150;
+
+/** The working directory chip's enter and exit, in two steps: room first, then the fade. */
+export const CHAT_FORM_CHIP_TRANSITION_MS = 250;
+
+/** Share of the chip's transition spent on the room; the fade takes the rest. */
+export const CHAT_FORM_CHIP_SPLIT = 0.5;

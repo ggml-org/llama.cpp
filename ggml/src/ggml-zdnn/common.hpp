@@ -13,6 +13,7 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -49,6 +50,8 @@ struct ggml_backend_zdnn_buffer {
 
     std::vector<float> scales;          // per-row scales for quantized weights
     std::vector<float> channel_scales;  // per-input-channel scales for quantized weights, applied to the inputs
+
+    std::mutex mutex;
 
     char name[GGML_MAX_NAME];
 };

@@ -20,7 +20,7 @@
 
 <Collapsible.Root bind:open={isExpanded}>
 	<Collapsible.Trigger
-		class="flex w-full items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+		class="flex w-full items-center gap-1 text-caption text-muted-foreground hover:text-foreground"
 	>
 		{#if isExpanded}
 			<ChevronDown class="size-icon-sm" />
@@ -31,14 +31,14 @@
 		<span>{toolsCount} tools available · Show details</span>
 	</Collapsible.Trigger>
 
-	<Collapsible.Content class="mt-2">
-		<div class="max-h-64 space-y-3 overflow-y-auto">
+	<Collapsible.Content>
+		<div class="mt-2 max-h-64 space-y-3 overflow-y-auto">
 			{#each tools as tool (tool.name)}
 				<div>
 					<Badge variant="secondary">{tool.name}</Badge>
 
 					{#if tool.description}
-						<p class="mt-1 text-xs text-muted-foreground">{tool.description}</p>
+						<p class="mt-1 text-caption text-muted-foreground">{tool.description}</p>
 					{/if}
 				</div>
 			{/each}

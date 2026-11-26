@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <list>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -158,6 +159,12 @@ struct ov_runtime_context {
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache_prefill;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache_prefill;
+    // LRU order of decoder_cache's keys, oldest (least recently used) at the front. A pipeline
+    // that interleaves distinct graph shapes every call -- e.g. DFlash cycling target/draft/
+    // injection graphs every round -- needs a slot per shape open at once; a single-entry cache
+    // would evict and recompile all of them, every call, forever.
+    std::list<graph_key> lru_keys;
+    static constexpr size_t max_cached_graphs = 8;
     size_t stateful_kv_size;
     std::map<std::string, std::string> kv_state_input_name_map;
     // compute-only copies of graphs that carry unselected ggml_build_forward_select() branches
@@ -169,6 +176,39 @@ struct ov_runtime_context {
 
     ov_runtime_context() : device("CPU"), stateful(false), stateful_kv_size(0) {}
 
+    // Mark `key` as the most recently used entry. Call on every cache hit and after inserting a
+    // new entry, so eviction always picks the graph shape that has gone longest unused.
+    void touch_locked(const graph_key & key) {
+        lru_keys.remove(key);
+        lru_keys.push_back(key);
+    }
+
+    // Drop the least recently used graph shape's compiled model and its associated per-key
+    // caches. Leaves every other shape's compiled model intact.
+    void evict_lru_locked() {
+        if (lru_keys.empty()) {
+            return;
+        }
+        graph_key victim = lru_keys.front();
+        lru_keys.pop_front();
+        decoder_cache.erase(victim);
+        infer_request_cache.erase(victim);
+        infer_request_cache_prefill.erase(victim);
+        ov_input_names_cache.erase(victim);
+        ov_output_names_cache.erase(victim);
+        ov_input_names_cache_prefill.erase(victim);
+        ov_output_names_cache_prefill.erase(victim);
+    }
+
+    // Make room for one more graph shape if the cache is at capacity, then mark `key` as most
+    // recently used. Call right after inserting `key` into decoder_cache.
+    void admit_locked(const graph_key & key) {
+        while (decoder_cache.size() > max_cached_graphs) {
+            evict_lru_locked();
+        }
+        touch_locked(key);
+    }
+
     void clear_caches_locked() {
         decoder_cache.clear();
         infer_request_cache.clear();
@@ -177,6 +217,7 @@ struct ov_runtime_context {
         ov_output_names_cache.clear();
         ov_input_names_cache_prefill.clear();
         ov_output_names_cache_prefill.clear();
+        lru_keys.clear();
         kv_state_input_name_map.clear();
         stateful_kv_size = 0;
     }
@@ -191,10 +232,6 @@ enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t ba
 
 // Releases the cached blobs this process imported (GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR).
 void ov_clear_imported_blobs();
-
-size_t checksum(const void * data, size_t size);
-
-bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string & file_path);
 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor);
 

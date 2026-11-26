@@ -911,6 +911,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_hunyuanvl>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_HY_V4_FLASH:
+            {
+                builder = std::make_unique<mtmd_graph_hy_v4>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_MLP:
         case PROJECTOR_TYPE_MLP_NORM:
         case PROJECTOR_TYPE_LDP:
@@ -999,6 +1003,24 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
         case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
             {
                 builder = std::make_unique<mtmd_graph_chatterbox_spkenc>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_MOSHI:
+            {
+                builder = std::make_unique<mtmd_graph_moshi>(ctx, img);
+            } break;
+        case PROJECTOR_TYPE_MOSHI_GEN:
+            {
+                const auto    gen_process = params ? params->gen_process : MTMD_SUBCTX_GEN_PROCESS_GEN_CODE;
+                const int64_t n_q         = ctx->model.gen_code_head_w->ne[2];
+                const bool    has_codes   = params && params->codes;
+                if (has_codes) {
+                    GGML_ASSERT(params->codes->size() % (size_t) n_q == 0);
+                }
+                const int   n_frames = has_codes ? (int) (params->codes->size() / n_q) : 1;
+                const int   top_k    = params ? params->top_k : 250;
+                const float temp     = params ? params->temp  : 0.8f;
+                const bool  fb_only  = gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE && has_codes;
+                builder = std::make_unique<mtmd_graph_moshi_gen>(ctx, img, gen_process, fb_only, n_frames, top_k, temp);
             } break;
         case PROJECTOR_TYPE_CHATTERBOX:
             {

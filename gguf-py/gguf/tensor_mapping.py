@@ -442,6 +442,7 @@ class TensorNameMap:
             "model.layers.layers.{bid}.post_mixer_norm.weight",  # plamo2
             "model.layers.{bid}.post_operator_norm",             # lfm3
             "model.layers.{bid}.post_attention_norm",            # domynedge
+            "model.layers.{bid}.self_attn.post_proj_norm",       # hy-v4-flash
         ),
 
         # Rotary embeddings
@@ -543,6 +544,66 @@ class TensorNameMap:
             "model.layers.{bid}.attention_input.query",  # inkling2
         ),
 
+        MODEL_TENSOR.LOOP_Q_CTRL_DOWN: (
+            "model.layers.{bid}.q_controller.down_proj",       # inkling2_loop
+            "model.layers.{bid}.controllers.attn.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_Q_CTRL_GAIN: (
+            "model.layers.{bid}.q_controller.gain_proj",       # inkling2_loop
+            "model.layers.{bid}.controllers.attn.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_Q_CTRL_FORGET: (
+            "model.layers.{bid}.q_controller.forget_proj",       # inkling2_loop
+            "model.layers.{bid}.controllers.attn.forget_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_DOWN: (
+            "model.layers.{bid}.k_controller.down_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.k.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_GAIN: (
+            "model.layers.{bid}.k_controller.gain_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.k.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_K_CTRL_FORGET: (
+            "model.layers.{bid}.k_controller.forget_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.k.forget_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_DOWN: (
+            "model.layers.{bid}.v_controller.down_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.v.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_GAIN: (
+            "model.layers.{bid}.v_controller.gain_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.v.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_V_CTRL_FORGET: (
+            "model.layers.{bid}.v_controller.forget_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.v.forget_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_DOWN: (
+            "model.layers.{bid}.mlp_controller.down_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.mlp.down_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_GAIN: (
+            "model.layers.{bid}.mlp_controller.gain_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.mlp.gain_weight",  # inkling2_loop
+        ),
+
+        MODEL_TENSOR.LOOP_FFN_CTRL_FORGET: (
+            "model.layers.{bid}.mlp_controller.forget_proj",    # inkling2_loop
+            "model.layers.{bid}.controllers.mlp.forget_weight",  # inkling2_loop
+        ),
+
         # Feed-forward norm
         MODEL_TENSOR.FFN_NORM: (
             "layers.{bid}.moe_connection.norm",                              # metis16
@@ -603,6 +664,8 @@ class TensorNameMap:
             "model.layers.{bid}.post_mlp_layernorm",          # glm-4-0414
             "model.layers.{bid}.post_ffn_norm",               # kolibri1
             "model.layers.layers.{bid}.post_mlp_norm.weight", # plamo2
+            "model.layers.{bid}.mlp.combine_output_norm",     # hy-v4-flash (MoE layers)
+            "model.layers.{bid}.mlp.post_fc2_norm",           # hy-v4-flash (dense layers)
             "model.layers.{bid}.feed_forward.up_proj",
             "model.layers.{bid}.post_moe_norm",               # grok-2
             "model.layers.{bid}.post_ffn_norm",               # lfm3
@@ -656,6 +719,7 @@ class TensorNameMap:
             "backbone.layers.{bid}.mixer.gate.e_score_correction",          # nemotron-h-moe
             "model.layers.{bid}.mlp.e_score_correction",                    # exaone-moe
             "model.layers.{bid}.block_sparse_moe.gate.e_score_correction",  # kimi
+            "model.layers.{bid}.moe.gate.e_score_correction",               # raon1_mini
             "model.layers.{bid}.moe.router_bias",                           # step3.5 expert selection bias
             "model.layers.{bid}.mlp.experts.e_score_correction",       # laguna
         ),
@@ -729,6 +793,7 @@ class TensorNameMap:
             "layers.{bid}.shared_experts.w3",                        # mistral-large
             "backbone.layers.{bid}.mixer.shared_experts.up_proj",    # nemotron-h-moe
             "model.layers.{bid}.block_sparse_moe.shared_experts.up_proj", # kimi
+            "model.layers.{bid}.moe.shared_experts.up_proj",              # raon1_mini
             "model.layers.{bid}.share_expert.up_proj",               # step3.5
         ),
 
@@ -782,6 +847,7 @@ class TensorNameMap:
             "model.layers.{bid}.mlp.shared_mlp.gate_proj",             # hunyuan
             "layers.{bid}.shared_experts.w1",                          # mistral-large
             "model.layers.{bid}.block_sparse_moe.shared_experts.gate_proj", # kimi
+            "model.layers.{bid}.moe.shared_experts.gate_proj",              # raon1_mini
             "model.layers.{bid}.share_expert.gate_proj",               # step3.5
         ),
 
@@ -964,6 +1030,7 @@ class TensorNameMap:
             "layers.{bid}.shared_experts.w2",                          # mistral-large
             "backbone.layers.{bid}.mixer.shared_experts.down_proj",    # nemotron-h-moe
             "model.layers.{bid}.block_sparse_moe.shared_experts.down_proj", # kimi
+            "model.layers.{bid}.moe.shared_experts.down_proj",              # raon1_mini
             "model.layers.{bid}.share_expert.down_proj",               # step3.5
             "layers.{bid}.moe.shared_expert.down",                     # metis16
         ),
@@ -1226,13 +1293,19 @@ class TensorNameMap:
             "model.layers.{bid}.self_attn.b_proj",       # Kimi Linear
             "model.layers.{bid}.attention.b_proj",       # bailingmoe3
         ),
+        # Raon-1 mini RDA: per-head write-gate offset
+        MODEL_TENSOR.SSM_RDA: (
+            "model.layers.{bid}.self_attn.rda_w_proj",
+        ),
         # Kimi K3 latent MoE: routed experts operate in a down-projected space
         MODEL_TENSOR.FFN_ROUTED_DOWN: (
             "model.layers.{bid}.block_sparse_moe.routed_expert_down_proj",
+            "model.layers.{bid}.mlp.routed_expert_down_proj",  # hy-v4-flash
         ),
 
         MODEL_TENSOR.FFN_ROUTED_UP: (
             "model.layers.{bid}.block_sparse_moe.routed_expert_up_proj",
+            "model.layers.{bid}.mlp.routed_expert_up_proj",  # hy-v4-flash
         ),
 
         MODEL_TENSOR.FFN_ROUTED_NORM: (
@@ -2647,6 +2720,7 @@ class TensorNameMap:
 
         MODEL_TENSOR.V_MM_PRE_NORM: (
             "vit.perceive.before_rms", # HunyuanVL
+            "vit.perceive.norm",       # hy-v4-flash
         ),
 
         MODEL_TENSOR.V_TOK_IMG_BEGIN: (

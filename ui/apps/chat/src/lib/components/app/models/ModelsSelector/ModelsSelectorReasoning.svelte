@@ -31,7 +31,7 @@
 
 	<span class="flex-1">Reasoning</span>
 
-	<span class="text-xs text-muted-foreground">{current}</span>
+	<span class="text-caption text-muted-foreground">{current}</span>
 {/snippet}
 
 {#snippet levelLabel(level: ReasoningEffortLevel)}
@@ -46,7 +46,7 @@
 	<span class="min-w-0 flex-1 truncate">{level.label}</span>
 
 	{#if tokenLabel}
-		<span class="shrink-0 text-[11px] text-muted-foreground opacity-60">{tokenLabel}</span>
+		<span class="shrink-0 text-caption text-muted-foreground opacity-60">{tokenLabel}</span>
 	{/if}
 {/snippet}
 
@@ -68,13 +68,13 @@
 		<CollapsibleSection
 			defaultOpen={false}
 			trigger={header}
-			triggerClass="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md px-3 text-left text-sm transition-colors hover:bg-accent"
+			triggerClass="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md px-3 text-left text-body-sm transition-colors hover:bg-accent"
 		>
 			<div class="flex flex-col">
 				{#each reasoning.levels as level (level.value)}
 					<button
 						aria-pressed={reasoning.isSelected(level)}
-						class="flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-md pr-3 pl-6 text-left text-sm transition-colors hover:bg-accent"
+						class="flex min-h-11 w-full cursor-pointer items-center gap-3 rounded-md pr-3 pl-6 text-left text-body-sm transition-colors hover:bg-accent"
 						onclick={() => reasoning.select(level)}
 						type="button"
 					>

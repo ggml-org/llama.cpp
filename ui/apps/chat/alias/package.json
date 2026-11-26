@@ -1,6 +1,6 @@
 {
 	"name": "llama-chat",
-	"version": "0.1.0",
+	"version": "0.3.1",
 	"description": "npx llama-chat: runs Llama Chat, the chat app for llama.cpp. Same as npx @ggml-org/llama-chat.",
 	"keywords": [
 		"llama.cpp",
@@ -28,6 +28,6 @@
 		"node": ">=20"
 	},
 	"dependencies": {
-		"@ggml-org/llama-chat": "0.1.0"
+		"@ggml-org/llama-chat": "0.3.1"
 	}
 }

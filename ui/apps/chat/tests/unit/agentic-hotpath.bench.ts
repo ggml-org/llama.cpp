@@ -6,11 +6,15 @@
 //
 // Run: npx vitest bench --project=unit tests/unit/agentic-hotpath.bench.ts
 
+import { parsePartialJsonArgs } from '@ggml-org/llama-harness';
 import { classifyToolResult, parseToolResultWithMedia } from '#lib/utils/agentic.ts';
-import { detectIncompleteCodeBlock, highlightCode } from '#lib/utils/code.ts';
+import {
+	detectIncompleteCodeBlock,
+	highlightCode,
+	loadHighlightLanguages
+} from '#lib/utils/code.ts';
 import { computeLineDiff } from '#lib/utils/compute-line-diff.ts';
 import { preprocessLaTeX } from '#lib/utils/latex-protection.ts';
-import { parsePartialJsonArgs } from '#lib/utils/parse-partial-json-args.ts';
 import { extractSearchQuery, extractSearchResults } from '#lib/utils/search-results.ts';
 import { all as lowlightAll } from 'lowlight';
 import rehypeHighlight from 'rehype-highlight';
@@ -227,6 +231,9 @@ describe('parsePartialJsonArgs', () => {
 });
 
 // --- F / I: highlight.js ---------------------------------------------------
+
+// highlightCode returns plain text until highlight.js has loaded
+await loadHighlightLanguages();
 
 describe('highlightCode', () => {
 	bench('short bash command (title row, per token)', () => {

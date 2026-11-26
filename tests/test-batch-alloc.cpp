@@ -910,7 +910,7 @@ static void test_mrope(testing & t) {
         auto try_pos = [&](llama_pos p0) {
             batch_builder bb(n_embd, &mem, 4, n_pos);
 
-            const llama_pos pos[n_pos] = { p0, 1, 1, 0 };
+            const llama_pos pos[] = { p0, 1, 1, 0 };
             bb.add_embd(pos, {0}, true);
 
             return ba.init(bb.b, vocab, false);

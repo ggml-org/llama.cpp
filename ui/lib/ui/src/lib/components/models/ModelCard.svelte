@@ -87,7 +87,7 @@
 	{@render children?.()}
 
 	{#if footer || footerEnd}
-		<div class="mt-auto flex min-h-6 items-center justify-between gap-3 text-xs">
+		<div class="mt-auto flex min-h-6 items-center justify-between gap-3 text-caption">
 			<div class="min-w-0 text-muted-foreground">
 				{@render footer?.()}
 			</div>

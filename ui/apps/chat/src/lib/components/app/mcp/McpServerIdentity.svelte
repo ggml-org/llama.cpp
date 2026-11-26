@@ -43,7 +43,7 @@
 	<TruncatedText class={nameClass ?? ''} text={displayName ?? ''} />
 
 	{#if showVersion && serverInfo?.version}
-		<Badge class="h-4 max-w-24 min-w-0 shrink px-1 text-[10px]" variant="secondary">
+		<Badge class="h-4 max-w-24 min-w-0 shrink px-1 text-caption-sm" variant="secondary">
 			<TruncatedText text={`v${serverInfo.version}`} />
 		</Badge>
 	{/if}

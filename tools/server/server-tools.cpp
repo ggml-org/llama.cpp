@@ -1121,6 +1121,7 @@ struct server_tool_grep_search : server_tool {
                         {"literal",             {{"type", "boolean"}, {"description", "Treat pattern as a literal string instead of a regular expression (default: false)"}}},
                         {"ignore_case",         {{"type", "boolean"}, {"description", "Case-insensitive search (default: false)"}}},
                         {"context_lines",       {{"type", "integer"}, {"description", "Number of lines of context to show before and after each match (default: 0)"}}},
+                        {"offset",              {{"type", "integer"}, {"description", "Number of matching lines to skip (default: 0)"}}},
                     }},
                     {"required", json::array({"path", "pattern"})},
                 }},
@@ -1137,6 +1138,7 @@ struct server_tool_grep_search : server_tool {
         bool        literal     = json_value(params, "literal", false);
         bool        ignore_case = json_value(params, "ignore_case", false);
         int         ctx_lines   = std::max(0, json_value(params, "context_lines", 0));
+        uint64_t    offset      = std::max<int64_t>(0, json_value(params, "offset", int64_t{0}));
 
         std::string pattern_src = pat_str;
         if (literal) {
@@ -1164,6 +1166,7 @@ struct server_tool_grep_search : server_tool {
         // collect (absolute_path, display_path) pairs to search
         std::vector<std::pair<std::string, std::string>> files;
 
+        bool listing_truncated = false;
         const std::string abs_path = io->resolve(path);
         if (io->is_regular_file(abs_path)) {
             files.emplace_back(abs_path, path);
@@ -1172,6 +1175,7 @@ struct server_tool_grep_search : server_tool {
             if (!listing.err.empty()) {
                 return {{"error", listing.err + ": " + path}};
             }
+            listing_truncated = listing.truncated;
             for (const auto & entry : listing.entries) {
                 if (!path_glob_match(include, entry.rel)) continue;
                 if (!exclude.empty() && path_glob_match(exclude, entry.rel)) continue;
@@ -1180,14 +1184,18 @@ struct server_tool_grep_search : server_tool {
         } else {
             return {{"error", "path does not exist: " + path}};
         }
+        std::sort(files.begin(), files.end(), [](const auto & a, const auto & b) {
+            return a.second < b.second;
+        });
 
         std::ostringstream output_text;
+        uint64_t skipped = 0;
         size_t total = 0;
-        bool limit_reached = false;
+        bool has_more = false;
         bool show_num = show_lineno || ctx_lines > 0;
 
         for (const auto & file_entry : files) {
-            if (limit_reached) break;
+            if (has_more) break;
             const std::string & fpath        = file_entry.first;
             const std::string & display_path = file_entry.second;
 
@@ -1201,11 +1209,15 @@ struct server_tool_grep_search : server_tool {
             }
 
             for (size_t i = 0; i < lines.size(); i++) {
+                if (!std::regex_search(lines[i], pattern)) continue;
+                if (skipped < offset) {
+                    skipped++;
+                    continue;
+                }
                 if (total >= SERVER_TOOL_GREP_SEARCH_MAX_RESULTS) {
-                    limit_reached = true;
+                    has_more = true;
                     break;
                 }
-                if (!std::regex_search(lines[i], pattern)) continue;
 
                 long ctx_start = ctx_lines > 0 ? std::max<long>(0, (long) i - ctx_lines) : (long) i;
                 long ctx_end   = ctx_lines > 0 ? std::min<long>((long) lines.size() - 1, (long) i + ctx_lines) : (long) i;
@@ -1226,10 +1238,11 @@ struct server_tool_grep_search : server_tool {
         }
 
         output_text << "\n---\nTotal matches: " << total << "\n";
-        if (limit_reached) {
-            output_text << string_format(
-                "[%zu matches limit reached. Narrow the path/pattern/include to see more.]\n",
-                SERVER_TOOL_GREP_SEARCH_MAX_RESULTS);
+        if (has_more) {
+            output_text << "Continue with offset=" << offset + total << " and the same search arguments.\n";
+        }
+        if (listing_truncated) {
+            output_text << "[results truncated: time budget or unreadable directory]\n";
         }
 
         return {{"plain_text_response", output_text.str()}};
@@ -1261,11 +1274,13 @@ struct server_tool_exec_shell_command : server_tool {
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
+                        // first, so a client can show it while the command still streams; the tool ignores it
+                        {"description",     {{"type", "string"},  {"description", "Short plain-language description of what this command does, starting with a verb, e.g. 'List files in the project root'. 3 to 10 words. Shown to the user."}}},
                         {"command",         {{"type", "string"},  {"description", "Shell command to execute"}}},
                         {"timeout",         {{"type", "integer"}, {"description", string_format("Timeout in seconds (default 10, max %d)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT)}}},
                         {"max_output_size", {{"type", "integer"}, {"description", string_format("Maximum output size in bytes (default %zu)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE)}}},
                     }},
-                    {"required", json::array({"command"})},
+                    {"required", json::array({"description", "command"})},
                 }},
             }},
         };

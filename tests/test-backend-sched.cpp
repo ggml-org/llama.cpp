@@ -836,6 +836,103 @@ static test_result test_pair_user_inputs(const std::vector<ggml_backend_t> & bac
     return ok;
 }
 
+// Tests that the user can overwrite an input as soon as ggml_backend_sched_graph_compute_async returns.
+// The same graph is computed twice without synchronizing in between:
+//   GPU: 0 + 1 -> sleep -> + in
+// The first compute keeps the GPU busy, so the copy of the input of the second compute is queued behind the sleep.
+// The input is overwritten with {100} right after the second compute is submitted.
+// Correct result is {1 + 2} = {3}, incorrect output is {101} when the copy read the input after it was overwritten.
+static test_result test_user_input_overwrite_after_async(ggml_backend_t gpu, ggml_backend_t cpu, int64_t tensor_len,
+        int32_t sleep_us, bool parallel, bool use_device_host_buft) {
+
+    const int GPU = 0;
+
+    const std::vector<ggml_backend_t> backends = { gpu, cpu };
+
+    const size_t graph_size = 64;
+
+    backend_consts consts(backends, tensor_len);
+
+    ggml_backend_sched_ptr sched = create_test_scheduler(backends, graph_size, use_device_host_buft, parallel);
+
+    ggml_init_params params_input = {
+        /*.mem_size   =*/ ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx_input(ggml_init(params_input));
+
+    ggml_tensor * in = ggml_new_tensor_1d(ctx_input.get(), GGML_TYPE_F32, tensor_len);
+    ggml_set_name(in, "in");
+    ggml_set_input(in);
+
+    // the same buffer type as the CPU backend of the scheduler, pinned memory makes the copy of the input async
+    ggml_backend_buffer_type_t buft_input = ggml_backend_get_default_buffer_type(cpu);
+    if (use_device_host_buft) {
+        ggml_backend_buffer_type_t host = ggml_backend_dev_host_buffer_type(ggml_backend_get_device(gpu));
+        if (host != nullptr) {
+            buft_input = host;
+        }
+    }
+    ggml_backend_buffer_ptr buf_input(ggml_backend_alloc_ctx_tensors_from_buft(ctx_input.get(), buft_input));
+    GGML_ASSERT(buf_input != nullptr);
+
+    ggml_init_params params_compute = {
+        /*.mem_size   =*/ (graph_size + 8)*ggml_tensor_overhead() + ggml_graph_overhead_custom(graph_size, false),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context_ptr ctx_compute(ggml_init(params_compute));
+
+    helper_graph g(ctx_compute.get(), graph_size);
+
+    ggml_tensor * delayed = g.add(ggml_add(ctx_compute.get(), consts.zero[GPU], consts.one[GPU]), GPU);
+    delayed = g.add(ggml_sleep(ctx_compute.get(), delayed, sleep_us), GPU);
+
+    ggml_tensor * out = g.add(ggml_add(ctx_compute.get(), delayed, in), GPU);
+    ggml_set_name(out, "out");
+    ggml_set_output(out);
+
+    for (size_t i = 0; i < g.nodes.size(); i++) {
+        if (!backend_supports_op(gpu, g.nodes[i])) {
+            return skip("%s does not support %s", ggml_backend_name(gpu), ggml_op_name(g.nodes[i]->op));
+        }
+    }
+
+    ggml_backend_sched_reset(sched.get());
+    for (ggml_tensor * node : g.nodes) {
+        ggml_backend_sched_set_tensor_backend(sched.get(), node, gpu);
+    }
+    if (!ggml_backend_sched_alloc_graph(sched.get(), g.gf)) {
+        return fail("failed to allocate the graph");
+    }
+
+    std::vector<float> data(tensor_len);
+
+    for (float value : { 1.0f, 2.0f }) {
+        std::fill(data.begin(), data.end(), value);
+        ggml_backend_tensor_set(in, data.data(), 0, ggml_nbytes(in));
+
+        if (ggml_backend_sched_graph_compute_async(sched.get(), g.gf) != GGML_STATUS_SUCCESS) {
+            return fail("failed to compute the graph");
+        }
+    }
+
+    std::fill(data.begin(), data.end(), 100.0f);
+    ggml_backend_tensor_set(in, data.data(), 0, ggml_nbytes(in));
+
+    ggml_backend_sched_synchronize(sched.get());
+
+    ggml_backend_tensor_get(out, data.data(), 0, ggml_nbytes(out));
+    for (int64_t i = 0; i < tensor_len; i++) {
+        if (data[i] != 3.0f) {
+            return fail("%s[%" PRId64 "] = %f, expected 3.000000 - the input was read after it was overwritten", ggml_get_name(out), i, data[i]);
+        }
+    }
+
+    return TEST_OK;
+}
+
 // Tests Y-shaped scheduling: two parallel lanes merging into 1. Lane A and B, merging into a single split.
 // The lanes join in a final split on backend_a that receives one activation from each of the two backend_b splits.
 static test_result test_y_shaped_graph(const std::vector<ggml_backend_t> & backends, int backend_a, int backend_b, int64_t tensor_len,
@@ -994,6 +1091,16 @@ int main(int argc, char ** argv) {
                 for (int tensor_len : { 2, 2048, 4096, 8192, 1600}) {
                     case_begin("test_inputless_splits_scheduling      %-8s sleep_us = %6d, tensor_len = %4d", name_backend, sleep_us, tensor_len);
                     case_end(test_inputless_splits_scheduling(backend, cpu, tensor_len, sleep_us, use_device_host_buft));
+                }
+            }
+
+            for (bool parallel : { false, true }) {
+                for (int32_t sleep_us : { 1000, 10000 }) {
+                    for (int tensor_len : { 2, 4096 }) {
+                        case_begin("test_user_input_overwrite_after_async %-8s parallel = %d, sleep_us = %5d, tensor_len = %4d",
+                                name_backend, parallel, sleep_us, tensor_len);
+                        case_end(test_user_input_overwrite_after_async(backend, cpu, tensor_len, sleep_us, parallel, use_device_host_buft));
+                    }
                 }
             }
 
