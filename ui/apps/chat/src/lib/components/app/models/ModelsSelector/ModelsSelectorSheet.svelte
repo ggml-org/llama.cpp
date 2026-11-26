@@ -115,8 +115,7 @@
 	// the full list: its own page or a search's results; the sheet opens on the short view even
 	// when no model is in reach, with the way to all of them
 	let showFull = $derived(page.id === ModelsSheetPage.ALL || isSearching);
-	// a search gives the sheet to its results: the reasoning row steps aside until it is cleared
-	let hasEffort = $derived(showReasoning && !isSearching && reasoning.levels.length > 0);
+	let hasEffort = $derived(showReasoning && reasoning.levels.length > 0);
 
 	// the models past the loaded and favorite ones: a group per family, or one for them all
 	let otherGroups = $derived.by(() => {
@@ -203,13 +202,17 @@
 		// dictation (the one Automatic picked is kept so), and the chosen one can hand the choice
 		// back to Automatic
 		if (serverStore.isRouterMode && voiceStore.roleOf(model) !== null) {
-			const chosen = voiceStore.isDictationModel(model) && !voiceStore.dictationIsAutomatic;
+			const dictates = voiceStore.isDictationModel(model);
+			const chosen = dictates && !voiceStore.dictationIsAutomatic;
+
+			let label: string = VOICE_DICTATION_MODEL_LABEL.use;
+
+			if (chosen) label = VOICE_DICTATION_MODEL_LABEL.pickAutomatically;
+			else if (dictates) label = VOICE_DICTATION_MODEL_LABEL.keep;
 
 			actions.push({
 				icon: chosen ? MicOff : Mic,
-				label: chosen
-					? VOICE_DICTATION_MODEL_LABEL.pickAutomatically
-					: VOICE_DICTATION_MODEL_LABEL.use,
+				label,
 				onclick: () => voiceStore.toggleDictation(model)
 			});
 		}
@@ -396,8 +399,12 @@
 		<!-- the reasoning effort, then the search at the sheet's foot: a plain text field in the chat
 		     form's shape; both keep the lists' gutter -->
 		<div class="flex shrink-0 flex-col gap-3 px-4 pt-2 pb-[max(0.5rem,var(--safe-area-bottom))]">
+			<!-- a search gives the sheet to its results: the reasoning row steps aside until it is
+			     cleared, and stays mounted so its levels are as they were left -->
 			{#if hasEffort}
-				<ModelsSelectorReasoning variant="list" />
+				<div class={isSearching ? 'hidden' : 'contents'}>
+					<ModelsSelectorReasoning variant="list" />
+				</div>
 			{/if}
 
 			<SearchInput

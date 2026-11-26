@@ -21,9 +21,17 @@ const item = (model: string): ModelItem => ({
 	option: { capabilities: [], id: model, model, name: model }
 });
 
+let previousConfig: typeof settingsStore.config;
+let previousRole: typeof serverStore.role;
+
 beforeEach(async () => {
+	previousConfig = settingsStore.config;
+	previousRole = serverStore.role;
+	settingsStore.config = {
+		...settingsStore.config,
+		[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL]: VOICE_TRANSCRIPTION_MODEL_AUTO
+	};
 	serverStore.role = ServerRole.ROUTER;
-	settingsStore.config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL] = VOICE_TRANSCRIPTION_MODEL_AUTO;
 	vi.spyOn(voiceStore, 'roleOf').mockImplementation((model) =>
 		model === HEARS ? VoiceModelRole.VOICE : null
 	);
@@ -34,6 +42,8 @@ beforeEach(async () => {
 
 afterEach(() => {
 	vi.restoreAllMocks();
+	settingsStore.config = previousConfig;
+	serverStore.role = previousRole;
 });
 
 /** Holds a row with a finger: a touch press, then the context menu a long touch raises. */
@@ -81,7 +91,10 @@ it('does not offer a model that cannot hear', async () => {
 });
 
 it('hands the chosen model back to Automatic', async () => {
-	settingsStore.config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL] = HEARS;
+	settingsStore.config = {
+		...settingsStore.config,
+		[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL]: HEARS
+	};
 	vi.spyOn(voiceStore, 'isDictationModel').mockImplementation((model) => model === HEARS);
 
 	const screen = renderSheet();
@@ -94,4 +107,17 @@ it('hands the chosen model back to Automatic', async () => {
 	expect(settingsStore.config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL]).toBe(
 		VOICE_TRANSCRIPTION_MODEL_AUTO
 	);
+});
+
+it('keeps the model Automatic picked', async () => {
+	vi.spyOn(voiceStore, 'isDictationModel').mockImplementation((model) => model === HEARS);
+
+	const screen = renderSheet();
+	const row = screen.getByRole('button', { name: /Voxtral/ });
+
+	await expect.element(row).toBeVisible();
+	await hold(row.element() as HTMLElement);
+	await page.getByRole('menuitem', { name: VOICE_DICTATION_MODEL_LABEL.keep }).click();
+
+	expect(settingsStore.config[SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL]).toBe(HEARS);
 });

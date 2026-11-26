@@ -8,7 +8,11 @@
 	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import { Check, Lightbulb, LightbulbOff } from '@lucide/svelte';
 	import { CollapsibleSection } from '#lib/components/app/index.ts';
-	import { ICON_CLASS_DEFAULT, REASONING_EFFORT_LABELS } from '#lib/constants/index.ts';
+	import {
+		ICON_CLASS_DEFAULT,
+		REASONING_EFFORT_LABELS,
+		REASONING_EFFORT_ROW_LABEL
+	} from '#lib/constants/index.ts';
 	import { useReasoningMenu } from '#lib/hooks/use-reasoning-menu.svelte.ts';
 	import type { ReasoningEffortLevel } from '#lib/types/index.ts';
 
@@ -30,7 +34,7 @@
 		<Lightbulb class="size-icon-md shrink-0 text-muted-foreground" />
 	{/if}
 
-	<span class="flex-1">Reasoning</span>
+	<span class="flex-1">{REASONING_EFFORT_ROW_LABEL}</span>
 
 	<span class="text-caption text-muted-foreground">{current}</span>
 {/snippet}
@@ -44,7 +48,7 @@
 	{/if}
 
 	<span class="inset-list-row-body">
-		<span class="flex-1">Reasoning</span>
+		<span class="flex-1">{REASONING_EFFORT_ROW_LABEL}</span>
 
 		<span class="text-muted-foreground">{current}</span>
 	</span>
