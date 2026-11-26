@@ -251,6 +251,8 @@ export interface ChatCommandsOptions {
 	hasPrompts: () => boolean;
 	/** Gates `/cwd`. */
 	hasCwdTools: () => boolean;
+	/** Gates `/system-message`. */
+	canEditSystemMessage: () => boolean;
 }
 
 /** Protocol-level verbs accepted by the realtime inference control endpoint. Mirrors `CONTROL_ACTION`. */
@@ -263,6 +265,8 @@ export interface ChatFormCommand {
 	keywords?: string[];
 	action: ChatFormCommandAction;
 	disabled: boolean;
+	/** Takes an argument after a space (`/cwd ~/git`); the others end at their name. */
+	takesArgument?: boolean;
 }
 
 /**
