@@ -221,6 +221,8 @@ OutputVector translate_cpy(const NodeContext & context) {
                                           "CPY conv state cache update requires static source feature view");
 
             const int64_t full_feature_size = base_shape[3].get_length();
+            FRONT_END_OP_CONVERSION_CHECK(full_feature_size > 0,
+                                          "CPY conv state cache update requires a non-empty base cache feature size");
             const int64_t update_feature_size = input_shape[2].get_length() * input_shape[3].get_length();
             const auto output_stride = context.get_output_stride();
             const size_t elem_size = output_stride.empty() ? context.get_output_type().size() : output_stride.back();
