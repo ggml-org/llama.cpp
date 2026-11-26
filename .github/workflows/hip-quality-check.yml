@@ -12,7 +12,7 @@ on:
       'ggml/src/ggml-hip/CMakeLists.txt',
       'ggml/src/ggml-cuda/vendors/hip.h',
       'scripts/hip/gcn-cdna-vgpr-check.py',
-      'scripts/hip/gcn-cdna-occupancy-check.py'
+      'scripts/hip/gcn-cdna-metrics-check.py'
     ]
 
   pull_request:
@@ -24,7 +24,7 @@ on:
       'ggml/src/ggml-hip/CMakeLists.txt',
       'ggml/src/ggml-cuda/vendors/hip.h',
       'scripts/hip/gcn-cdna-vgpr-check.py',
-      'scripts/hip/gcn-cdna-occupancy-check.py'
+      'scripts/hip/gcn-cdna-metrics-check.py'
     ]
 
 cache-mode: none
@@ -155,8 +155,10 @@ jobs:
         run: |
           # The PR metrics.log comes from the VGPR spill check build above, so
           # this step adds no extra build when the baseline cache hits.
-          python3 scripts/hip/gcn-cdna-occupancy-check.py hip-baseline-metrics.log build/metrics.log \
-            --report hip-kernel-metrics-report.md || check_failed=true
+          python3 scripts/hip/gcn-cdna-metrics-check.py hip-baseline-metrics.log build/metrics.log \
+            --dump hip-kernel-metrics-deltas.tsv || check_failed=true
+          python3 scripts/hip/gcn-cdna-metrics-report.py hip-kernel-metrics-deltas.tsv \
+            -o hip-kernel-metrics-report.md
           if [ -n "$check_failed" ]; then
             echo "check_failed=true" >> "$GITHUB_OUTPUT"
           fi
