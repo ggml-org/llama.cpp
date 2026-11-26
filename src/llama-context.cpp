@@ -561,13 +561,13 @@ llama_context::llama_context(
     // reduced LM head, must exist before the graph is reserved
     if (!hparams.vocab_only && params.vocab_subset != nullptr && params.n_vocab_subset > 0) {
         try {
-            vsub_init(params.vocab_subset, params.n_vocab_subset);
+            vocab_subset_init(params.vocab_subset, params.n_vocab_subset);
         } catch (const std::exception & e) {
             // e.g. out of memory or an id outside the vocabulary, the draft still works with the full head
             LLAMA_LOG_WARN("%s: vocab_subset: %s, using the full LM head\n", __func__, e.what());
-            vsub.reset();
-            vsub_bufs.clear();
-            vsub_ctxs.clear();
+            vocab_subset.reset();
+            vocab_subset_bufs.clear();
+            vocab_subset_ctxs.clear();
         }
     }
 
@@ -2934,9 +2934,9 @@ uint32_t llama_context::graph_max_nodes() const {
         res += llama_sampler_backend_n_nodes(sampler) * cparams.n_outputs_max_per_seq;
     }
 
-    // the reduced LM head adds a few nodes per head
-    if (vsub) {
-        res += 16;
+    // build_lora_mm() adds up to 8 graph entries per reduced head: 5 nodes (ggml_fill, ggml_set_rows, three reshapes) and up to 3 leafs (the tensor ggml_fill takes its shape from, the ids, and the row copy when the head is also the token embedding)
+    if (vocab_subset) {
+        res += 8*(uint32_t) vocab_subset->heads.size();
     }
 
     if (cparams.training) {
@@ -3098,7 +3098,7 @@ llm_graph_params llama_context::graph_params(
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
         /*.res         =*/ res,
-        /*.vsub        =*/ vsub.get(),
+        /*.vocab_subset =*/ vocab_subset.get(),
     };
 }
 
@@ -3122,7 +3122,13 @@ void llama_context::sched_graph_realloc(ggml_backend_sched_t sched, ggml_cgraph 
 }
 
 // reduced draft LM head: the listed ids get exact logits from a copy of their rows of the head, every other id gets -inf
-void llama_context::vsub_init(const llama_token * list, size_t n_list) {
+void llama_context::vocab_subset_init(const llama_token * list, size_t n_list) {
+    // the list holds target ids, which need not match the head rows of a draft that maps its own vocabulary with d2t
+    if (model.d2t != nullptr) {
+        LLAMA_LOG_WARN("%s: the draft maps its own vocabulary with d2t, the list is ignored\n", __func__);
+        return;
+    }
+
     const int64_t t_start_us = ggml_time_us();
 
     const int64_t n_vocab = model.vocab.n_tokens();
@@ -3145,7 +3151,7 @@ void llama_context::vsub_init(const llama_token * list, size_t n_list) {
     ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
 
     if ((int64_t) ids.size() >= n_vocab) {
-        LLAMA_LOG_WARN("%s: vocab_subset: the list covers all %" PRId64 " ids, using the full LM head\n", __func__, n_vocab);
+        LLAMA_LOG_WARN("%s: the list covers all %" PRId64 " ids, using the full LM head\n", __func__, n_vocab);
         return;
     }
 
@@ -3158,10 +3164,10 @@ void llama_context::vsub_init(const llama_token * list, size_t n_list) {
         cands.push_back(llama_get_model(cparams.ctx_other)->output);
     }
 
-    vsub = std::make_unique<llama_vocab_subset>();
+    vocab_subset = std::make_unique<llama_vocab_subset>();
 
     for (ggml_tensor * w : cands) {
-        if (w == nullptr || vsub->heads.count(w) || ggml_n_dims(w) != 2 || w->ne[1] != n_vocab || !ggml_is_contiguous(w) || w->buffer == nullptr) {
+        if (w == nullptr || vocab_subset->heads.count(w) || ggml_n_dims(w) != 2 || w->ne[1] != n_vocab || !ggml_is_contiguous(w) || w->buffer == nullptr) {
             continue;
         }
 
@@ -3169,7 +3175,7 @@ void llama_context::vsub_init(const llama_token * list, size_t n_list) {
         ggml_backend_buffer_type_t buft = ggml_backend_buffer_get_type(w->buffer);
         ggml_backend_dev_t         dev  = ggml_backend_buft_get_device(buft);
         if (!ggml_backend_buft_is_host(buft) && (dev == nullptr || ggml_backend_dev_buffer_type(dev) != buft)) {
-            LLAMA_LOG_WARN("%s: vocab_subset: %s is in buffer type %s, not supported\n", __func__, w->name, ggml_backend_buft_name(buft));
+            LLAMA_LOG_WARN("%s: %s is in buffer type %s, not supported\n", __func__, w->name, ggml_backend_buft_name(buft));
             continue;
         }
 
@@ -3179,26 +3185,26 @@ void llama_context::vsub_init(const llama_token * list, size_t n_list) {
             /*.no_alloc   =*/ true,
         };
         ggml_context * ctx = ggml_init(ip);
-        vsub_ctxs.emplace_back(ctx);
+        vocab_subset_ctxs.emplace_back(ctx);
 
         // the listed rows, in the type of the head
         ggml_tensor * rows = ggml_new_tensor_2d(ctx, w->type, w->ne[0], ids.size());
 
         // the ids are stored next to the first head
-        const bool with_ids = vsub->ids == nullptr;
+        const bool with_ids = vocab_subset->ids == nullptr;
         if (with_ids) {
-            vsub->ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ids.size());
+            vocab_subset->ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ids.size());
         }
 
         ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx, buft);
         if (buf == nullptr) {
-            throw std::runtime_error("vocab_subset: failed to allocate the reduced LM head");
+            throw std::runtime_error("failed to allocate the reduced LM head");
         }
         ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-        vsub_bufs.emplace_back(buf);
+        vocab_subset_bufs.emplace_back(buf);
 
         if (with_ids) {
-            ggml_backend_tensor_set(vsub->ids, ids.data(), 0, ids.size()*sizeof(int32_t));
+            ggml_backend_tensor_set(vocab_subset->ids, ids.data(), 0, ids.size()*sizeof(int32_t));
         }
 
         // one read per run of consecutive ids
@@ -3214,17 +3220,17 @@ void llama_context::vsub_init(const llama_token * list, size_t n_list) {
         }
         ggml_backend_tensor_set(rows, data.data(), 0, data.size());
 
-        vsub->heads[w] = rows;
+        vocab_subset->heads[w] = rows;
     }
 
-    if (vsub->heads.empty()) {
-        LLAMA_LOG_WARN("%s: vocab_subset: no LM head found, using the full LM head\n", __func__);
-        vsub.reset();
+    if (vocab_subset->heads.empty()) {
+        LLAMA_LOG_WARN("%s: no supported LM head with a row for every token id, the list is ignored\n", __func__);
+        vocab_subset.reset();
         return;
     }
 
-    LLAMA_LOG_INFO("%s: vocab_subset: %zu of %" PRId64 " ids (the list plus the end-of-generation ids), %zu LM head(s), %.2f s\n",
-            __func__, ids.size(), n_vocab, vsub->heads.size(), (ggml_time_us() - t_start_us)/1e6);
+    LLAMA_LOG_INFO("%s: %zu of %" PRId64 " ids (the list plus the end-of-generation ids), %zu LM head(s), %.2f s\n",
+            __func__, ids.size(), n_vocab, vocab_subset->heads.size(), (ggml_time_us() - t_start_us)/1e6);
 }
 
 ggml_status llama_context::graph_compute(
