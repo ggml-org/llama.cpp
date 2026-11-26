@@ -11958,8 +11958,12 @@ static bool adreno_e17_compiler_quirks(const ggml_backend_opencl_context *backen
         backend_ctx->adreno_cl_compiler_version.type != ADRENO_CL_COMPILER_TYPE::E17) {
         return false;
     }
-    const char * env = getenv("GGML_OPENCL_ADRENO_E17_QUIRKS");
-    return !(env && env[0] == '0');
+
+    static const bool enabled = []() {
+        const char * e = getenv("GGML_OPENCL_ADRENO_E17_QUIRKS");
+        return e && e[0] && e[0] != '0';
+    }();
+    return enabled;
 }
 
 static bool ggml_cl_q2_k_use_noshuffle(const ggml_backend_opencl_context * backend_ctx, const ggml_tensor * tensor) {
@@ -12989,7 +12993,7 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
                 return true;
             }
 #endif
-            // The E17 compilers segfault while building FA kernels, skip E17 for now
+            // Some E17 compilers crash while building FA kernels.
             if (adreno_e17_compiler_quirks(backend_ctx)) {
                 return false;
             }

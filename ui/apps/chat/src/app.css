@@ -60,8 +60,9 @@
 	--chat-form-collapsed-height: 6.375rem;
 	/* the empty chat form card, its text and actions in one row: a new chat centers its top edge */
 	--chat-form-resting-height: 3.375rem;
-	/* the chat form's corners while its text and actions share one row */
-	--chat-form-single-row-radius: 1.25rem;
+	/* the chat form's corners while its text and actions share one row: a sheet group's, so the
+	   phone sheets' search, groups and keys round alike */
+	--chat-form-single-row-radius: var(--sheet-group-radius);
 	/* the card's translucent fill over the page, made opaque: the phone sheet, and the page and Safari's bars around it */
 	--chat-form-sheet-fill: color-mix(in oklab, var(--surface-muted) 60%, var(--surface-page));
 	--max-message-height: max(24rem, min(80dvh, calc(100dvh - var(--chat-form-area-height) - 12rem)));

@@ -4,6 +4,8 @@
 	are drawn here.
 -->
 <script lang="ts">
+	import { NativeSelect } from '@ggml-org/llama-ui/app/forms';
+	import { InsetList, InsetListRow } from '@ggml-org/llama-ui/app/sheets';
 	import { Label } from '@ggml-org/llama-ui/ui/label';
 	import * as Select from '@ggml-org/llama-ui/ui/select';
 	import {
@@ -12,7 +14,10 @@
 		VOICE_MICROPHONE_AUTO,
 		VOICE_MICROPHONE_DEFAULT
 	} from '@ggml-org/llama-voice';
-	import { SettingsChatFields } from '#lib/components/app/settings/index.ts';
+	import {
+		SettingsChatFields,
+		SettingsChatFieldsInset
+	} from '#lib/components/app/settings/index.ts';
 	import {
 		SETTING_CONFIG_INFO,
 		SETTINGS_KEYS,
@@ -22,19 +27,40 @@
 	} from '#lib/constants/index.ts';
 	import { modelsStore, serverStore } from '#lib/stores/index.ts';
 	import { isTranscriptionOnlyModel } from '#lib/utils/voice-mode.ts';
-	import { onMount } from 'svelte';
+	import { onMount, type Snippet } from 'svelte';
 
 	interface Props {
 		fields: SettingsFieldConfig[];
+		/** Draw the section as a phone's inset list, for the settings sheet. */
+		inset?: boolean;
 		localConfig: SettingsConfigType;
 		onConfigChange: (key: string, value: string | boolean) => void;
 	}
 
-	let { fields, localConfig, onConfigChange }: Props = $props();
+	let { fields, inset = false, localConfig, onConfigChange }: Props = $props();
+
+	/** Names the two pickers for the tests and demos that look for them. */
+	const VOICE_TAB_SLOTS = {
+		MICROPHONE: 'voice-microphone',
+		TRANSCRIPTION_MODEL: 'voice-transcription-model'
+	} as const;
+
+	const VOICE_TAB_TEXT = {
+		HAS_AUDIO: 'It has audio input, so it transcribes your voice.',
+		MIC_NAMES_HIDDEN:
+			'The browser names your microphones once you have allowed one, e.g. after your first recording.',
+		MICROPHONE: 'Microphone',
+		NO_AUDIO: 'It has no audio input, so voice input is not available on this server.',
+		ONE_MODEL: 'This server runs one model, which transcribes your voice when it has audio input.',
+		ONE_MODEL_NAMED: 'This server runs one model,',
+		TRANSCRIPTION_MODEL: 'Transcription model',
+		TRANSCRIPTION_NOTE:
+			"Only models with audio input are listed. A model you pick here is loaded on the server when you dictate, if it isn't loaded already."
+	} as const;
 
 	const KEY = SETTINGS_KEYS.VOICE_TRANSCRIPTION_MODEL;
 
-	// the picker sits right after the Voice input field
+	// the pickers sit right after the Voice input field
 	let splitAt = $derived(fields.findIndex((f) => f.key === SETTINGS_KEYS.VOICE_INPUT_MODE) + 1);
 	let isRouter = $derived(serverStore.isRouterMode);
 	let current = $derived(String(localConfig[KEY] ?? VOICE_TRANSCRIPTION_MODEL_AUTO));
@@ -137,11 +163,19 @@
 	);
 </script>
 
-<div class="space-y-6">
-	<SettingsChatFields fields={fields.slice(0, splitAt)} {localConfig} {onConfigChange} />
+{#snippet singleModelNote()}
+	{#if singleModel}
+		{VOICE_TAB_TEXT.ONE_MODEL_NAMED}
+		<span class="font-medium text-foreground">{singleModel}</span>.
+		{singleModelHasAudio ? VOICE_TAB_TEXT.HAS_AUDIO : VOICE_TAB_TEXT.NO_AUDIO}
+	{:else}
+		{VOICE_TAB_TEXT.ONE_MODEL}
+	{/if}
+{/snippet}
 
-	<div class="space-y-2" data-slot="voice-microphone">
-		<Label class="text-label" for={MIC_KEY}>Microphone</Label>
+{#snippet microphonePicker()}
+	<div class="space-y-2" data-slot={VOICE_TAB_SLOTS.MICROPHONE}>
+		<Label class="text-label" for={MIC_KEY}>{VOICE_TAB_TEXT.MICROPHONE}</Label>
 
 		<Select.Root
 			onValueChange={(value) => onConfigChange(MIC_KEY, value)}
@@ -160,15 +194,14 @@
 		<p class="mt-1 text-caption text-muted-foreground">{SETTING_CONFIG_INFO[MIC_KEY]}</p>
 
 		{#if micNamesHidden}
-			<p class="text-caption text-muted-foreground">
-				The browser names your microphones once you have allowed one, e.g. after your first
-				recording.
-			</p>
+			<p class="text-caption text-muted-foreground">{VOICE_TAB_TEXT.MIC_NAMES_HIDDEN}</p>
 		{/if}
 	</div>
+{/snippet}
 
-	<div class="space-y-2" data-slot="voice-transcription-model">
-		<Label class="text-label" for={KEY}>Transcription model</Label>
+{#snippet transcriptionModelPicker()}
+	<div class="space-y-2" data-slot={VOICE_TAB_SLOTS.TRANSCRIPTION_MODEL}>
+		<Label class="text-label" for={KEY}>{VOICE_TAB_TEXT.TRANSCRIPTION_MODEL}</Label>
 
 		{#if isRouter}
 			<Select.Root
@@ -208,19 +241,93 @@
 				>) unloads the chat model to do it.
 			</p>
 		{:else}
-			<p class="text-body-sm text-muted-foreground">
-				{#if singleModel}
-					This server runs one model, <span class="font-medium text-foreground">{singleModel}</span
-					>.
-					{singleModelHasAudio
-						? 'It has audio input, so it transcribes your voice.'
-						: 'It has no audio input, so voice input is not available on this server.'}
-				{:else}
-					This server runs one model, which transcribes your voice when it has audio input.
-				{/if}
-			</p>
+			<p class="text-body-sm text-muted-foreground">{@render singleModelNote()}</p>
 		{/if}
 	</div>
+{/snippet}
 
-	<SettingsChatFields fields={fields.slice(splitAt)} {localConfig} {onConfigChange} />
-</div>
+{#snippet insetPicker(
+	label: string,
+	value: string,
+	valueLabel: string,
+	pick: (value: string) => void,
+	items: Array<{ label: string; value: string }>,
+	itemGroups: Array<{ heading: string; items: Array<{ label: string; value: string }> }>,
+	caption: Snippet,
+	slot: string
+)}
+	<InsetList {caption} data-slot={slot}>
+		<InsetListRow as="div" bodyClass="gap-4">
+			<span class="flex-1 py-3">{label}</span>
+
+			<NativeSelect
+				displayLabel={valueLabel}
+				groups={itemGroups.map((group) => ({ heading: group.heading, options: group.items }))}
+				{label}
+				onValueChange={pick}
+				options={items}
+				{value}
+				variant="inset"
+			/>
+		</InsetListRow>
+	</InsetList>
+{/snippet}
+
+{#snippet microphoneNote()}
+	{SETTING_CONFIG_INFO[MIC_KEY]}
+
+	{#if micNamesHidden}
+		{VOICE_TAB_TEXT.MIC_NAMES_HIDDEN}
+	{/if}
+{/snippet}
+
+{#snippet transcriptionNote()}
+	{SETTING_CONFIG_INFO[KEY]}
+	{VOICE_TAB_TEXT.TRANSCRIPTION_NOTE}
+{/snippet}
+
+{#if inset}
+	<div class="flex flex-col gap-8">
+		<SettingsChatFieldsInset fields={fields.slice(0, splitAt)} {localConfig} {onConfigChange} />
+
+		{@render insetPicker(
+			VOICE_TAB_TEXT.MICROPHONE,
+			micCurrent,
+			micLabel,
+			(value) => onConfigChange(MIC_KEY, value),
+			micOptions,
+			[],
+			microphoneNote,
+			VOICE_TAB_SLOTS.MICROPHONE
+		)}
+
+		{#if isRouter}
+			{@render insetPicker(
+				VOICE_TAB_TEXT.TRANSCRIPTION_MODEL,
+				current,
+				selectedLabel,
+				(value) => onConfigChange(KEY, value),
+				[{ label: VOICE_SETTINGS_LABEL.automatic, value: VOICE_TRANSCRIPTION_MODEL_AUTO }],
+				optionGroups,
+				transcriptionNote,
+				VOICE_TAB_SLOTS.TRANSCRIPTION_MODEL
+			)}
+		{:else}
+			<p class="inset-list-caption" data-slot={VOICE_TAB_SLOTS.TRANSCRIPTION_MODEL}>
+				{@render singleModelNote()}
+			</p>
+		{/if}
+
+		<SettingsChatFieldsInset fields={fields.slice(splitAt)} {localConfig} {onConfigChange} />
+	</div>
+{:else}
+	<div class="space-y-6">
+		<SettingsChatFields fields={fields.slice(0, splitAt)} {localConfig} {onConfigChange} />
+
+		{@render microphonePicker()}
+
+		{@render transcriptionModelPicker()}
+
+		<SettingsChatFields fields={fields.slice(splitAt)} {localConfig} {onConfigChange} />
+	</div>
+{/if}

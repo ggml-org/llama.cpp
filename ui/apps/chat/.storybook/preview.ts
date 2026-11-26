@@ -51,6 +51,7 @@ const preview: Preview = {
 					[
 						'Foundations',
 						['Safe areas', 'Brand'],
+						'Mobile',
 						'Chat',
 						[
 							'ChatScreen',
@@ -65,7 +66,7 @@ const preview: Preview = {
 						'MCP',
 						'Navigation',
 						'Settings',
-						['DialogSettingsChat', 'Navigation', 'Sections'],
+						['DialogSettingsChat', 'SettingsSheet', 'Navigation', 'Sections'],
 						'Dialogs',
 						'Forms',
 						'Actions',

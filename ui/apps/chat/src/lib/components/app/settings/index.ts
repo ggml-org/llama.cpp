@@ -81,6 +81,18 @@ export { default as SettingsMcpServers } from './SettingsMcpServers.svelte';
 export { default as SettingsChatFields } from './SettingsChat/SettingsChatFields.svelte';
 
 /**
+ * The settings fields as a phone's native inset list: switch, picker and number rows grouped,
+ * prompts and single choices as groups of their own. Hands each change on as it is made.
+ */
+export { default as SettingsChatFieldsInset } from './SettingsChat/SettingsChatFieldsInset.svelte';
+
+/**
+ * Phone settings: a full-height sheet whose rows push each section, its advanced settings and the
+ * tools onto a stack of pages. Changes apply as they are made.
+ */
+export { default as SettingsSheet } from './SettingsSheet/SettingsSheet.svelte';
+
+/**
  * **SettingsChatToolsTab** - Tools configuration tab for chat settings
  *
  * Displays available tools grouped by source (server, browser, MCP, custom) with

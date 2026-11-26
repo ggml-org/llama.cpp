@@ -4,8 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-#pragma clang diagnostic ignored "-Wunused-function"
-
 static inline uint32_t pow2_ceil(uint32_t x) {
     if (x <= 1) {
         return 1;
