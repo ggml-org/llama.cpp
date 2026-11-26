@@ -1759,6 +1759,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),
+    vocab_subset     (params.vocab_subset),
     ctx0             (res->get_ctx()),
     gf               (res->get_gf()) {
         res->set_params(params);
@@ -1850,7 +1851,15 @@ ggml_tensor * llm_graph_context::build_lora_mm(
 
     // a Hadamard-folded weight reads the transformed input; a LoRA delta lives in the primal basis and reads `cur`
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
-    ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
+
+    // reduced draft LM head: multiply by the copy of the listed rows, then scatter into -inf logits (no LoRA)
+    ggml_tensor * rows = nullptr;
+    if (vocab_subset != nullptr && ggml_n_dims(cur_mm) <= 2 && cur_mm->ne[1] > 0 && (w_s == nullptr || ggml_nelements(w_s) == 1)) {
+        const auto it = vocab_subset->heads.find(w);
+        rows = it != vocab_subset->heads.end() ? it->second : nullptr;
+    }
+
+    ggml_tensor * res = ggml_mul_mat(ctx0, rows ? rows : w, cur_mm);
 
     if (w->type == GGML_TYPE_NVFP4) {
         ggml_prec_set_acc(res, GGML_PREC_BF16);
@@ -1861,6 +1870,16 @@ ggml_tensor * llm_graph_context::build_lora_mm(
 
     if (w_s) {
         res = ggml_mul(ctx0, res, w_s);
+    }
+
+    if (rows != nullptr) {
+        const int64_t n_vocab   = w->ne[1];
+        const int64_t n_ids     = rows->ne[1];
+        const int64_t n_outputs = res->ne[1];
+
+        ggml_tensor * logits = ggml_fill(ctx0, ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, 1, n_vocab, n_outputs), -INFINITY);
+        logits = ggml_set_rows(ctx0, logits, ggml_reshape_3d(ctx0, res, 1, n_ids, n_outputs), ggml_reshape_3d(ctx0, vocab_subset->ids, n_ids, 1, 1));
+        return ggml_reshape_2d(ctx0, logits, n_vocab, n_outputs);
     }
 
     for (const auto & lora : *loras) {
