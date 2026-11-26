@@ -1,6 +1,8 @@
 import pytest
 import requests
+import signal
 import socket
+import sys
 from utils import *
 
 server = ServerPreset.tinyllama2()
@@ -159,3 +161,13 @@ def test_server_models_sse_single_model():
     assert event["event"] == "status_change"
     assert event["data"]["status"] == "loaded"
     assert event["data"]["info"]["id"] == model_id
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console control event")
+def test_server_ctrl_break():
+    global server
+    server.share_console = True
+    server.start()
+    server.process.send_signal(signal.CTRL_BREAK_EVENT)
+    # exit code 0 means a clean shutdown, the default handler would end it with STATUS_CONTROL_C_EXIT
+    assert server.process.wait(timeout=60) == 0

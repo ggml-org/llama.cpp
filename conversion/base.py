@@ -2473,6 +2473,9 @@ class TextModel(ModelBase):
         if chkhsh == "32d85c31273f8019248f2559fed492d929ea28b17e51d81d3bb36fff23ca72b3":
             # ref: https://huggingface.co/domyn/Domyn-Edge-Teacher-IF
             res = "domyn-edge"
+        if chkhsh == "ffdae2f611dc6903980be2fbb108467cb97376d7d03cd332bb7e2602f87fa1f1":
+            # ref: https://huggingface.co/KRAFTON/Raon-1-mini-preview
+            res = "raon"
 
         if res is None:
             logger.warning("\n")

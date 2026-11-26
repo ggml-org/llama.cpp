@@ -20,6 +20,7 @@ on:
       'ui/apps/chat/**.*',
       'ui/lib/ui/**.*',
       'ui/lib/voice/**.*',
+      'ui/lib/harness/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
@@ -30,6 +31,7 @@ on:
       'ui/apps/chat/**.*',
       'ui/lib/ui/**.*',
       'ui/lib/voice/**.*',
+      'ui/lib/harness/**.*',
       'tools/server/tests/**.*'
     ]
 

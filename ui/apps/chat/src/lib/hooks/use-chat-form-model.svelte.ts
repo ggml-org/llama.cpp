@@ -11,6 +11,7 @@
 import { conversationsStore, modelsStore, serverStore } from '#lib/stores/index.ts';
 import type { DatabaseMessage } from '#lib/types/database.js';
 import { getConversationModel } from '#lib/utils/index.ts';
+import { getChatFormModelState } from '#lib/utils/model-selection.ts';
 
 export function useChatFormModel() {
 	const isRouter = $derived(serverStore.isRouterMode);
@@ -82,22 +83,17 @@ export function useChatFormModel() {
 
 		return activeModelId ? modelsStore.props.modelSupportsVision(activeModelId) : false;
 	});
-	const hasModelSelected = $derived(
-		!isRouter || !!conversationModel || !!modelsStore.selectedModelId
+	// the form's selection decides the state; the conversation's model only counts when nothing is selected
+	const modelState = $derived(
+		getChatFormModelState({
+			conversationModel,
+			isRouter,
+			models: modelsStore.models,
+			selectedModelId: modelsStore.selectedModelId
+		})
 	);
-	const isSelectedModelInCache = $derived.by(() => {
-		if (!isRouter) return true;
-
-		if (conversationModel) {
-			return modelsStore.models.some((option) => option.model === conversationModel);
-		}
-
-		const currentModelId = modelsStore.selectedModelId;
-
-		if (!currentModelId) return false;
-
-		return modelsStore.models.some((option) => option.id === currentModelId);
-	});
+	const hasModelSelected = $derived(modelState.hasModelSelected);
+	const isSelectedModelInCache = $derived(modelState.isSelectedModelAvailable);
 
 	return {
 		get conversationModel() {

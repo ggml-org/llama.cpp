@@ -2609,7 +2609,7 @@ ggml_tensor * llm_graph_context::build_moe_ffn(
                         const float limit = hparams.swiglu_clamp_exp[il];
                         constexpr float eps = 1e-6f;
                         if (limit > eps) {
-                            if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4) {
+                            if (arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41 || arch == LLM_ARCH_GLM5_NEXT || (arch == LLM_ARCH_DFLASH && hparams.dsv4_hc_mult > 0) || arch == LLM_ARCH_HY_V4 || arch == LLM_ARCH_HY_V4_FLASH) {
                                 cur = ggml_swiglu_clamp(ctx0, cur, up, limit);
                             } else {
                                 up = ggml_clamp(ctx0, up, -limit, limit);
@@ -3148,7 +3148,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * v_mla,
              int64_t   n_kv_max,
                float   kq_scale,
-                 int   il) const {
+                 int   il,
+         ggml_tensor * bias_table,
+         ggml_tensor * bias_indices) const {
     const bool v_trans = v->nb[1] > v->nb[2];
 
     // split the batch into streams if needed
@@ -3163,12 +3165,28 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
+    auto dense_bias_mask = [&]() {
+        ggml_tensor * table = ggml_cont(ctx0, ggml_permute(ctx0, bias_table, 1, 0, 2, 3));
+        ggml_tensor * bias = ggml_get_rows(ctx0, table, bias_indices);
+        bias = ggml_reshape_4d(ctx0, bias, q->ne[2], bias_indices->ne[0], q->ne[1], n_stream);
+        bias = ggml_cont(ctx0, ggml_permute(ctx0, bias, 2, 0, 1, 3));
+        cb(bias, "kq_b", il);
+
+        ggml_tensor * mask = kq_mask->type == GGML_TYPE_F32 ? kq_mask : ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
+        mask = ggml_add(ctx0, bias, mask);
+        if (cparams.flash_attn) {
+            mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
+        }
+        cb(mask, "kq_mask_rel_pos", il);
+        return mask;
+    };
+
     ggml_tensor * cur;
 
     const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
     GGML_ASSERT(use_flash_attn || kv_rows == nullptr);
     if (use_flash_attn) {
-        GGML_ASSERT(kq_b == nullptr && "Flash attention does not support KQ bias yet");
+        GGML_ASSERT(kq_b == nullptr && "Flash attention does not support dense KQ bias");
 
         if (v_trans) {
             v = ggml_transpose(ctx0, v);
@@ -3197,6 +3215,16 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_set_n_kv_max(cur, static_cast<int32_t>(n_kv_max));
         ggml_prec_set_acc(cur, GGML_PREC_F32);
 
+        if (bias_table) {
+            ggml_flash_attn_ext_add_indexed_bias(cur, bias_table, bias_indices);
+            auto * dev = model.dev_layer(il);
+            if ((!cparams.offload_kqv && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) || !ggml_backend_dev_supports_op(dev, cur)) {
+                // Keep ordinary flash attention on the layer device.
+                ggml_flash_attn_ext_add_indexed_bias(cur, nullptr, nullptr);
+                cur->src[3] = dense_bias_mask();
+            }
+        }
+
         if (v_mla) {
 #if 0
             // v_mla can be applied as a matrix-vector multiplication with broadcasting across dimension 3 == n_tokens.
@@ -3216,6 +3244,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         cur = ggml_reshape_2d(ctx0, cur, cur->ne[0]*cur->ne[1], cur->ne[2]*cur->ne[3]);
     } else {
+        if (bias_table) {
+            kq_mask = dense_bias_mask();
+        }
         ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);
         cb(kq, "kq", il);
 
@@ -3725,7 +3756,9 @@ static ggml_tensor * build_attn_iswa_impl(
         ggml_tensor * sinks,
         ggml_tensor * v_mla,
             float     kq_scale,
-            int       il) {
+            int       il,
+        ggml_tensor * bias_table = nullptr,
+        ggml_tensor * bias_indices = nullptr) {
     ggml_context * ctx0 = gctx.ctx0;
     ggml_cgraph  * gf   = gctx.gf;
 
@@ -3791,7 +3824,7 @@ static ggml_tensor * build_attn_iswa_impl(
     ggml_tensor * k = use_kv_cur ? k_cur : mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = gctx.build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = gctx.build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, sinks, v_mla, 0, kq_scale, il, bias_table, bias_indices);
     cur = build_attn_scale_kv_output(ctx0, mctx_cur, cur, il);
     gctx.cb(cur, "kqv_out", il);
 
@@ -4454,7 +4487,7 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_tensor * q_cur,
         ggml_tensor * k_cur,
         ggml_tensor * v_cur,
-        ggml_tensor * kq_b,
+        ggml_tensor * bias_table,
         ggml_tensor * sinks,
             float     kq_scale,
             int       il) const {
@@ -4464,22 +4497,11 @@ ggml_tensor * llm_graph_context::build_attn(
 
     const auto & attn_mask = is_swa ? inp_attn->self_attn_mask_swa : inp_attn->self_attn_mask;
 
-    // TODO: support kv_rows - fill the distances over the kv_rows cell lists and pass the rows to build_attn_mha,
-    //       needs a kv_rows flash attention with a per-head mask (CUDA has none)
     GGML_ASSERT(attn_mask.rows == nullptr);
+    ggml_tensor * indices = is_swa ? inp->self_rel_pos_swa : inp->self_rel_pos;
 
-    // a mask per head, in the dense layout of the input mask, which flash attention takes in F16
-    ggml_tensor * kq_mask = attn_mask.raw;
-    if (kq_mask->type != GGML_TYPE_F32) {
-        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
-    }
-    kq_mask = ggml_add(ctx0, kq_b, kq_mask);
-    if (cparams.flash_attn) {
-        kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
-    }
-    cb(kq_mask, "kq_mask_rel_pos", il);
-
-    return build_attn_iswa_impl(*this, inp_attn, wo, wo_b, wo_s, q_cur, k_cur, v_cur, nullptr, kq_mask, nullptr, sinks, nullptr, kq_scale, il);
+    return build_attn_iswa_impl(*this, inp_attn, wo, wo_b, wo_s, q_cur, k_cur, v_cur, nullptr, attn_mask.raw, nullptr,
+            sinks, nullptr, kq_scale, il, bias_table, indices);
 }
 
 void llm_graph_context::build_dense_out(

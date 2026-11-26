@@ -7,6 +7,7 @@
  * the chat flows.
  */
 
+import { AGENTIC_ENABLED } from '#lib/constants/app.constants.ts';
 import {
 	buildBrowserInfoToolDefinition,
 	buildGetDatetimeToolDefinition,
@@ -27,6 +28,7 @@ import {
 	ToolSource
 } from '#lib/enums/index.ts';
 import { ToolsService } from '#lib/services/tools.service.ts';
+import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '#lib/stores/mcp/index.svelte.ts';
 import { modelsStore } from '#lib/stores/models/index.svelte.ts';
@@ -58,6 +60,8 @@ class ToolsStore {
 
 	/** Canonical flat list of tool entries with source metadata and stable keys, deduped by key */
 	get allTools(): ToolEntry[] {
+		if (!agenticMode.enabled) return [];
+
 		const entries: ToolEntry[] = [];
 		const seen = new SvelteSet<string>();
 		const push = (entry: ToolEntry) => {
@@ -233,7 +237,7 @@ class ToolsStore {
 	}
 
 	async fetchServerTools(): Promise<void> {
-		if (this._loading) return;
+		if (!AGENTIC_ENABLED || this._loading) return;
 
 		this._loading = true;
 		this._error = null;
@@ -243,6 +247,7 @@ class ToolsStore {
 			const toolInfos = await ToolsService.list();
 
 			this._serverTools = toolInfos.map((info) => info.definition);
+			agenticMode.serverHasTools = toolInfos.length > 0;
 			this.cwdAwareTools = new SvelteSet(
 				toolInfos.filter((info) => info.uses_cwd).map((info) => info.tool)
 			);
@@ -258,6 +263,7 @@ class ToolsStore {
 			}
 		} finally {
 			this._loading = false;
+			agenticMode.serverToolsKnown = true;
 		}
 	}
 
@@ -430,6 +436,9 @@ class ToolsStore {
 	 */
 	async resolveServerHome(): Promise<string | null> {
 		if (this._serverHome !== undefined) return this._serverHome;
+
+		// a plain chat never calls the server's tools
+		if (!agenticMode.enabled) return null;
 
 		try {
 			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {

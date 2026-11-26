@@ -305,6 +305,8 @@ export interface ApiLlamaCppServerProps {
 	webui_settings?: Record<string, string | number | boolean>;
 	ui_settings?: Record<string, string | number | boolean>;
 	cors_proxy_enabled?: boolean;
+	/** llama-server was started with `--ui-agent`: agent mode with no server tools and no proxy */
+	ui_agent?: boolean;
 }
 
 export interface ApiChatCompletionRequest {

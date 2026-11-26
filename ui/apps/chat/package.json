@@ -1,6 +1,6 @@
 {
 	"name": "@ggml-org/llama-chat",
-	"version": "0.1.0",
+	"version": "0.3.0",
 	"description": "Llama Chat, the chat app for llama.cpp. Run it with npx @ggml-org/llama-chat against any llama-server.",
 	"keywords": [
 		"llama.cpp",
@@ -43,6 +43,7 @@
 		"build": "npm run build-pwa-assets && vite build",
 		"build-pwa-assets": "pwa-assets-generator --root . --config pwa-assets.config.ts && pwa-assets-generator --root . --config pwa-assets-dark.config.ts && node scripts/make-icons-circular.js",
 		"dev": "bash scripts/dev.sh",
+		"dev:chat-only": "VITE_PUBLIC_AGENTIC=false bash scripts/dev.sh",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

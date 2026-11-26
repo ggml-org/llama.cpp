@@ -6,6 +6,8 @@
 	import * as Popover from '@ggml-org/llama-ui/ui/popover';
 	import { FolderOpen, X } from '@lucide/svelte';
 	import {
+		CHAT_FORM_CHIP_SPLIT,
+		CHAT_FORM_CHIP_TRANSITION_MS,
 		DEFAULT_MOBILE_BREAKPOINT,
 		HOME_TILDE,
 		SEARCH,
@@ -17,7 +19,13 @@
 	import { useScrollActiveRow } from '#lib/hooks/use-scroll-active-row.svelte.ts';
 	import { ToolsService } from '#lib/services/tools.service.ts';
 	import { conversationsStore, deviceStore, toolsStore } from '#lib/stores/index.ts';
-	import { abbreviateHome, runGlobSearchWithChildren } from '#lib/utils/index.ts';
+	import {
+		abbreviateHome,
+		runGlobSearchWithChildren,
+		toHomeRelativeQuery
+	} from '#lib/utils/index.ts';
+	import { page } from '$app/state';
+	import { cubicInOut } from 'svelte/easing';
 
 	// Microtask delay so the popover's focus scope tears down first.
 	const FOCUS_DELAY_MS = 0;
@@ -155,8 +163,10 @@
 			try {
 				// Generous limit: ranking is client-side, only the top
 				// MAX_RESULTS_SHOWN are shown.
+				// A plain query navigates home as if typed after `~/`; a query
+				// starting from a root or `~` navigates the absolute tree.
 				const res = await runGlobSearchWithChildren(
-					trimmed,
+					toHomeRelativeQuery(trimmed, homeBase),
 					homeBase ?? HOME_TILDE,
 					SEARCH.MAX_DEPTH,
 					SEARCH.LIMIT,
@@ -247,7 +257,7 @@
 			return;
 		}
 
-		setDirectory(value);
+		setDirectory(toHomeRelativeQuery(value, homeBase));
 		closePicker();
 	}
 
@@ -302,28 +312,69 @@
 		}
 	}
 
+	// the chip leaves with the directory it showed, instead of emptying while it fades out
+	let chipDirectory = $state<string | null>(null);
+
+	$effect(() => {
+		if (directory) chipDirectory = directory;
+	});
+
+	// A route change swaps the chip along with the whole form, which fades on its own: only a
+	// directory set or cleared on the same route animates. The effect runs before the DOM
+	// update that adds or removes the chip, so the transition sees the change as it starts.
+	const ROUTE_SWAP_WINDOW_MS = 100;
+	let routeChangedAt = -Infinity;
+
+	const routeJustChanged = () => performance.now() - routeChangedAt < ROUTE_SWAP_WINDOW_MS;
+
+	$effect.pre(() => {
+		void page.params.id;
+
+		routeChangedAt = performance.now();
+	});
+
+	// two steps: the box that holds the chip resizes to its full height first (the form below
+	// it follows), then the chip fades in; leaving runs the same curve backwards, so it fades
+	// out before the box closes
+	function chipTransition(node: Element) {
+		const height = node.getBoundingClientRect().height;
+
+		return {
+			css: (t: number) => {
+				const resize = cubicInOut(Math.min(t / CHAT_FORM_CHIP_SPLIT, 1));
+				const fade = Math.max((t - CHAT_FORM_CHIP_SPLIT) / (1 - CHAT_FORM_CHIP_SPLIT), 0);
+
+				return `overflow: hidden; height: ${height * resize}px; opacity: ${fade};`;
+			},
+			delay: 0,
+			duration: routeJustChanged() ? 0 : CHAT_FORM_CHIP_TRANSITION_MS
+		};
+	}
+
 	let innerWidth = $state(0);
 	const showTooltip = $derived(innerWidth > DEFAULT_MOBILE_BREAKPOINT);
 </script>
 
 {#if showChip}
-	<button
-		class={[
-			'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
-			className
-		]}
-		{disabled}
-		onclick={onOpen}
-		type="button"
-	>
-		<ChatFormCurrentWorkingDirectoryChip
-			{directory}
+	<div transition:chipTransition class="grid">
+		<button
+			class={[
+				'justify-self-start flex min-w-0 w-auto items-center gap-1 mt-1.5 py-1 px-2 backdrop-blur-2xl rounded-md',
+				className
+			]}
 			{disabled}
-			{homeBase}
-			onClear={handleDismiss}
-			{showTooltip}
-		/>
-	</button>
+			onclick={onOpen}
+			type="button"
+		>
+			<ChatFormCurrentWorkingDirectoryChip
+				directory={directory ?? chipDirectory}
+				{disabled}
+				{homeBase}
+				onClear={handleDismiss}
+				{showTooltip}
+			/>
+		</button>
+	</div>
 {/if}
 
 <!-- the drawer's version is roomier: the header's inset, rows spaced for a finger and

@@ -11,6 +11,7 @@
 export { getAuthHeaders, getJsonHeaders, sanitizeHeaders } from './api-headers';
 export { ApiError, apiDelete, apiFetch, apiFetchWithParams, apiPost } from './api-fetch';
 export { withBase } from './base-path';
+export { getServerBase, loadServerConfig, serverUrl, setServerBase } from './server-config';
 export { validateApiKey } from './api-key-validation';
 
 // Attachment utilities
@@ -50,7 +51,12 @@ export {
 } from './code';
 
 // Config helpers
-export { setConfigValue, getConfigValue, configToParameterRecord } from './config-helpers';
+export {
+	setConfigValue,
+	getConfigValue,
+	configToParameterRecord,
+	isSettingShownOn
+} from './config-helpers';
 
 // CORS Proxy
 export { buildProxiedIconUrl, buildProxiedUrl, buildProxiedHeaders } from './cors-proxy';
@@ -63,6 +69,7 @@ export {
 	filterModelOptions,
 	groupFavoriteOptions,
 	groupModelOptions,
+	pickQuickModels,
 	windowLocalGroups,
 	type GroupedModelOptions,
 	type ModelItem,
@@ -111,6 +118,7 @@ export {
 	formatJsonPretty,
 	formatTime,
 	formatLocalIso,
+	formatElapsedTime,
 	formatPerformanceTime,
 	formatRelativeTime,
 	formatAttachmentText
@@ -226,6 +234,7 @@ export {
 // Working-directory picker search helpers
 export {
 	splitPathQuery,
+	toHomeRelativeQuery,
 	buildCaseInsensitiveGlob,
 	buildGlobSearchArgs,
 	rankEntries,
@@ -295,7 +304,6 @@ export { computeLineDiff, prefixFor, renderUnifiedDiff, type DiffLine } from './
 
 // Partial-incremental JSON parser for streaming tool arguments
 export { memoizeBounded } from './memoize-bounded';
-export { parsePartialJsonArgs } from './parse-partial-json-args';
 
 // `exec_shell_command` result parsing
 export { parseExecShellCommandError } from './parse-exec-shell-error';
@@ -353,7 +361,7 @@ export { tryParseToolResultObject } from './tool-call-meta';
 // Per-tool UI metadata (label + icon) used by the tool-call chrome.
 // Re-exported through $lib/utils so renderer components can read the
 // label without depending on $lib/constants directly.
-export { getToolUi } from './tool-ui';
+export { getToolArgNames, getToolDisplay, getToolUi } from './tool-ui';
 
 // Chat command picker
 

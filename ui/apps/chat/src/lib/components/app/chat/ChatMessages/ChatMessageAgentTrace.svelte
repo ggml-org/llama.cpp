@@ -2,12 +2,9 @@
 	import ChatMessageToolCallBlock from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallBlock.svelte';
 	import ChatMessageToolCallGroup from './ChatMessage/ChatMessageToolCall/ChatMessageToolCallGroup.svelte';
 	import { parseExecShellCommandMeta } from './ChatMessage/ChatMessageToolCall/parsers/exec-shell-command';
-	import {
-		groupToolCallRuns,
-		isToolCallSection
-	} from './ChatMessage/ChatMessageToolCall/parsers/tool-call-phrasing';
 	import { setToolCallElapsedContext } from './ChatMessage/ChatMessageToolCall/tool-call-elapsed';
 	import ChatMessageReasoningBlock from './ChatMessageReasoningBlock.svelte';
+	import { groupToolCallRuns, isToolCallStep } from '@ggml-org/llama-harness';
 	import {
 		ChatMessageActionCardContinueRequest,
 		ChatMessageActionCardPermissionRequest,
@@ -168,7 +165,7 @@
 			result.push(groupToolCallRuns(sections, indices, TOOL_CALL_GROUP_MIN_CALLS));
 
 		for (let i = 0; i < sections.length; i++) {
-			const isTool = isToolCallSection(sections[i]);
+			const isTool = isToolCallStep(sections[i]);
 
 			// a turn ends where its tool calls do
 			if (!isTool && prevWasTool && indices.length > 0) {
@@ -190,19 +187,55 @@
 
 	const lastItem = $derived(turns.at(-1)?.at(-1));
 
-	// The live task timer goes on the last row while it is a tool row: a group
-	// takes it as a prop, a single call reads it from context by its id.
-	const taskStartedAt = $derived(isStreaming ? agenticStore.getStartedAt(message.convId) : null);
+	// Each tool row times its own loop of calls, from its first call's start
+	// to its last call's end; the run stamps those times on the root message's
+	// timings, and a call still running reads its start from the live session.
+	const callTimings = $derived(
+		new Map(
+			(message?.timings?.agentic?.toolCalls ?? []).flatMap((timing) =>
+				timing.id ? [[timing.id, timing] as const] : []
+			)
+		)
+	);
 
+	function callStartedAt(toolCallId: string | undefined): number | null {
+		if (!toolCallId) return null;
+
+		return (
+			callTimings.get(toolCallId)?.startedAt ??
+			(isStreaming ? agenticStore.getToolCallStartedAt(message.convId, toolCallId) : null)
+		);
+	}
+
+	/** The loop of a group: its start, and its end once done ( null while it runs ). */
+	function loopTiming(item: number[]): { startedAt: number; endedAt: number | null } | null {
+		// a group can open with the reasoning that led to its first call
+		const ids = item.flatMap((index) => sections[index]?.toolCallId ?? []);
+		const startedAt = callStartedAt(ids[0]);
+
+		if (startedAt === null) return null;
+
+		// the last row of a live reply is the loop still running
+		if (isStreaming && item === lastItem) return { endedAt: null, startedAt };
+
+		const ends = ids.map((id) => callTimings.get(id)?.endedAt);
+
+		return ends.every((end) => end !== undefined)
+			? { endedAt: Math.max(...(ends as number[])), startedAt }
+			: null;
+	}
+
+	// a single call closing a live reply reads its timer from context by its id
 	setToolCallElapsedContext(() => {
-		if (taskStartedAt === null || lastItem === undefined || Array.isArray(lastItem)) return null;
+		if (!isStreaming || lastItem === undefined || Array.isArray(lastItem)) return null;
 
 		const toolCallId = sections[lastItem]?.toolCallId;
+		const startedAt = callStartedAt(toolCallId);
 
-		return toolCallId ? { startedAt: taskStartedAt, toolCallId } : null;
+		return toolCallId && startedAt !== null ? { startedAt, toolCallId } : null;
 	});
 
-	const lastToolIndex = $derived(sections.findLastIndex((section) => isToolCallSection(section)));
+	const lastToolIndex = $derived(sections.findLastIndex((section) => isToolCallStep(section)));
 
 	// The status row shows only while nothing else in the reply is moving: a
 	// running row, a permission card or streaming text already says what is
@@ -303,8 +336,10 @@
 {#snippet renderItem(item: TraceItem)}
 	{#if Array.isArray(item)}
 		{@const groupOpen = isGroupExpanded(item)}
+		{@const loop = loopTiming(item)}
 		<ChatMessageToolCallGroup
-			elapsedStartedAt={item === lastItem ? taskStartedAt : null}
+			elapsedEndedAt={loop?.endedAt ?? null}
+			elapsedStartedAt={loop?.startedAt ?? null}
 			executingToolCallId={currentlyExecutingToolCallId}
 			{isStreaming}
 			onToggle={() => toggleGroupExpanded(item)}

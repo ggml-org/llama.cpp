@@ -157,6 +157,9 @@ hy_v4               ,0   ,any     ,MUL+ADD                     ,      2
 hy_v4               ,0   ,any     ,NORM+MUL+ADD                ,      1
 hy_v4               ,0   ,any     ,RMS_NORM+MUL                ,      9
 hy_v4               ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      1
+hy_v4_flash         ,0   ,any     ,MUL+ADD                     ,      6
+hy_v4_flash         ,0   ,any     ,RMS_NORM+MUL                ,     32
+hy_v4_flash         ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      3
 inkling2            ,0   ,any     ,MUL+ADD                     ,      6
 inkling2            ,0   ,any     ,RMS_NORM+MUL                ,     10
 inkling2            ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS+SUM_ROWS+SCALE+DIV+SCALE,      3
@@ -331,6 +334,11 @@ qwen4exp            ,0   ,any     ,RMS_NORM+MUL                ,     13
 qwen4exp            ,0   ,any     ,RMS_NORM+SCALE              ,      2
 qwen4exp            ,0   ,any     ,SOFT_MAX+ARGSORT+GET_ROWS+SUM_ROWS+CLAMP+DIV,      2
 qwen4exp            ,0   ,any     ,SSM_CONV+UNARY              ,      1
+raon1               ,0   ,any     ,ADD+ADD+ADD                 ,      1
+raon1               ,0   ,any     ,GATED_DELTA_NET+CPY         ,      1
+raon1               ,0   ,any     ,MUL+ADD                     ,      2
+raon1               ,0   ,any     ,RMS_NORM+MUL                ,      8
+raon1               ,0   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS+SUM_ROWS+SCALE+DIV,      1
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
 refact              ,0   ,any     ,RMS_NORM+MUL                ,      5
 ricursive           ,0   ,any     ,RMS_NORM+MUL                ,      9

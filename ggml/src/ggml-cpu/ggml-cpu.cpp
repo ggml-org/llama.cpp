@@ -398,6 +398,7 @@ static void ggml_backend_cpu_device_get_props(ggml_backend_dev_t dev, struct ggm
         /* .buffer_from_host_ptr  = */ true,
         /* .events                = */ false,
         /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 
@@ -422,10 +423,6 @@ static ggml_backend_buffer_t ggml_backend_cpu_device_buffer_from_host_ptr(ggml_b
 }
 
 static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const struct ggml_tensor * op) {
-    if (ggml_flash_attn_ext_has_indexed_bias(op)) {
-        return false;
-    }
-
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * src1 = op->src[1];
 
@@ -691,6 +688,9 @@ static void * ggml_backend_cpu_get_proc_address(ggml_backend_reg_t reg, const ch
     }
     if (strcmp(name, "ggml_threadpool_free") == 0) {
         return (void *)ggml_threadpool_free;
+    }
+    if (strcmp(name, "ggml_threadpool_pause") == 0) {
+        return (void *)ggml_threadpool_pause;
     }
     if (strcmp(name, "ggml_backend_cpu_set_threadpool") == 0) {
         return (void *)ggml_backend_cpu_set_threadpool;

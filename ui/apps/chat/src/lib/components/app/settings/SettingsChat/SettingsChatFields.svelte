@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { Button } from '@ggml-org/llama-ui/ui/button';
 	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
 	import { Input } from '@ggml-org/llama-ui/ui/input';
 	import { Label } from '@ggml-org/llama-ui/ui/label';
@@ -6,15 +7,18 @@
 	import * as Select from '@ggml-org/llama-ui/ui/select';
 	import { Textarea } from '@ggml-org/llama-ui/ui/textarea';
 	import { FlaskConical, RotateCcw } from '@lucide/svelte';
+	import McpLogo from '#lib/components/app/mcp/McpLogo.svelte';
 	import { SettingsChatParameterSourceIndicator } from '#lib/components/app/settings/index.ts';
 	import {
 		ICON_CLASS_DEFAULT,
 		ICON_CLASS_SM,
+		MANAGE_MCP_SERVERS_LABEL,
 		SETTING_CONFIG_INFO,
 		SETTINGS_KEYS
 	} from '#lib/constants/index.ts';
 	import { SettingsFieldType } from '#lib/enums/settings.enums.ts';
-	import { modelsStore, serverStore, settingsStore } from '#lib/stores/index.ts';
+	import { useSettingsFieldDefaults } from '#lib/hooks/use-settings-field-defaults.svelte.ts';
+	import { settingsStore, uiStore } from '#lib/stores/index.ts';
 	import { normalizeFloatingPoint } from '#lib/utils/precision.ts';
 	import type { Component } from 'svelte';
 
@@ -27,35 +31,8 @@
 
 	let { fields, localConfig, onConfigChange, onThemeChange }: Props = $props();
 
-	// discover needs the hub metadata reads, and opens from the Models page, so both checkboxes
-	// are read-only while discover is on
-	let discoverOn = $derived(Boolean(localConfig[SETTINGS_KEYS.ENABLE_DISCOVER_MODELS]));
-
-	function isLockedField(key: string): boolean {
-		return (
-			discoverOn &&
-			(key === SETTINGS_KEYS.USE_HUGGING_FACE_HUB || key === SETTINGS_KEYS.SHOW_MODELS_MANAGER)
-		);
-	}
-
-	let currentModelParams = $derived.by(() => {
-		void modelsStore.props.cacheVersion;
-
-		if (serverStore.isRouterMode) {
-			const currentModelName = modelsStore.selectedModelName;
-
-			if (currentModelName) {
-				const currentModelProps = modelsStore.props.getModelProps(currentModelName);
-
-				return (currentModelProps?.default_generation_settings?.params ?? {}) as Record<
-					string,
-					unknown
-				>;
-			}
-		}
-
-		return (serverStore.defaultParams ?? {}) as Record<string, unknown>;
-	});
+	const fieldDefaults = useSettingsFieldDefaults(() => localConfig);
+	let currentModelParams = $derived(fieldDefaults.serverDefaults);
 </script>
 
 {#each fields as field (field.key)}
@@ -63,23 +40,7 @@
 		<div class={field.dependsOn ? 'space-y-2 pl-6' : 'space-y-2'}>
 			{#if field.type === SettingsFieldType.INPUT}
 				{@const currentValue = String(localConfig[field.key] ?? '')}
-				{@const serverDefault = currentModelParams[field.key]}
-				{@const isCustomRealTime = (() => {
-					if (serverDefault == null) return false;
-
-					if (currentValue === '') return false;
-
-					const numericInput = parseFloat(currentValue);
-					const normalizedInput = !isNaN(numericInput)
-						? Math.round(numericInput * 1000000) / 1000000
-						: currentValue;
-					const normalizedDefault =
-						typeof serverDefault === 'number'
-							? Math.round(serverDefault * 1000000) / 1000000
-							: serverDefault;
-
-					return normalizedInput !== normalizedDefault;
-				})()}
+				{@const isCustomRealTime = fieldDefaults.isCustom(field)}
 
 				<div class="flex items-center gap-2">
 					<Label class="flex items-center gap-1.5 text-label" for={field.key}>
@@ -97,7 +58,7 @@
 
 				<div class="relative w-full">
 					<Input
-						autocomplete={field.isPrivate ? 'new-password' : undefined}
+						autocomplete={field.isPrivate ? 'new-password' : 'off'}
 						id={field.key}
 						type={field.isPrivate ? 'password' : field.isPositiveInteger ? 'number' : 'text'}
 						{...field.isPositiveInteger
@@ -151,7 +112,7 @@
 					class="min-h-40 w-full md:max-w-3xl"
 					id={field.key}
 					oninput={(e) => onConfigChange(field.key, e.currentTarget.value)}
-					placeholder=""
+					placeholder={field.placeholder ?? ''}
 					value={String(localConfig[field.key] ?? '')}
 				/>
 
@@ -181,14 +142,7 @@
 						opt.value === localConfig[field.key]
 				)}
 				{@const currentValue = localConfig[field.key]}
-				{@const serverDefault = currentModelParams[field.key]}
-				{@const isCustomRealTime = (() => {
-					if (serverDefault == null) return false;
-
-					if (currentValue === '' || currentValue === undefined) return false;
-
-					return currentValue !== serverDefault;
-				})()}
+				{@const isCustomRealTime = fieldDefaults.isCustom(field)}
 
 				<div class="flex items-center gap-2">
 					<Label class="flex items-center gap-1.5 text-label" for={field.key}>
@@ -317,14 +271,14 @@
 					<Checkbox
 						checked={Boolean(localConfig[field.key])}
 						class="mt-1"
-						disabled={isLockedField(field.key)}
+						disabled={fieldDefaults.isLocked(field.key)}
 						id={field.key}
 						onCheckedChange={(checked) => onConfigChange(field.key, checked)}
 					/>
 
 					<div class="space-y-1">
 						<label
-							class="flex items-center gap-1.5 pt-1 pb-0.5 text-label leading-none {isLockedField(
+							class="flex items-center gap-1.5 pt-1 pb-0.5 text-label leading-none {fieldDefaults.isLocked(
 								field.key
 							)
 								? 'cursor-default opacity-80'
@@ -342,6 +296,19 @@
 							<p class="text-caption text-muted-foreground">
 								{field.help || SETTING_CONFIG_INFO[field.key]}
 							</p>
+						{/if}
+
+						{#if field.key === SETTINGS_KEYS.ENABLE_MCP && Boolean(localConfig[field.key])}
+							<Button
+								class="mt-2"
+								onclick={() => uiStore.openMcpServers()}
+								size="sm"
+								variant="outline"
+							>
+								<McpLogo class="size-icon-md" />
+
+								{MANAGE_MCP_SERVERS_LABEL}
+							</Button>
 						{/if}
 					</div>
 				</div>

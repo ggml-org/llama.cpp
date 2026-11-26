@@ -1536,13 +1536,15 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
     const int ntiles_dst = args.ntj * nti * ntzw;
     const int tiles_nwaves = (ntiles_dst + nsm - 1) / nsm;
     const int tiles_efficiency_percent = 100 * ntiles_dst / (nsm*tiles_nwaves);
-    const int stream_k_blocks = GGML_CUDA_CC_IS_GCN(cc) ? nsm * config.occupancy : nsm;
+    // GCN and CDNA configs run several blocks per CU, so stream-k uses one block per occupancy slot.
+    const bool multi_block_cu = GGML_CUDA_CC_IS_GCN(cc) || GGML_CUDA_CC_IS_CDNA(cc);
+    const int stream_k_blocks = multi_block_cu ? nsm * config.occupancy : nsm;
 
     const int k_chunks = (args.ncols_x + config.K_vram - 1) / config.K_vram;
     // Use tiling when Stream-K is unlikely to improve performance:
     // With at least 2 full waves of tiles, tiling already saturates the device and Stream-K only adds overhead.
     // With few K chunks per tile, the extra parallelism of Stream-K is not needed.
-    const bool force_tiling = GGML_CUDA_CC_IS_GCN(cc) &&
+    const bool force_tiling = multi_block_cu &&
         (tiles_efficiency_percent >= 90 || ntiles_dst >= 2*stream_k_blocks ||
          k_chunks <= config.occupancy * tiles_nwaves);
 
@@ -1563,7 +1565,7 @@ static void launch_mul_mat_q(ggml_backend_cuda_context & ctx, const mmq_args & a
 
     const int nwork = ntiles_dst * k_chunks; // Maximum number of CUDA blocks that can do useful work.
     int nblocks_stream_k = GGML_CUDA_CC_IS_NVIDIA(cc) && tiles_efficiency_percent >= 90 ? ntiles_dst : std::min(stream_k_blocks, nwork);
-    if (GGML_CUDA_CC_IS_GCN(cc) && ntiles_dst < nsm) {
+    if (multi_block_cu && ntiles_dst < nsm) {
         // Use a 512-thread budget per CU when the tiles do not fill the device.
         nblocks_stream_k = std::min(nwork, nsm * std::max(1, 512 / config.nthreads));
     }

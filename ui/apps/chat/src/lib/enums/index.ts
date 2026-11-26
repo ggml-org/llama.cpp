@@ -10,6 +10,8 @@ export {
 	AgenticSectionType,
 	ContinueIntentKind,
 	DiffLineKind,
+	HarnessEventType,
+	InferenceEventType,
 	ToolResultKind,
 	ToolCallType
 } from './agentic.enums';
@@ -29,7 +31,7 @@ export {
 	FileMentionEntryType
 } from './chat.enums';
 
-export { SessionRecordType } from './conversation-import.enums';
+export { DataExportScope, SessionRecordType } from './conversation-import.enums';
 
 export { BooleanString } from './boolean-string.enums';
 
@@ -92,7 +94,13 @@ export {
 	ServerModelsSseEventType
 } from './llama-server.enums';
 
-export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
+export {
+	ParameterSource,
+	SettingsFieldBlock,
+	SettingsFieldType,
+	SettingsPlatform,
+	SyncableParameterType
+} from './settings.enums';
 
 export {
 	ColorLevel,
@@ -116,7 +124,6 @@ export {
 	GlobSearchType,
 	SearchChatsMessageSelection,
 	SearchChatsOrder,
-	ToolCallSummaryKind,
 	ToolSource,
 	ToolPermissionDecision,
 	ToolResponseField
@@ -125,3 +132,5 @@ export {
 export { SplashOrientation } from './splash.enums';
 
 export { ChatFormVoiceState, VoiceInputMode, VoiceMode, VoiceModelRole } from './voice.enums';
+
+export { AddSheetPage, ModelsSheetPage, SettingsSheetPage } from './sheet.enums';
