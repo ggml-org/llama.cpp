@@ -1,8 +1,7 @@
 import { clampPdfDpi } from './pdf-dpi';
 import { convertPDFToImage, convertPDFToText } from './pdf-processing';
-import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
+import { prepareImagePreview } from './process-uploaded-files';
 import { isLikelyTextFile, readFileAsText } from './text-files';
-import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { AttachmentType, FileTypeCategory, SpecialFileType } from '#lib/enums/index.ts';
 import { modelsStore } from '#lib/stores/models/index.svelte.ts';
@@ -29,6 +28,7 @@ function readFileAsBase64(file: File): Promise<string> {
 		};
 
 		reader.onerror = () => reject(reader.error);
+		reader.onabort = () => reject(new DOMException('File read aborted', 'AbortError'));
 
 		reader.readAsDataURL(file);
 	});
@@ -39,7 +39,8 @@ export async function parseFilesToMessageExtras(
 	activeModelId?: string
 ): Promise<FileProcessingResult> {
 	const extras: DatabaseMessageExtra[] = [];
-	const emptyFiles: string[] = [];
+	const emptyFiles: FileProcessingResult['emptyFiles'] = [];
+	const failedFiles: string[] = [];
 
 	for (const file of files) {
 		if (file.type === SpecialFileType.MCP_PROMPT && file.mcpPrompt) {
@@ -57,29 +58,13 @@ export async function parseFilesToMessageExtras(
 		}
 
 		if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
-			if (file.preview) {
-				let base64Url = file.preview;
+			try {
+				const base64Url = await prepareImagePreview(file.file, file.preview);
 
-				if (isSvgMimeType(file.type)) {
-					try {
-						base64Url = await svgBase64UrlToPngDataURL(base64Url);
-					} catch (error) {
-						console.error('Failed to convert SVG to PNG for database storage:', error);
-					}
-				} else if (isWebpMimeType(file.type)) {
-					try {
-						base64Url = await webpBase64UrlToPngDataURL(base64Url);
-					} catch (error) {
-						console.error('Failed to convert WebP to PNG for database storage:', error);
-					}
-				}
-
-				extras.push({
-					base64Url,
-					name: file.name,
-					size: file.size,
-					type: AttachmentType.IMAGE
-				});
+				extras.push({ base64Url, name: file.name, size: file.size, type: AttachmentType.IMAGE });
+			} catch (error) {
+				console.error(`Failed to process image file ${file.name}:`, error);
+				failedFiles.push(file.name);
 			}
 		} else if (getFileTypeCategory(file.type) === FileTypeCategory.AUDIO) {
 			// Process audio files (MP3 and WAV)
@@ -103,6 +88,7 @@ export async function parseFilesToMessageExtras(
 				});
 			} catch (error) {
 				console.error(`Failed to process audio file ${file.name}:`, error);
+				failedFiles.push(file.name);
 			}
 		} else if (getFileTypeCategory(file.type) === FileTypeCategory.VIDEO) {
 			// Process video files (MP4, etc)
@@ -118,6 +104,7 @@ export async function parseFilesToMessageExtras(
 				});
 			} catch (error) {
 				console.error(`Failed to process video file ${file.name}:`, error);
+				failedFiles.push(file.name);
 			}
 		} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
 			try {
@@ -212,6 +199,7 @@ export async function parseFilesToMessageExtras(
 				}
 			} catch (error) {
 				console.error(`Failed to process PDF file ${file.name}:`, error);
+				failedFiles.push(file.name);
 			}
 		} else {
 			try {
@@ -220,7 +208,7 @@ export async function parseFilesToMessageExtras(
 				// Check if file is empty
 				if (content.trim() === '') {
 					console.warn(`File ${file.name} is empty and will be skipped`);
-					emptyFiles.push(file.name);
+					emptyFiles.push({ id: file.id, name: file.name });
 				} else if (isLikelyTextFile(content)) {
 					extras.push({
 						content: content,
@@ -233,9 +221,14 @@ export async function parseFilesToMessageExtras(
 				}
 			} catch (error) {
 				console.error(`Failed to read file ${file.name}:`, error);
+				failedFiles.push(file.name);
 			}
 		}
 	}
 
-	return { emptyFiles, extras };
+	return { emptyFiles, extras, failedFiles };
+}
+
+export function reportAttachmentReadFailures(failedFiles: string[]) {
+	toast.error(`Could not read: ${failedFiles.join(', ')}. Retry or remove these files.`);
 }

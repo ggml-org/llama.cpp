@@ -6,9 +6,21 @@
 	import { getChatMessageEditContext } from '#lib/contexts/index.ts';
 	import { KeyboardKey, MessageRole } from '#lib/enums/index.ts';
 	import { chatStore } from '#lib/stores/index.ts';
-	import { processFilesToChatUploaded } from '#lib/utils/browser-only.ts';
+	import {
+		parseFilesToMessageExtras,
+		processFilesToChatUploaded,
+		reportAttachmentReadFailures
+	} from '#lib/utils/browser-only.ts';
+	import { onDestroy } from 'svelte';
+	import { toast } from 'svelte-sonner';
 
 	const editCtx = getChatMessageEditContext();
+	let preparing = false;
+	let mounted = true;
+
+	onDestroy(() => {
+		mounted = false;
+	});
 
 	let saveWithoutRegenerate = $state(false);
 	let showDiscardDialog = $state(false);
@@ -53,8 +65,46 @@
 		}
 	}
 
-	function handleSubmit() {
-		if (!canSubmit) return;
+	async function handleSubmit() {
+		if (!canSubmit || preparing) return;
+
+		const files = editCtx.editedUploadedFiles;
+		const extras = editCtx.editedExtras;
+
+		if (isUserMessage && files.length) {
+			const content = editCtx.editedContent;
+			const saveOnly = saveWithoutRegenerate;
+
+			preparing = true;
+
+			try {
+				const result = await parseFilesToMessageExtras($state.snapshot(files));
+
+				if (!mounted || !editCtx.isEditing) return;
+
+				if (result.failedFiles.length) {
+					reportAttachmentReadFailures(result.failedFiles);
+
+					return;
+				}
+
+				if (
+					content !== editCtx.editedContent ||
+					extras !== editCtx.editedExtras ||
+					files !== editCtx.editedUploadedFiles ||
+					saveOnly !== saveWithoutRegenerate
+				) {
+					toast.info('Edit changed while preparing attachments. Save again.');
+
+					return;
+				}
+
+				editCtx.setExtras([...extras, ...result.extras]);
+				editCtx.setUploadedFiles([]);
+			} finally {
+				preparing = false;
+			}
+		}
 
 		if (isUserMessage && saveWithoutRegenerate && editCtx.showSaveOnlyOption) {
 			editCtx.saveOnly();
@@ -65,9 +115,6 @@
 
 			editCtx.save();
 		}
-
-		saveWithoutRegenerate = false;
-		branchAfterEdit = false;
 	}
 
 	function handleAttachmentRemove(index: number) {

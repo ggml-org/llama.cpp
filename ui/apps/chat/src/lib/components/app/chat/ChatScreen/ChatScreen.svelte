@@ -40,6 +40,7 @@
 		settingsStore,
 		uiStore
 	} from '#lib/stores/index.ts';
+	import type { FileProcessingResult } from '#lib/types/index.ts';
 	import { parseFilesToMessageExtras } from '#lib/utils/browser-only.ts';
 	import { disableScrollHandling, onNavigate } from '$app/navigation';
 	import { page } from '$app/state';
@@ -115,46 +116,37 @@
 		showDeleteDialog = false;
 	}
 
-	async function handleSendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		// before the cleared form collapses: it fades into the conversation from the bottom
-		isFormHeldAtBottom = isEmpty && uiStore.isComposerExpanded;
-
-		try {
-			return await sendMessage(message, files);
-		} finally {
-			// the send failed or was refused: the new chat stays, and so may the centering
-			if (isEmpty) isFormHeldAtBottom = false;
-		}
-	}
-
-	async function sendMessage(message: string, files?: ChatUploadedFile[]): Promise<boolean> {
-		const plainFiles = files ? $state.snapshot(files) : undefined;
-		const result = plainFiles
-			? await parseFilesToMessageExtras(plainFiles, activeModel.activeModelId ?? undefined)
+	async function handleSendMessage(
+		message: string,
+		files: ChatUploadedFile[],
+		accept: (result?: FileProcessingResult) => boolean
+	) {
+		// Capture the expanded composer before an accepted send clears it.
+		const holdAtBottom = isEmpty && uiStore.isComposerExpanded;
+		const result = files.length
+			? await parseFilesToMessageExtras(
+					$state.snapshot(files),
+					activeModel.activeModelId ?? undefined
+				)
 			: undefined;
 
-		if (result?.emptyFiles && result.emptyFiles.length > 0) {
-			emptyFileNames = result.emptyFiles;
+		if (!accept(result)) return;
+
+		if (result?.emptyFiles.length) {
+			emptyFileNames = [...new Set(result.emptyFiles.map((file) => file.name))];
 			showEmptyFileDialog = true;
 
-			if (files) {
-				const emptyFileNamesSet = new Set(result.emptyFiles);
-
-				fileUpload.uploadedFiles = fileUpload.uploadedFiles.filter(
-					(file) => !emptyFileNamesSet.has(file.name)
-				);
-			}
-
-			return false;
+			return;
 		}
 
-		// Sending re-arms following: the message glides to the top of the screen
-		// and the reply streams in under it.
+		isFormHeldAtBottom = holdAtBottom;
 		stick.glideToBottom();
 
-		await chatStore.sendMessage(message, result?.extras);
-
-		return true;
+		try {
+			await chatStore.sendMessage(message, result?.extras);
+		} finally {
+			if (isEmpty) isFormHeldAtBottom = false;
+		}
 	}
 
 	let lastScrolledConversationId: string | null = null;

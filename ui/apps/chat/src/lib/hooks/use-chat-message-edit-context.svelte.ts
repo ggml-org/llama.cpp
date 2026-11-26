@@ -1,6 +1,5 @@
 import { setChatMessageEditContext } from '#lib/contexts/index.ts';
 import { MessageRole } from '#lib/enums/index.ts';
-import { parseFilesToMessageExtras } from '#lib/utils/convert-files-to-extra.ts';
 
 interface UseChatMessageEditContextOptions {
 	getContent: () => string;
@@ -22,22 +21,12 @@ export function useChatMessageEditContext(options: UseChatMessageEditContextOpti
 		isEditing = true;
 	}
 
-	async function handleSaveEdit() {
+	function handleSaveEdit() {
 		const trimmed = editedContent.trim();
 
 		if (!trimmed && editedExtras.length === 0 && editedUploadedFiles.length === 0) return;
 
-		let finalExtras: DatabaseMessageExtra[] = $state.snapshot(editedExtras);
-
-		if (editedUploadedFiles.length > 0) {
-			const plainFiles = $state.snapshot(editedUploadedFiles);
-			const result = await parseFilesToMessageExtras(plainFiles);
-			const newExtras = result?.extras || [];
-
-			finalExtras = [...finalExtras, ...newExtras];
-		}
-
-		options.onSave(trimmed, finalExtras.length > 0 ? finalExtras : undefined);
+		options.onSave(trimmed, editedExtras.length > 0 ? $state.snapshot(editedExtras) : undefined);
 		isEditing = false;
 	}
 

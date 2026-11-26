@@ -27,7 +27,6 @@
 		ChatMessageDeletionInfo,
 		DatabaseMessageExtraMcpPrompt
 	} from '#lib/types/index.ts';
-	import { parseFilesToMessageExtras } from '#lib/utils/browser-only.ts';
 	import { deriveAgenticSections } from '#lib/utils/index.ts';
 	import { goto } from '$app/navigation';
 
@@ -379,9 +378,7 @@
 
 			focusMainChatForm();
 		} else if (message.role === MessageRole.USER) {
-			const finalExtras = await getMergedExtras();
-
-			chatActions.editWithBranching(message, editedContent.trim(), finalExtras);
+			chatActions.editWithBranching(message, editedContent.trim(), editedExtras);
 		} else {
 			// For assistant messages, preserve exact content including trailing whitespace
 			// This is important for the Continue feature to work properly
@@ -393,28 +390,14 @@
 		editedUploadedFiles = [];
 	}
 
-	async function handleSaveEditOnly() {
+	function handleSaveEditOnly() {
 		if (message.role === MessageRole.USER) {
 			// For user messages, trim to avoid accidental whitespace
-			const finalExtras = await getMergedExtras();
-
-			chatActions.editUserMessagePreserveResponses(message, editedContent.trim(), finalExtras);
+			chatActions.editUserMessagePreserveResponses(message, editedContent.trim(), editedExtras);
 		}
 
 		isEditing = false;
 		editedUploadedFiles = [];
-	}
-
-	async function getMergedExtras(): Promise<DatabaseMessageExtra[]> {
-		if (editedUploadedFiles.length === 0) {
-			return editedExtras;
-		}
-
-		const plainFiles = $state.snapshot(editedUploadedFiles);
-		const result = await parseFilesToMessageExtras(plainFiles);
-		const newExtras = result?.extras || [];
-
-		return [...editedExtras, ...newExtras];
 	}
 
 	function handleShowDeleteDialogChange(show: boolean) {

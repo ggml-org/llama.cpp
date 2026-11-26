@@ -4,10 +4,13 @@
 	import { MessageRole } from '#lib/enums/index.ts';
 	import { useDraftMessages } from '#lib/hooks/use-draft-messages.svelte.ts';
 	import { chatStore, conversationsStore, deviceStore, settingsStore } from '#lib/stores/index.ts';
+	import type { FileProcessingResult } from '#lib/types/index.ts';
+	import { reportAttachmentReadFailures } from '#lib/utils/browser-only.ts';
 	import { hapticTap, shouldTypeToFocus } from '#lib/utils/index.ts';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
-	import { onMount, tick } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
+	import { toast } from 'svelte-sonner';
 
 	interface Props {
 		class?: string;
@@ -15,7 +18,11 @@
 		isLoading?: boolean;
 		onFileRemove?: (fileId: string) => void;
 		onFileUpload?: (files: File[]) => void;
-		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
+		onSend?: (
+			message: string,
+			files: ChatUploadedFile[],
+			accept: (result?: FileProcessingResult) => boolean
+		) => Promise<void>;
 		onStop?: () => void;
 		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
 		uploadedFiles?: ChatUploadedFile[];
@@ -64,6 +71,7 @@
 	});
 	let hasLoadingAttachments = $derived(uploadedFiles.some((f) => f.isLoading));
 	let message = $state('');
+	let pendingFiles: ChatUploadedFile[] | undefined;
 	let previousIsLoading = $derived(isLoading);
 
 	let isSystemMode = $state(false);
@@ -84,7 +92,12 @@
 	async function handleSubmit() {
 		if (isSystemMode) return handleSystemSubmit();
 
-		if ((!message.trim() && uploadedFiles.length === 0) || disabled || hasLoadingAttachments)
+		if (
+			(!message.trim() && uploadedFiles.length === 0) ||
+			disabled ||
+			hasLoadingAttachments ||
+			pendingFiles
+		)
 			return;
 
 		if (!chatFormRef?.checkModelSelected()) return;
@@ -93,21 +106,51 @@
 		// the tap or keypress that sent it, which iOS needs to play the tick
 		hapticTap();
 
-		const messageToSend = message.trim();
-		const filesToSend = [...uploadedFiles];
+		const originalMessage = message;
+		const originalChatId = chatId;
+		const files = [...uploadedFiles];
 
-		message = '';
-		uploadedFiles = [];
-		clearDraft();
+		pendingFiles = files;
 
-		// called in the same task: the page still sees the form as it was sent (expanded or not)
-		const success = await onSend?.(messageToSend, filesToSend);
+		try {
+			await onSend?.(message.trim(), files, (result) => {
+				if (pendingFiles !== files) return false;
 
-		if (!success) {
-			message = messageToSend;
-			uploadedFiles = filesToSend;
-			await tick();
-			chatFormRef?.expandForMessage();
+				// Release preparation before streaming so the user can compose the next draft.
+				pendingFiles = undefined;
+
+				if (disabled || isSystemMode || chatId !== originalChatId) return false;
+
+				if (result?.failedFiles.length) {
+					reportAttachmentReadFailures(result.failedFiles);
+
+					return false;
+				}
+
+				if (
+					message !== originalMessage ||
+					files.length !== uploadedFiles.length ||
+					files.some((file, index) => file !== uploadedFiles[index])
+				) {
+					toast.info('Message changed while preparing attachments. Send again.');
+
+					return false;
+				}
+
+				if (result?.emptyFiles.length) {
+					const emptyIds = new Set(result.emptyFiles.map((file) => file.id));
+
+					uploadedFiles = uploadedFiles.filter((file) => !emptyIds.has(file.id));
+				} else {
+					message = '';
+					uploadedFiles = [];
+					clearDraft();
+				}
+
+				return true;
+			});
+		} finally {
+			if (pendingFiles === files) pendingFiles = undefined;
 		}
 	}
 
@@ -115,6 +158,8 @@
 	// form itself turns into the system message editor
 
 	function handleSystemPromptClick() {
+		pendingFiles = undefined;
+
 		if (settingsStore.config[SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE] ?? true) {
 			onSystemPromptAdd?.({ files: uploadedFiles, message });
 
@@ -199,8 +244,16 @@
 		}
 	});
 
+	onDestroy(() => {
+		pendingFiles = undefined;
+	});
+
 	afterNavigate((navigation) => {
-		if (navigation?.from != null && !deviceStore.isMobile) {
+		if (navigation?.from == null) return;
+
+		pendingFiles = undefined;
+
+		if (!deviceStore.isMobile) {
 			setTimeout(focusFormUnlessCaptured, 100);
 		}
 	});

@@ -3,6 +3,7 @@ import { convertToWav, createAudioFile } from './audio-recording';
 import { heicFileToJpegDataURL, isHeicMimeType } from './heic-to-jpeg';
 import { convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
+import { readFileAsText } from './text-files';
 import { isWebpMimeType, webpBase64UrlToPngDataURL } from './webp-to-png';
 import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { FileExtensionAudio, FileTypeCategory, MimeTypeAudio } from '#lib/enums/index.ts';
@@ -22,23 +23,26 @@ function readFileAsDataURL(file: File): Promise<string> {
 
 		reader.onload = () => resolve(reader.result as string);
 		reader.onerror = () => reject(reader.error);
+		reader.onabort = () => reject(new DOMException('File read aborted', 'AbortError'));
 		reader.readAsDataURL(file);
 	});
 }
 
-/**
- * Read a file as UTF-8 text
- * @param file - The file to read
- * @returns Promise resolving to the text content
- */
-function readFileAsUTF8(file: File): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const reader = new FileReader();
+/** A missing preview can be retried from the file without asking for another upload. */
+export async function prepareImagePreview(file: File, preview?: string): Promise<string> {
+	if (!preview && isHeicMimeType(file.type)) return heicFileToJpegDataURL(file);
 
-		reader.onload = () => resolve(reader.result as string);
-		reader.onerror = () => reject(reader.error);
-		reader.readAsText(file);
-	});
+	const dataUrl = preview ?? (await readFileAsDataURL(file));
+
+	try {
+		if (isSvgMimeType(file.type)) return await svgBase64UrlToPngDataURL(dataUrl);
+
+		if (isWebpMimeType(file.type)) return await webpBase64UrlToPngDataURL(dataUrl);
+	} catch (error) {
+		console.warn('Using original image after PNG conversion failed:', error);
+	}
+
+	return dataUrl;
 }
 
 /**
@@ -71,30 +75,7 @@ export async function processFilesToChatUploaded(
 
 		try {
 			if (getFileTypeCategory(file.type) === FileTypeCategory.IMAGE) {
-				let preview = await readFileAsDataURL(file);
-
-				// Normalize SVG and WebP to PNG, and HEIC to compressed JPEG, in previews
-				if (isSvgMimeType(file.type)) {
-					try {
-						preview = await svgBase64UrlToPngDataURL(preview);
-					} catch (err) {
-						console.error('Failed to convert SVG to PNG:', err);
-					}
-				} else if (isWebpMimeType(file.type)) {
-					try {
-						preview = await webpBase64UrlToPngDataURL(preview);
-					} catch (err) {
-						console.error('Failed to convert WebP to PNG:', err);
-					}
-				} else if (isHeicMimeType(file.type)) {
-					try {
-						preview = await heicFileToJpegDataURL(file);
-					} catch (err) {
-						console.error('Failed to convert HEIC to PNG:', err);
-
-						continue;
-					}
-				}
+				const preview = await prepareImagePreview(file);
 
 				results.push({ ...base, preview });
 			} else if (getFileTypeCategory(file.type) === FileTypeCategory.PDF) {
@@ -166,7 +147,7 @@ export async function processFilesToChatUploaded(
 			} else {
 				// Fallback: treat unknown files as text
 				try {
-					const textContent = await readFileAsUTF8(file);
+					const textContent = await readFileAsText(file);
 
 					results.push({ ...base, textContent });
 				} catch (err) {

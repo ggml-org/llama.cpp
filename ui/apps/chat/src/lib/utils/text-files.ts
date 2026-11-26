@@ -36,6 +36,7 @@ export async function readFileAsText(file: File): Promise<string> {
 		};
 
 		reader.onerror = () => reject(new Error('File reading error'));
+		reader.onabort = () => reject(new DOMException('File read aborted', 'AbortError'));
 
 		reader.readAsText(file);
 	});

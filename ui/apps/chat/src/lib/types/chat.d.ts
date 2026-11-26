@@ -224,7 +224,8 @@ export interface AttachmentDisplayItemsOptions {
  */
 export interface FileProcessingResult {
 	extras: DatabaseMessageExtra[];
-	emptyFiles: string[];
+	emptyFiles: Pick<ChatUploadedFile, 'id' | 'name'>[];
+	failedFiles: string[];
 }
 
 /**
