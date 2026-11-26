@@ -8,6 +8,7 @@ import argparse
 import sys
 from collections import defaultdict
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -95,7 +96,7 @@ def parse_remarks(filepath):
                     value = int(values[0])
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f'Invalid {key} value for {name} in {file}') from exc
-                functions[name][REMARK_NAMES[key]].append(value)
+                cast(list[int], functions[name][REMARK_NAMES[key]]).append(value)
                 location = remark.get('DebugLoc') or {}
                 if location.get('File') and location.get('Line'):
                     functions[name]['location'] = f"{Path(location['File']).name}:{location['Line']}"

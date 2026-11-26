@@ -11,6 +11,8 @@ import yaml
 
 SCRIPT = Path(__file__).with_name('gcn-cdna-metrics.py')
 spec = importlib.util.spec_from_file_location('gcn_cdna_metrics', SCRIPT)
+if spec is None or spec.loader is None:
+    raise RuntimeError(f'Cannot load {SCRIPT}')
 metrics = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(metrics)
 
