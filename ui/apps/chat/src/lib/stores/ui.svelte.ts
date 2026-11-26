@@ -117,11 +117,6 @@ class UiStore {
 		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.ENABLE_DISCOVER_MODELS));
 	}
 
-	/** Whether MCP is on. Off by default; while off, no MCP server is connected. */
-	get isMcpEnabled(): boolean {
-		return Boolean(settingsStore.getConfig(SETTINGS_KEYS.ENABLE_MCP));
-	}
-
 	/** Whether the model details drawer is open. */
 	get isModelDetailsOpen(): boolean {
 		return this.modelDetailsFocus !== null;

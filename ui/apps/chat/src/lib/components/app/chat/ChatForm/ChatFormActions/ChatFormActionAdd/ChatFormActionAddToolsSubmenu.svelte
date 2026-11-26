@@ -6,7 +6,7 @@
 	import { Check, ChevronDown, ChevronRight, Info, Loader2, PencilRuler } from '@lucide/svelte';
 	import { ATTACHMENT_MENU_TEXT, CLI_FLAGS, ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import { useToolsPanel } from '#lib/hooks/use-tools-panel.svelte.ts';
-	import { mcpStore, toolsStore, uiStore } from '#lib/stores/index.ts';
+	import { mcpStore, toolsStore } from '#lib/stores/index.ts';
 	import type { ToolGroup } from '#lib/types/index.ts';
 
 	const toolsPanel = useToolsPanel();
@@ -41,7 +41,7 @@
 					</span>
 
 					<!-- only while MCP is on -->
-					{#if uiStore.isMcpEnabled}
+					{#if mcpStore.isFeatureEnabled}
 						<span class="flex gap-2">
 							<Info class="mt-0.5 {ICON_CLASS_DEFAULT} shrink-0" />
 
