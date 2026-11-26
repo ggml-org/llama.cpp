@@ -30,6 +30,8 @@ struct rope_params {
 
     uint a_offset;
     uint d_offset;
+    uint pos_offset;
+    uint ff_offset;
 };
 
 #endif // !defined(GGML_ROPE_PARAMS)

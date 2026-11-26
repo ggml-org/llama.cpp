@@ -3036,6 +3036,7 @@ struct test_rms_norm_mul_rope : public test_case {
     const bool truncate;
     const ggml_type type; // type of a, the weights are F32
     const int n_rot;
+    const std::string layout;
 
     std::string op_desc(ggml_tensor * t) override {
         GGML_UNUSED(t);
@@ -3045,7 +3046,7 @@ struct test_rms_norm_mul_rope : public test_case {
     bool run_whole_graph() override { return true; }
 
     std::string vars() override {
-        std::string s = VARS_TO_STR11(ne, eps, multi_add, mul, rope, set_rows, broadcast, mode, set_rows_type, yarn, truncate);
+        std::string s = VARS_TO_STR12(ne, eps, multi_add, mul, rope, set_rows, broadcast, mode, set_rows_type, yarn, truncate, layout);
         if (type != GGML_TYPE_F32) {
             s += "," + VAR_TO_STR(type);
         }
@@ -3059,12 +3060,20 @@ struct test_rms_norm_mul_rope : public test_case {
                            bool set_rows = false, bool broadcast = false, int mode = GGML_ROPE_TYPE_NORMAL,
                            bool mul = true, bool rope = true, ggml_type set_rows_type = GGML_TYPE_F16,
                            bool yarn = false, bool truncate = true, ggml_type type = GGML_TYPE_F32,
-                           int n_rot = 0)
+                           int n_rot = 0, const std::string & layout = "contiguous")
         : ne(ne), eps(eps), multi_add(multi_add), mul(mul), rope(rope), set_rows(set_rows), broadcast(broadcast),
-          set_rows_type(set_rows_type), mode(mode), yarn(yarn), truncate(truncate), type(type), n_rot(n_rot) {}
+          set_rows_type(set_rows_type), mode(mode), yarn(yarn), truncate(truncate), type(type), n_rot(n_rot), layout(layout) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * a = ggml_new_tensor_4d(ctx, type, ne[0], ne[1], ne[2], ne[3]);
+        ggml_tensor * a;
+        if (layout == "unaligned") {
+            const size_t row_size = ggml_row_size(type, ne[0]);
+            ggml_tensor * base = ggml_new_tensor_1d(ctx, type, ne[0] * ne[1] * ne[2] * ne[3] + 1);
+            a = ggml_view_4d(ctx, base, ne[0], ne[1], ne[2], ne[3],
+                             row_size, row_size * ne[1], row_size * ne[1] * ne[2], ggml_type_size(type));
+        } else {
+            a = ggml_new_tensor(ctx, type, 4, ne.data());
+        }
 
         ggml_tensor * b = nullptr;
         ggml_tensor * c = nullptr;
@@ -3077,7 +3086,19 @@ struct test_rms_norm_mul_rope : public test_case {
             c = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, ne[0], ne[1], ne[2], 1);
         }
         if (mul) {
-            w = broadcast ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]) : b;
+            if (layout == "unaligned") {
+                ggml_tensor * base = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0] + 2);
+                w = ggml_view_1d(ctx, base, ne[0], 2 * sizeof(float));
+            } else if (layout == "transposed_weight") {
+                ggml_tensor * base = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 2, ne[0]);
+                w = ggml_transpose(ctx, ggml_view_2d(ctx, base, 1, ne[0], base->nb[1], 0));
+            } else {
+                w = broadcast ? ggml_new_tensor_1d(ctx, GGML_TYPE_F32, ne[0]) : b;
+            }
+            // Keep weight views outside the RMS_NORM + MUL fusion pattern.
+            if (gf && ggml_is_view_op(w->op)) {
+                ggml_build_forward_expand(gf, w);
+            }
         }
 
         if (multi_add) {
@@ -3092,13 +3113,28 @@ struct test_rms_norm_mul_rope : public test_case {
 
         if (rope) {
             const bool is_mrope = mode & GGML_ROPE_TYPE_MROPE;
-            ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, ne[2] * (is_mrope ? 4 : 1));
+            const bool unaligned_rope = layout == "unaligned_rope";
+            const int64_t n_pos = ne[2] * (is_mrope ? 4 : 1);
+            ggml_tensor * pos = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, n_pos + unaligned_rope);
             const int n_ctx_orig = yarn ? 4096 : 0;
             const float freq_base = yarn ? 1000000.0f : 10000.0f;
             const float freq_scale = yarn ? 1.0f/256 : 1.0f;
             const float ext_factor = yarn ? 1.0f : 0.0f;
 
             const int n_dims = n_rot > 0 ? n_rot : (int) ne[0];
+            ggml_tensor * freq = nullptr;
+            if (unaligned_rope) {
+                pos = ggml_view_1d(ctx, pos, n_pos, sizeof(int32_t));
+                ggml_tensor * freq_base_tensor = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, n_dims / 2 + 2);
+                ggml_set_name(freq_base_tensor, "freq_factors");
+                freq = ggml_view_1d(ctx, freq_base_tensor, n_dims / 2, 2 * sizeof(float));
+                ggml_set_name(freq, "freq_factors");
+                // Keep the views outside the fusion pattern.
+                if (gf) {
+                    ggml_build_forward_expand(gf, pos);
+                    ggml_build_forward_expand(gf, freq);
+                }
+            }
 
             if (is_mrope) {
                 const int pairs = n_dims / 2;
@@ -3108,9 +3144,9 @@ struct test_rms_norm_mul_rope : public test_case {
                     n_rot > 0 ? pairs / 3               : n_dims / 3,
                     0
                 };
-                a = ggml_rope_multi(ctx, a, pos, nullptr, n_dims, sections, mode, n_ctx_orig, freq_base, freq_scale, ext_factor, 1.0f, 32.0f, 1.0f);
-            } else if (yarn) {
-                a = ggml_rope_ext(ctx, a, pos, nullptr, n_dims, mode, n_ctx_orig, freq_base, freq_scale, ext_factor, 1.0f, 32.0f, 1.0f);
+                a = ggml_rope_multi(ctx, a, pos, freq, n_dims, sections, mode, n_ctx_orig, freq_base, freq_scale, ext_factor, 1.0f, 32.0f, 1.0f);
+            } else if (yarn || freq) {
+                a = ggml_rope_ext(ctx, a, pos, freq, n_dims, mode, n_ctx_orig, freq_base, freq_scale, ext_factor, 1.0f, 32.0f, 1.0f);
             } else {
                 a = ggml_rope(ctx, a, pos, n_dims, mode);
             }
@@ -3143,6 +3179,8 @@ struct test_rms_norm_mul_rope : public test_case {
                     data[i] = yarn ? 127 + i * 67 : rand() % 512;
                 }
                 ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else if (strcmp(t->name, "freq_factors") == 0) {
+                init_tensor_uniform(t, 0.9f, 1.1f);
             } else {
                 init_tensor_uniform(t);
             }
@@ -13168,6 +13206,28 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             for (int64_t n : {64, 256, 512, 1024}) {
                 test_cases.emplace_back(new test_rms_norm_mul_rope({n, 4, 3, 1}, 1e-6f, false, true, true, mode, true, true, set_rows_type));
             }
+        }
+    }
+
+    // Qwen3.5/3.6 attention: 256-wide heads, partial rotation (64 dims), q without and k with the KV cache write
+    for (int mode : {GGML_ROPE_TYPE_MROPE, GGML_ROPE_TYPE_IMROPE}) {
+        for (int64_t n_head : {2, 16}) {
+            for (int64_t n_tokens : {1, 5}) {
+                test_cases.emplace_back(new test_rms_norm_mul_rope({256, n_head, n_tokens, 1}, 1e-6f, false, false, true, mode, true, true, GGML_TYPE_F32, false, true, GGML_TYPE_F32, 64));
+                for (ggml_type set_rows_type : {GGML_TYPE_F32, GGML_TYPE_F16}) {
+                    test_cases.emplace_back(new test_rms_norm_mul_rope({256, n_head, n_tokens, 1}, 1e-6f, false, true, true, mode, true, true, set_rows_type, false, true, GGML_TYPE_F32, 64));
+                }
+            }
+        }
+    }
+    for (bool set_rows : {false, true}) {
+        test_cases.emplace_back(new test_rms_norm_mul_rope({256, 2, 5, 1}, 1e-6f, false, set_rows, true, GGML_ROPE_TYPE_IMROPE, true, true, GGML_TYPE_F32, false, true, GGML_TYPE_F32, 64, "unaligned"));
+    }
+    test_cases.emplace_back(new test_rms_norm_mul_rope({256, 2, 5, 1}, 1e-6f, false, true, true, GGML_ROPE_TYPE_IMROPE, true, true, GGML_TYPE_F32, false, true, GGML_TYPE_F32, 64, "transposed_weight"));
+
+    for (bool mul : {false, true}) {
+        for (bool set_rows : {false, true}) {
+            test_cases.emplace_back(new test_rms_norm_mul_rope({256, 2, 5, 1}, 1e-6f, false, set_rows, true, GGML_ROPE_TYPE_IMROPE, mul, true, GGML_TYPE_F32, false, true, GGML_TYPE_F32, 64, "unaligned_rope"));
         }
     }
 
