@@ -16,7 +16,7 @@ import { once } from 'node:events';
 import { join, resolve } from 'node:path';
 
 export const POLISH = process.env.DEMO_POLISH !== '0';
-export const CAMERA_MOVE_MS = 1050;
+export const CAMERA_MOVE_MS = 650;
 /** Added to a test's timeout, as the render runs in the test's teardown. */
 export const POLISH_RENDER_TIMEOUT_MS = 600_000;
 
@@ -58,6 +58,16 @@ interface Size {
 	height: number;
 	width: number;
 }
+
+/** A camera move: soft at both ends and fast through the middle, so it is quick without a jolt. */
+const CAMERA_EASE_POWER = 5;
+const cameraEase = (t: number) => {
+	const x = Math.min(Math.max(t, 0), 1);
+
+	return x < 0.5
+		? 2 ** (CAMERA_EASE_POWER - 1) * x ** CAMERA_EASE_POWER
+		: 1 - (2 - 2 * x) ** CAMERA_EASE_POWER / 2;
+};
 
 /** Where the stage is drawn in a frame: scaled about its top left corner, then moved. */
 interface Camera {
@@ -113,7 +123,7 @@ function cameraPath(events: PolishEvent[], layout: Layout): (time: number) => Ca
 		for (const { from, start, to } of moves) {
 			if (time < start) break;
 
-			const k = smootherstep(((time - start) * 1000) / CAMERA_MOVE_MS);
+			const k = cameraEase(((time - start) * 1000) / CAMERA_MOVE_MS);
 
 			view = {
 				x: from.x + (to.x - from.x) * k,
