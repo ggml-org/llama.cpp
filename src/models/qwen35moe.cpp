@@ -533,7 +533,7 @@ llama_model_qwen35moe::graph_mtp::graph_mtp(const llm_graph_params & params)
     GGML_ASSERT(layer.nextn.enorm      && "MTP block missing nextn.enorm");
     GGML_ASSERT(layer.nextn.hnorm      && "MTP block missing nextn.hnorm");
     GGML_ASSERT(layer.ffn_gate_inp     && "MTP block missing ffn_gate_inp");
-    
+
     auto [tok_embd, h_embd] = build_inp_embd_h(
         layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd, il);
 
