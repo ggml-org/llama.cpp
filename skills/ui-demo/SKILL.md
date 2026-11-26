@@ -90,7 +90,7 @@ Then record it at the PR head and write the `## Demo` section (between `<!-- dem
 npm run demo:pr -- <number>
 ```
 
-- Each `test()` becomes its own video, shown in a table under its title. Group tests with their own `test.use` in `test.describe(() => { ... })`.
+- Each `test()` becomes its own video, shown in a table under its title. Give each test `{ annotation: { type: 'description', description: '...' } }` to get one video to a row with its description beside it, which reads better when the videos show different things. Group tests with their own `test.use` in `test.describe(() => { ... })`.
 - In a PR block, the helpers import is replaced with `test` and `expect`, so reach fixtures through `test.use` options only.
 - A PR on a fork: `DEMO_GITHUB_REPO=<owner>/llama.cpp`. A PR by someone else: read its diff and demo block, then pass `--trust <sha>`.
 

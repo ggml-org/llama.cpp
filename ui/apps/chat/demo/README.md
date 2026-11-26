@@ -96,6 +96,18 @@ It checks out the PR head in a temporary worktree, records the script against it
 
 A large PR can show its changes in several shorter videos: each `test()` in the block is recorded as its own video (`<sha>-1.mp4`, `<sha>-2.mp4`, ...), and the `## Demo` section shows their previews in a table, each headed by its test's title: up to four portrait (phone) videos to a row, or two landscape ones. Helpers and `test.use` at the top of the block are shared by all of them.
 
+To say what each video shows, give its test a `description` annotation. When the tests have one, the table puts one video to a row, with its title and description beside it:
+
+```ts
+test(
+	'Taps instead of a cursor on a phone',
+	{ annotation: { description: 'A click shows as a fingertip tap.', type: 'description' } },
+	async ({ demo, page }) => {
+		// ...
+	}
+);
+```
+
 ````ts
 test('Header and safe areas', async ({ demo, page }) => {
 	// ...

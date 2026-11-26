@@ -815,7 +815,11 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 		// the CLI reads which videos a script made, in order, with their titles
 		appendFileSync(
 			resolve(VIDEOS_DIR, `${file}.videos.jsonl`),
-			`${JSON.stringify({ mp4, title: testInfo.title })}\n`
+			`${JSON.stringify({
+				description: testInfo.annotations.find((a) => a.type === 'description')?.description,
+				mp4,
+				title: testInfo.title
+			})}\n`
 		);
 		console.log(`demo video: ${mp4}`);
 	},

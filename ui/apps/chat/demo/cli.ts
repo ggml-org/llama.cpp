@@ -83,6 +83,8 @@ async function freePort(): Promise<number> {
 
 /** A video recorded from one `test()` of a script. */
 interface Video {
+	/** From the test's `description` annotation, shown beside its video in the PR. */
+	description?: string;
 	mp4: string;
 	title: string;
 }
@@ -188,10 +190,11 @@ function isPortrait(mp4: string): boolean {
 /**
  * One preview, or a table of them when the script has several tests, each headed by its
  * test's title: up to four portrait videos to a row, or two landscape ones, so each stays
- * large enough to read.
+ * large enough to read. When the tests have descriptions, a video to a row instead, with its
+ * title and description beside it.
  */
 function demoSection(
-	links: { gif: string; mp4: string; title: string }[],
+	links: { description?: string; gif: string; mp4: string; title: string }[],
 	sha: string,
 	columns: number
 ): string {
@@ -202,8 +205,17 @@ function demoSection(
 		links.slice(i * columns, (i + 1) * columns)
 	);
 	const pad = (cells: string[]) => [...cells, ...Array(columns - cells.length).fill(' ')];
-	const body =
-		links.length === 1
+	const described = [
+		'| Video | What it shows |',
+		'|---|---|',
+		...links.map(
+			(l) =>
+				`| ${preview(l)} | **${cell(l.title)}**${l.description ? `<br><br>${cell(l.description)}` : ''} |`
+		)
+	];
+	const body = links.some((l) => l.description)
+		? described
+		: links.length === 1
 			? [preview({ ...links[0], title: 'Demo' })]
 			: rows.flatMap((row, i) => [
 					// a table has one header row, so later rows title their videos in bold
@@ -319,7 +331,8 @@ async function recordPr(number: string, trustedSha?: string): Promise<void> {
 			return;
 		}
 
-		const links = videos.map(({ gif, mp4, title }, i) => ({
+		const links = videos.map(({ description, gif, mp4, title }, i) => ({
+			description,
 			gif: versionedUrl(`${keys[i]}.gif`, gif) ?? '',
 			mp4: versionedUrl(`${keys[i]}.mp4`, mp4) ?? '',
 			title
