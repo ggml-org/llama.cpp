@@ -1536,6 +1536,11 @@ static bool ggml_metal_supports_mul_mat_op(
         return false;
     }
 
+    // BF16 src1 kernels: mul_mv for F32 and BF16 src0, mul_mm for BF16 src0
+    if (op->src[1]->type == GGML_TYPE_BF16) {
+        return op->op == GGML_OP_MUL_MAT && (op->src[0]->type == GGML_TYPE_BF16 || (op->src[0]->type == GGML_TYPE_F32 && !mm_path));
+    }
+
     if (op->src[1]->type != GGML_TYPE_F16) {
         return true;
     }
