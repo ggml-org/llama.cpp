@@ -5182,6 +5182,12 @@ static bool can_use_mul_mat_q(const ggml_tensor * src0, const ggml_tensor * src1
     if (!ggml_sycl_supports_mmq(src0->type) || src0->type == GGML_TYPE_IQ2_XXS) {
         return false;
     }
+
+    // Skip XMX-reordered weights: not plain layout, MMQ would misread them.
+    if (src0->extra && static_cast<const ggml_tensor_extra_gpu *>(src0->extra)->optimized_feature.reorder) {
+        return false;
+    }
+    
 #if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
     if (src1->ne[1] > MMQ_MAX_BATCH_SIZE) {
         return false;
