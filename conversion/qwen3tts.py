@@ -218,8 +218,10 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         if hparams is None:
             hparams = ModelBase.load_hparams(dir_model, is_mistral_format=False)
         hparams["text_config"] = {"hidden_size": hparams["talker_config"]["hidden_size"]}
-        # ECAPA-TDNN has a fixed 4-stage backbone, but MmprojModel.__init__ needs a n_block_keys
-        hparams["speaker_encoder_config"]["n_layers"] = 4
+        # ECAPA-TDNN has a fixed 4-stage backbone, but MmprojModel.__init__ needs a n_block_keys.
+        # The CustomVoice variant ships no speaker encoder, so its config lacks this key entirely.
+        if "speaker_encoder_config" in hparams:
+            hparams["speaker_encoder_config"]["n_layers"] = 4
         super().__init__(dir_model, *args, hparams=hparams, **kwargs)
         self._wav_config_cache = None
 
@@ -233,11 +235,11 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
 
         # handle speaker encoder config
         self.gguf_writer.add_audio_projection_dim(self.n_embd_text)
-        # mel_spectrogram() front-end: sr=24000, n_fft=1024, hop=256, n_mels=128, fmin=0, fmax=12000 (=sr/2, the clip.cpp default)
+        # mel_spectrogram() front-end: sr=24000, n_fft=1024, hop=256, n_mels=128, fmin=0, fmax=12000 (=sr/2, the mtmd default)
         self.gguf_writer.add_audio_num_mel_bins(128)
         # 3 SE-Res2Net stages; the stem conv, mfa, asp and fc are not counted here
         self.gguf_writer.add_audio_block_count(3)
-        # ECAPA-TDNN has no attention/FFN, these are dummy to allow clip.cpp to load it
+        # ECAPA-TDNN has no attention/FFN, these are dummy to allow mtmd to load it
         self.gguf_writer.add_audio_embedding_length(1536)
         self.gguf_writer.add_audio_head_count(1)
         self.gguf_writer.add_audio_feed_forward_length(1536)
@@ -254,7 +256,7 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         self.gguf_writer.add_gen_audio_head_count(code_predictor_config["num_attention_heads"])
         self.gguf_writer.add_gen_audio_head_count_kv(code_predictor_config["num_key_value_heads"])
         self.gguf_writer.add_gen_audio_attention_layernorm_eps(code_predictor_config["rms_norm_eps"])
-        # note: code2wav hparams are hardcoded on the mtmd/clip.cpp side for now, not written here
+        # note: code2wav hparams are hardcoded on the mtmd side for now, not written here
 
     def _wav_decoder_config(self) -> dict[str, Any] | None:
         # code2wav has its own config.json, inside the speech_tokenizer dir
@@ -273,8 +275,20 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
             or (".dac.blk." in new_name and (new_name.endswith(".conv1.weight") or new_name.endswith(".conv2.weight")))
         ):
             return gguf.GGMLQuantizationType.F16
+        # the reference encoder's convs run with an F32 im2col, see f32_im2col in pockettts-seanet.cpp
+        if new_name.startswith("a.seanet.") or new_name == "a.downsample.conv.weight":
+            return gguf.GGMLQuantizationType.F32
+        # codes are picked by the nearest codebook entry: Q8_0 changes about 8% of them, F16 none
+        if new_name.startswith("a.gen.enc.tfm.blk.") and new_name.endswith(".weight") and n_dims == 2:
+            return gguf.GGMLQuantizationType.F16
+        if new_name.startswith("a.gen.enc.quant."):
+            return gguf.GGMLQuantizationType.F32
         # ConvTranspose1d kernels: only F16/F32 are implemented, no BF16
         if new_name.endswith(".conv.weight") and (".up.blk." in new_name or ".dac.blk." in new_name):
+            return gguf.GGMLQuantizationType.F32
+        # the code predictor FFN intermediate peaks around 1.5e5, above the F16 range, and mul_mat
+        # casts its input to the weight type
+        if new_name.startswith("a.gen.code.blk.") and new_name.endswith(".ffn_down.weight"):
             return gguf.GGMLQuantizationType.F32
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
@@ -292,8 +306,8 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
         return super().filter_tensors((name, gen))
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
-        # code2wav tensors are already named by generate_extra_tensors(), pass them through
-        if name.startswith("a.gen.wav."):
+        # code2wav and reference encoder tensors are already named by generate_extra_tensors(), pass them through
+        if name.startswith(("a.gen.wav.", "a.gen.enc.", "a.seanet.", "a.downsample.")):
             yield (name, data_torch)
             return
 
@@ -350,6 +364,68 @@ class Qwen3TTSSpeakerEncoderModel(MmprojModel):
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         yield from self._generate_code2wav_tensors()
+        yield from self._generate_ref_encoder_tensors()
+
+    # mimi encoder of the speech tokenizer: reference clip -> codes, for voice cloning with a transcript (ICL)
+    def _generate_ref_encoder_tensors(self) -> Iterable[tuple[str, Tensor]]:
+        from safetensors.torch import load_file
+
+        state_dict = load_file(self.dir_model / "speech_tokenizer" / "model.safetensors")
+        if "encoder.downsample.conv.weight" not in state_dict:
+            return
+
+        with open(self.dir_model / "speech_tokenizer" / "config.json", "r", encoding="utf-8") as f:
+            enc_config = json.load(f)["encoder_config"]
+        n_stage = len(enc_config["upsampling_ratios"])
+
+        T = gguf.MODEL_TENSOR
+
+        # encoder.encoder.layers: conv_in, then per stage a residual unit, an ELU and a strided conv, then an ELU and conv_out
+        def seanet(idx: int, suffix: str) -> Tensor:
+            return state_dict[f"encoder.encoder.layers.{idx}.{suffix}"]
+
+        for suffix in ("weight", "bias"):
+            yield (self.format_tensor_name(T.A_ENC_SEANET_CONV_IN, suffix=f".{suffix}"), seanet(0, f"conv.{suffix}"))
+            yield (self.format_tensor_name(T.A_ENC_SEANET_CONV_OUT, suffix=f".{suffix}"), seanet(3 * n_stage + 2, f"conv.{suffix}"))
+            for stage in range(n_stage):
+                yield (self.format_tensor_name(T.A_ENC_SEANET_RES_CONV1, stage, suffix=f".{suffix}"), seanet(3 * stage + 1, f"block.1.conv.{suffix}"))
+                yield (self.format_tensor_name(T.A_ENC_SEANET_RES_CONV2, stage, suffix=f".{suffix}"), seanet(3 * stage + 1, f"block.3.conv.{suffix}"))
+                yield (self.format_tensor_name(T.A_ENC_SEANET_SCALE_CONV, stage, suffix=f".{suffix}"), seanet(3 * stage + 3, f"conv.{suffix}"))
+
+        yield (self.format_tensor_name(T.A_ENC_DOWNSAMPLE_CONV), state_dict["encoder.downsample.conv.weight"])
+
+        tfm_layer_map = {
+            "input_layernorm.weight":          (T.A_GEN_ENC_TFM_ATTN_NORM, ".weight"),
+            "input_layernorm.bias":            (T.A_GEN_ENC_TFM_ATTN_NORM, ".bias"),
+            "self_attn.q_proj.weight":         (T.A_GEN_ENC_TFM_ATTN_Q, ".weight"),
+            "self_attn.k_proj.weight":         (T.A_GEN_ENC_TFM_ATTN_K, ".weight"),
+            "self_attn.v_proj.weight":         (T.A_GEN_ENC_TFM_ATTN_V, ".weight"),
+            "self_attn.o_proj.weight":         (T.A_GEN_ENC_TFM_ATTN_OUT, ".weight"),
+            "self_attn_layer_scale.scale":     (T.A_GEN_ENC_TFM_ATTN_SCALE, ".weight"),
+            "post_attention_layernorm.weight": (T.A_GEN_ENC_TFM_FFN_NORM, ".weight"),
+            "post_attention_layernorm.bias":   (T.A_GEN_ENC_TFM_FFN_NORM, ".bias"),
+            "mlp.fc1.weight":                  (T.A_GEN_ENC_TFM_FFN_UP, ".weight"),
+            "mlp.fc2.weight":                  (T.A_GEN_ENC_TFM_FFN_DOWN, ".weight"),
+            "mlp_layer_scale.scale":           (T.A_GEN_ENC_TFM_FFN_SCALE, ".weight"),
+        }
+        for bid in range(enc_config["num_hidden_layers"]):
+            for key, (tensor_id, suffix) in tfm_layer_map.items():
+                yield (self.format_tensor_name(tensor_id, bid, suffix=suffix), state_dict[f"encoder.encoder_transformer.layers.{bid}.{key}"])
+
+        def rvq_codebook(prefix: str, idx: int) -> Tensor:
+            # checkpoint has EMA accumulators, so codebook = embed_sum / cluster_usage
+            embed_sum = state_dict[f"{prefix}.layers.{idx}.codebook.embed_sum"]
+            cluster_usage = state_dict[f"{prefix}.layers.{idx}.codebook.cluster_usage"]
+            return embed_sum / cluster_usage.clamp_min(1e-5).unsqueeze(-1)
+
+        # the tokenizer keeps the semantic codebook and the first acoustic ones, see encoder_valid_num_quantizers
+        semantic = "encoder.quantizer.semantic_residual_vector_quantizer"
+        acoustic = "encoder.quantizer.acoustic_residual_vector_quantizer"
+        yield (self.format_tensor_name(T.A_GEN_ENC_QUANT_FIRST_IN), state_dict[f"{semantic}.input_proj.weight"].squeeze(-1))
+        yield (self.format_tensor_name(T.A_GEN_ENC_QUANT_FIRST_CB), rvq_codebook(semantic, 0))
+        yield (self.format_tensor_name(T.A_GEN_ENC_QUANT_REST_IN), state_dict[f"{acoustic}.input_proj.weight"].squeeze(-1))
+        yield (self.format_tensor_name(T.A_GEN_ENC_QUANT_REST_CB),
+               torch.stack([rvq_codebook(acoustic, i) for i in range(self._CODE_GEN_N_CODEBOOKS)], dim=0))
 
     def _generate_code2wav_tensors(self) -> Iterable[tuple[str, Tensor]]:
         # code2wav weights live in speech_tokenizer/model.safetensors, not the main safetensors

@@ -1,0 +1,52 @@
+{#- MiniMax Music 3 prompt, same text format as YuE2: "[Tags]\n<caption>\n[Lyrics]\n<lyrics>" -#}
+{#- the caption and lyrics cleanup follows _clean_caption() and _normalize_lyrics() of the diffusers pipeline (encoders.py) -#}
+{%- set text = messages[0]['content'] -%}
+{%- set parts = text.split('\n[Lyrics]\n') -%}
+{%- if parts | length < 2 -%}
+    {{- raise_exception('MiniMax Music 3 expects "[Tags]\\n<caption>\\n[Lyrics]\\n<lyrics>"') -}}
+{%- endif -%}
+{%- set caption = tts_norm_sub(parts[0], '^%[Tags%]\n', '') -%}
+{%- set lyrics = parts[1:] | join('\n[Lyrics]\n') -%}
+
+{#- caption: <|key value|> -> "key is value", then strip the markdown -#}
+{%- set ns = namespace(text='', lines=[]) -%}
+{%- for s in tts_norm_scan(caption, '<%|([^|]*)%|>') -%}
+    {%- if s.rule == 'match' -%}
+        {%- set ns.text = ns.text ~ tts_norm_sub(s.groups[0].strip(), '^(%S+)%s+(.+)', '%1 is %2') -%}
+    {%- else -%}
+        {%- set ns.text = ns.text ~ s.text -%}
+    {%- endif -%}
+{%- endfor -%}
+{%- for raw in ns.text.split('\n') -%}
+    {%- set line = tts_norm_sub(raw, '^%s{0,3}#{1,6}%s+', '') -%}
+    {%- set line = tts_norm_sub(line, '^%s*[*+%-]%s+', '') -%}
+    {%- set line = tts_norm_sub(line, '^%s*%*%s+', '') -%}
+    {%- set ln = namespace(v=line) -%}
+    {%- for _ in range(4) -%}
+        {%- set ln.v = tts_norm_sub(ln.v, '%*%*([^*]+)%*%*', '%1') -%}
+    {%- endfor -%}
+    {%- set line = tts_norm_sub(ln.v, '(?<!%*)%*([^*\n]+)%*(?!%*)', '%1').rstrip() -%}
+    {%- set line = tts_norm_sub(line, '^%s*[%-*_]{3,}%s*$', '') -%}
+    {%- set ns.lines = ns.lines + [line] -%}
+{%- endfor -%}
+{%- set caption = ns.lines | join('\n') -%}
+{%- set caption = caption.replace('• ', '').replace('    ', '') -%}
+{%- set caption = tts_norm_sub(caption, '\n{2,}', '\n') -%}
+
+{#- lyrics: a line that starts with structure tags keeps only the tags, the tags are lowercase -#}
+{%- set ns.lines = [] -%}
+{%- for line in lyrics.split('\n') -%}
+    {%- set seg = tts_norm_scan(line, '^[ \t]*((?:%[[^%]]+%][ \t]*)+)') -%}
+    {%- if seg | length > 0 and seg[0].rule == 'match' -%}
+        {%- set ns.lines = ns.lines + [seg[0].groups[0].strip()] -%}
+    {%- else -%}
+        {%- set ns.lines = ns.lines + [line] -%}
+    {%- endif -%}
+{%- endfor -%}
+{%- set lyrics = (ns.lines | join('\n')).replace('] ', ']\n').replace(' [', '\n[').replace(' ^ ', '\n') -%}
+{%- set ns.text = '' -%}
+{%- for s in tts_norm_scan(lyrics, '%[([^%]]+)%]') -%}
+    {%- set ns.text = ns.text ~ ('[' ~ (s.groups[0] | lower) ~ ']' if s.rule == 'match' else s.text) -%}
+{%- endfor -%}
+
+{{- '<|im_start|><|caption_start|>' ~ caption ~ '<|caption_end|><|lyrics_start|>[start]\n' ~ ns.text ~ '<|lyrics_end|><|im_end|><|audio_start|>' -}}

@@ -11,6 +11,7 @@ namespace op {
 #define GGML_OP_CONVERTER(op) OutputVector op(const NodeContext & context)
 
 GGML_OP_CONVERTER(translate_add);
+GGML_OP_CONVERTER(translate_arange);
 GGML_OP_CONVERTER(translate_cont);
 GGML_OP_CONVERTER(translate_concat);
 GGML_OP_CONVERTER(translate_add_id);
@@ -18,6 +19,7 @@ GGML_OP_CONVERTER(translate_div);
 GGML_OP_CONVERTER(translate_fill);
 GGML_OP_CONVERTER(translate_get_rows);
 GGML_OP_CONVERTER(translate_im2col);
+GGML_OP_CONVERTER(translate_im2col_3d);
 GGML_OP_CONVERTER(translate_mulmat);
 GGML_OP_CONVERTER(translate_mul_mat_id);
 GGML_OP_CONVERTER(translate_permute);
@@ -30,7 +32,6 @@ GGML_OP_CONVERTER(translate_sqr);
 GGML_OP_CONVERTER(translate_rope);
 GGML_OP_CONVERTER(translate_scale);
 GGML_OP_CONVERTER(translate_sqrt);
-GGML_OP_CONVERTER(translate_unary_silu);
 GGML_OP_CONVERTER(translate_unary_softplus);
 GGML_OP_CONVERTER(translate_soft_max);
 GGML_OP_CONVERTER(translate_transpose);
@@ -42,21 +43,44 @@ GGML_OP_CONVERTER(translate_glu_geglu);
 GGML_OP_CONVERTER(translate_glu_geglu_quick);
 GGML_OP_CONVERTER(translate_set_rows);
 GGML_OP_CONVERTER(translate_cpy);
+GGML_OP_CONVERTER(translate_argmax);
 GGML_OP_CONVERTER(translate_argsort);
+GGML_OP_CONVERTER(translate_top_k);
 GGML_OP_CONVERTER(translate_flash_attn_ext);
 GGML_OP_CONVERTER(translate_clamp);
 GGML_OP_CONVERTER(translate_pad);
 GGML_OP_CONVERTER(translate_ssm_conv);
+GGML_OP_CONVERTER(translate_ssm_scan);
 GGML_OP_CONVERTER(translate_gated_delta_net);
+// The device runs GatedDeltaNet with a gate per key dimension; otherwise the translator falls back to its reference loop
+bool gdn_per_key_gate_supported();
+#ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
+OutputVector translate_recurrent_gated_delta_net(const NodeContext & context, const OutputVector & cache_inputs);
+#endif
 GGML_OP_CONVERTER(translate_repeat);
 GGML_OP_CONVERTER(translate_cumsum);
-GGML_OP_CONVERTER(translate_fill);
 GGML_OP_CONVERTER(translate_set);
 GGML_OP_CONVERTER(translate_diag);
 GGML_OP_CONVERTER(translate_tri);
-GGML_OP_CONVERTER(translate_solve_tri);
+GGML_OP_CONVERTER(translate_pool_1d);
 GGML_OP_CONVERTER(translate_pool_2d);
 GGML_OP_CONVERTER(translate_roll);
+GGML_OP_CONVERTER(translate_upscale);
+GGML_OP_CONVERTER(translate_mean);
+GGML_OP_CONVERTER(translate_sum);
+GGML_OP_CONVERTER(translate_unary_gelu);
+GGML_OP_CONVERTER(translate_unary_gelu_erf);
+GGML_OP_CONVERTER(translate_unary_gelu_quick);
+GGML_OP_CONVERTER(translate_unary_elu);
+GGML_OP_CONVERTER(translate_unary_hardsigmoid);
+GGML_OP_CONVERTER(translate_unary_step);
+GGML_OP_CONVERTER(translate_unary_round);
+GGML_OP_CONVERTER(translate_unary_expm1);
+GGML_OP_CONVERTER(translate_conv_2d);
+GGML_OP_CONVERTER(translate_conv_2d_dw);
+GGML_OP_CONVERTER(translate_conv_transpose_1d);
+GGML_OP_CONVERTER(translate_conv_transpose_2d);
+GGML_OP_CONVERTER(translate_conv_3d);
 
 }  // namespace op
 

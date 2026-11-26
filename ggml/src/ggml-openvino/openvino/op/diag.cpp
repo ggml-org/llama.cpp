@@ -3,11 +3,8 @@
 #include "../utils.h"
 
 #include <openvino/op/constant.hpp>
-#include <openvino/op/equal.hpp>
+#include <openvino/op/eye.hpp>
 #include <openvino/op/multiply.hpp>
-#include <openvino/op/range.hpp>
-#include <openvino/op/reshape.hpp>
-#include <openvino/op/select.hpp>
 
 namespace ov {
 namespace frontend {
@@ -23,31 +20,13 @@ namespace op {
 OutputVector translate_diag(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
 
-    auto x = context.get_input(0);  // OV shape: [ne3, ne2, 1, ne0]
+    auto x = process_view_input_new(context, 0);  // OV shape: [ne3, ne2, 1, ne0]
 
-    auto out_shape = context.get_output_shape().to_shape();
-    int64_t n = static_cast<int64_t>(out_shape[3]);  // ne0
+    auto n = get_dimensions(x.get_node_shared_ptr(), {3});
+    auto zero_diag = ov::op::v0::Constant::create(ov::element::i64, {}, {0});
 
-    // Build index range [0, 1, ..., n-1]
-    auto start = ov::op::v0::Constant::create(ov::element::i64, {}, {int64_t(0)});
-    auto stop  = ov::op::v0::Constant::create(ov::element::i64, {}, {n});
-    auto step  = ov::op::v0::Constant::create(ov::element::i64, {}, {int64_t(1)});
-    auto range = std::make_shared<ov::op::v4::Range>(start, stop, step, ov::element::i64);
-
-    // col_idx shape [1, 1, 1, n]
-    auto col_shape = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, 1, 1, n});
-    auto col_idx   = std::make_shared<ov::op::v1::Reshape>(range, col_shape, false);
-
-    // row_idx shape [1, 1, n, 1]
-    auto row_shape = ov::op::v0::Constant::create(ov::element::i64, {4}, std::vector<int64_t>{1, 1, n, 1});
-    auto row_idx   = std::make_shared<ov::op::v1::Reshape>(range, row_shape, false);
-
-    // mask: true where col == row (diagonal)
-    auto mask = std::make_shared<ov::op::v1::Equal>(col_idx, row_idx);
-
-    // Broadcast input from [ne3, ne2, 1, ne0] to [ne3, ne2, ne0, ne0] via select
-    auto zero = ov::op::v0::Constant::create(ov::element::f32, {}, {0.0f});
-    auto res  = std::make_shared<ov::op::v1::Select>(mask, x, zero);
+    auto eye = std::make_shared<ov::op::v9::Eye>(n, n, zero_diag, x.get_element_type());
+    auto res = std::make_shared<ov::op::v1::Multiply>(x, eye);
 
     return rename_outputs_with_suffix({res}, context.get_name());
 }

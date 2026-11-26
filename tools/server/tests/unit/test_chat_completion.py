@@ -238,6 +238,10 @@ def test_apply_chat_template():
     ({"type": "json_object", "schema": {"const": "42"}}, 6, "\"42\""),
     ({"type": "json_object", "schema": {"items": [{"type": "integer"}]}}, 10, "[ -3000 ]"),
     ({"type": "json_schema", "json_schema": {"schema": {"const": "foooooo"}}}, 10, "\"foooooo\""),
+    ({"type": "json_schema", "schema": {"const": "foooooo"}}, 10, "\"foooooo\""),
+    # the json_schema wrapper takes precedence over a top-level schema, even when its schema is {}
+    ({"type": "json_schema", "json_schema": {"schema": {"const": "foooooo"}}, "schema": {"const": "42"}}, 10, "\"foooooo\""),
+    ({"type": "json_schema", "json_schema": {"schema": {}}, "schema": {"type": "hiccup"}}, 10, ".+"),
     ({"type": "json_object"}, 10, "(\\{|John)+"),
     ({"type": "sound"}, 0, None),
     # invalid response format (expected to fail)
@@ -587,6 +591,10 @@ def test_chat_completions_multiple_choices():
         for choice in res.body["choices"]:
             assert "assistant" == choice["message"]["role"]
             assert choice["finish_reason"] == "length"
+        # each choice generates max_tokens tokens, usage counts them all
+        # ref: https://github.com/ggml-org/llama.cpp/issues/29451
+        assert res.body["usage"]["completion_tokens"] == 16
+        assert res.body["usage"]["total_tokens"] == res.body["usage"]["prompt_tokens"] + 16
 
 
 def test_chat_completions_token_count():

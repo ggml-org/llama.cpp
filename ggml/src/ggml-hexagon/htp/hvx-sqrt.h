@@ -123,4 +123,67 @@ static inline void hvx_sqrt_f32(uint8_t * restrict dst, const uint8_t * restrict
     }
 }
 
+// Compute sqrt(x) for f16 by promoting to f32, applying hvx_vec_rsqrt_f32, and narrowing back.
+#define hvx_sqrt_f16_loop_body(dst_type, src_type, vec_store)                          \
+    do {                                                                               \
+        dst_type * restrict vdst = (dst_type *) dst;                                   \
+        src_type * restrict vsrc = (src_type *) src;                                   \
+                                                                                       \
+        const uint32_t nvec = n / VLEN_FP16;                                           \
+        const uint32_t nloe = n % VLEN_FP16;                                           \
+                                                                                       \
+        uint32_t i = 0;                                                                \
+                                                                                       \
+        _Pragma("unroll(4)")                                                           \
+        for (; i < nvec; i++) {                                                        \
+            HVX_VectorPair p = hvx_vec_f16_to_f32(vsrc[i]);                            \
+            HVX_Vector r0 = HVX_OP_MUL(hvx_vec_rsqrt_f32(Q6_V_lo_W(p)), Q6_V_lo_W(p)); \
+            HVX_Vector r1 = HVX_OP_MUL(hvx_vec_rsqrt_f32(Q6_V_hi_W(p)), Q6_V_hi_W(p)); \
+            vdst[i] = hvx_vec_f32_to_f16(r0, r1);                                      \
+        }                                                                              \
+        if (nloe) {                                                                    \
+            HVX_VectorPair p = hvx_vec_f16_to_f32(vsrc[i]);                            \
+            HVX_Vector r0 = HVX_OP_MUL(hvx_vec_rsqrt_f32(Q6_V_lo_W(p)), Q6_V_lo_W(p)); \
+            HVX_Vector r1 = HVX_OP_MUL(hvx_vec_rsqrt_f32(Q6_V_hi_W(p)), Q6_V_hi_W(p)); \
+            HVX_Vector v = hvx_vec_f32_to_f16(r0, r1);                                 \
+            vec_store((void *) &vdst[i], nloe * SIZEOF_FP16, v);                       \
+        }                                                                              \
+    } while(0)
+
+static inline void hvx_sqrt_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    assert((unsigned long) src % 128 == 0);
+    hvx_sqrt_f16_loop_body(HVX_Vector, HVX_Vector, hvx_vec_store_a);
+}
+
+static inline void hvx_sqrt_f16_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) dst % 128 == 0);
+    hvx_sqrt_f16_loop_body(HVX_Vector, HVX_UVector, hvx_vec_store_a);
+}
+
+static inline void hvx_sqrt_f16_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    assert((unsigned long) src % 128 == 0);
+    hvx_sqrt_f16_loop_body(HVX_UVector, HVX_Vector, hvx_vec_store_u);
+}
+
+static inline void hvx_sqrt_f16_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) {
+    hvx_sqrt_f16_loop_body(HVX_UVector, HVX_UVector, hvx_vec_store_u);
+}
+
+static inline void hvx_sqrt_f16(uint8_t * restrict dst, const uint8_t * restrict src, const int num_elems) {
+    if ((unsigned long) dst % 128 == 0) {
+        if ((unsigned long) src % 128 == 0) {
+            hvx_sqrt_f16_aa(dst, src, num_elems);
+        } else {
+            hvx_sqrt_f16_au(dst, src, num_elems);
+        }
+    } else {
+        if ((unsigned long) src % 128 == 0) {
+            hvx_sqrt_f16_ua(dst, src, num_elems);
+        } else {
+            hvx_sqrt_f16_uu(dst, src, num_elems);
+        }
+    }
+}
+
 #endif /* HVX_SQRT_H */

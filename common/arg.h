@@ -122,6 +122,8 @@ struct common_params_context {
 
 // parse input arguments from CLI
 // if one argument has invalid value, it will automatically display usage of the specific argument (and not the full usage message)
+// TODO: this function can load ggml backend (by calling llama_support_rpc)
+//       this is a side-effect that should be avoided
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 
 // load all backends and print the list of available (non-CPU) devices to stdout
@@ -146,6 +148,9 @@ common_models_handler common_models_handler_init(const common_params & params, l
 
 // check if the model is a preset repo (i.e. has a preset file)
 bool common_models_handler_is_preset_repo(const common_models_handler & handler);
+
+// the cache path a model downloaded from a plain url is stored at
+std::string common_get_default_local_path(const std::string & url);
 
 // download and update params with the downloaded model path
 void common_models_handler_apply(common_models_handler & handler, common_params & params, common_download_callback * callback = nullptr);

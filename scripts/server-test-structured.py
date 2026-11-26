@@ -991,7 +991,7 @@ def main():
         description="Test llama-server structured-output capability."
     )
     parser.add_argument("--host", default="localhost")
-    parser.add_argument("--port", default=8080, type=int)
+    parser.add_argument("--port", default=9931, type=int)
     parser.add_argument(
         "--no-stream", action="store_true", help="Disable streaming mode tests"
     )

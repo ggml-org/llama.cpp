@@ -10,11 +10,11 @@ Recommended way to run this model:
 llama-server -hf {namespace}/{model_name}-GGUF --embeddings
 ```
 
-Then the endpoint can be accessed at http://localhost:8080/embedding, for
+Then the endpoint can be accessed at http://localhost:9931/embedding, for
 example using `curl`:
 ```console
 curl --request POST \
-    --url http://localhost:8080/embedding \
+    --url http://localhost:9931/embedding \
     --header "Content-Type: application/json" \
     --data '{{"input": "Hello embeddings"}}' \
     --silent

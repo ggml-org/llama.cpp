@@ -13,6 +13,11 @@ if (DEFINED ENV{VULKAN_SDK})
 endif()
 find_package(SPIRV-Headers CONFIG REQUIRED)
 
+if (GGML_VULKAN_SPIRV_INCLUDE_DIR)
+    set_property(TARGET SPIRV-Headers::SPIRV-Headers PROPERTY
+        INTERFACE_INCLUDE_DIRECTORIES "${GGML_VULKAN_SPIRV_INCLUDE_DIR}")
+endif()
+
 if (CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
     # Parallel build object files
     add_definitions(/MP)
@@ -62,7 +67,18 @@ if (Vulkan_FOUND)
     ggml_add_backend_library(ggml-vulkan
                              ggml-vulkan.cpp
                              ../../include/ggml-vulkan.h
+                             ggml-vulkan-types.h
+                             ggml-vulkan-push-constants.h
+                             ggml-vulkan-common.h
+                             ggml-vulkan-buffers.cpp
+                             ggml-vulkan-comm.cpp
+                             ggml-vulkan-debug.cpp
                             )
+
+    # hide symbols, so dlclosed duplicate copies cannot interpose them
+    set_target_properties(ggml-vulkan PROPERTIES
+                          CXX_VISIBILITY_PRESET hidden
+                          VISIBILITY_INLINES_HIDDEN ON)
 
     set(VULKAN_SHADER_GEN_CMAKE_ARGS "")
 
@@ -83,6 +99,12 @@ if (Vulkan_FOUND)
         "GL_NV_cooperative_matrix_decode_vector"
         "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat2_decode_vector.comp"
         "GGML_VULKAN_COOPMAT2_DECODE_VECTOR_GLSLC_SUPPORT"
+    )
+
+    test_shader_extension_support(
+        "GL_EXT_cooperative_matrix_maintenance1"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vulkan-shaders/feature-tests/coopmat_maintenance1.comp"
+        "GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT"
     )
 
     test_shader_extension_support(
@@ -109,7 +131,7 @@ if (Vulkan_FOUND)
         "GGML_VULKAN_FLOAT_E4M3_GLSLC_SUPPORT"
     )
 
-    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan)
+    target_link_libraries(ggml-vulkan PRIVATE Vulkan::Vulkan SPIRV-Headers::SPIRV-Headers)
     target_include_directories(ggml-vulkan PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
     # Workaround to the "can't dereference invalidated vector iterator" bug in clang-cl debug build

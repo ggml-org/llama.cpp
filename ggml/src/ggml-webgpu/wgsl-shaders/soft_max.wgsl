@@ -40,6 +40,7 @@ struct Params {
     n_head_log2: f32,
     m0: f32,
     m1: f32,
+    nrows: u32,
 };
 
 #define SRC_BINDING 0
@@ -124,9 +125,13 @@ var<workgroup> scratch: array<f32, WG_SIZE>;
 
 @compute @workgroup_size(WG_SIZE)
 fn main(@builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(num_workgroups) num_wg: vec3<u32>,
         @builtin(local_invocation_id) lid: vec3<u32>) {
 
-    var i = wid.x;
+    var i = wid.x + wid.y * num_wg.x;
+    if (i >= params.nrows) {
+        return;
+    }
     let i3 = i / (params.ne2 * params.ne1);
     i = i % (params.ne2 * params.ne1);
     let i2 = i / params.ne1;

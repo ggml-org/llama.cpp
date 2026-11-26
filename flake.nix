@@ -128,7 +128,7 @@
           }:
           {
             # For standardised reproducible formatting with `nix fmt`
-            formatter = pkgs.nixfmt-rfc-style;
+            formatter = pkgs.nixfmt;
 
             # Unlike `.#packages`, legacyPackages may contain values of
             # arbitrary types (including nested attrsets) and may even throw
@@ -156,7 +156,7 @@
                 windows = config.legacyPackages.llamaPackagesWindows.llama-cpp;
                 python-scripts = config.legacyPackages.llamaPackages.python-scripts;
               }
-              // lib.optionalAttrs pkgs.stdenv.isLinux {
+              // lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
                 cuda = config.legacyPackages.llamaPackagesCuda.llama-cpp;
 
                 mpi-cpu = config.packages.default.override { useMpi = true; };
@@ -164,6 +164,11 @@
               }
               // lib.optionalAttrs (system == "x86_64-linux") {
                 rocm = config.legacyPackages.llamaPackagesRocm.llama-cpp;
+
+                sycl = config.packages.default.override {
+                  useSycl = true;
+                  syclToolkit = pkgs.intel-oneapi-toolkit;
+                };
               };
 
             # Packages exposed in `.#checks` will be built by the CI and by

@@ -8,7 +8,7 @@ from torch import Tensor
 import gguf
 import numpy as np
 
-from .base import ModelBase
+from .base import LazyTorchTensor, ModelBase
 from .qwen import _LinearAttentionVReorderBase, _Qwen35MRopeMixin
 from .qwen3vl import Qwen3VLVisionModel
 
@@ -25,15 +25,46 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
     model_arch = gguf.MODEL_ARCH.QWEN4EXP
 
-    # the MTP block is a separate draft head; vLLM drops it too
-    supports_mtp_export = False
-    no_mtp = True
+    # the MTP head: one full-attention QSA block after the trunk, fed by the trunk's hc-wide residual
+    supports_mtp_export = True
+
+    # MTP tensors the shared Qwen remapper does not know
+    _MTP_EXTRA = {
+        "fc_embedding":           "nextn_fc_embedding",
+        "fc_hidden":              "nextn_fc_hidden",
+        "hyper_connection_mixer": "nextn_hc_head",
+    }
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # only the shard names, so the table itself is never held
         self._ple_shards: dict[int, str] = {}
         self._ple_row_dim: int | None = None
+        self._mtp_fc: dict[str, Tensor] = {}
+        self._ple_scale: float | None = None
+
+    def dequant_model(self):
+        # FP8 checkpoints: all n-gram shards share one scale, stored under the parent module name
+        # there is no "ngram_embedding.weight", so the generic FP8 pass drops it or cannot map it
+        for name in list(self.model_tensors):
+            if name.endswith(".ngram_embedding.weight_scale"):
+                scale = LazyTorchTensor.to_eager(self.model_tensors.pop(name)()).float().flatten()
+                if scale.numel() != 1:
+                    raise ValueError(f"PLE scale {name!r} must be a scalar, got {scale.numel()} values")
+                self._ple_scale = float(scale[0])
+        super().dequant_model()
+
+    @classmethod
+    def filter_tensors(cls, item):
+        name, gen = item
+        part = name.split(".")[1] if name.startswith("mtp.") else None
+        if part in cls._MTP_EXTRA:
+            if cls.no_mtp:
+                return None
+            assert cls._original_block_count is not None
+            rest = name.split(".", 2)[2]
+            return f"model.layers.{cls._original_block_count}.{cls._MTP_EXTRA[part]}.{rest}", gen
+        return super().filter_tensors(item)
 
     def _read_hash_constants(self, suffix: str) -> list[int]:
         """Read an int64 PLE constant straight from the checkpoint.
@@ -63,14 +94,17 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self.gguf_writer.add_indexer_top_k(hp["indexer_budget"])
         ratio = hp["indexer_compress_ratio"]
         layer_types = hp["layer_types"]
+        # the MTP block is a full-attention QSA layer too
         self.gguf_writer.add_attention_compress_ratios(
             [ratio if layer_types[i] == "full_attention" else 0 for i in range(n_layer)]
+            + [ratio] * (self.block_count - n_layer)
         )
 
         # ple_layer_ids is 1-based in the HF config; empty means no n-gram table,
         # so emit no PLE keys rather than optional ones
+        # the MTP head never reads PLE, so an MTP-only file carries none of it
         ple_layers = [i - 1 for i in hp["ple_layer_ids"]]
-        if not ple_layers:
+        if not ple_layers or self.mtp_only:
             return
         self.gguf_writer.add_ple_layers(ple_layers)
         self.gguf_writer.add_ple_ngram_size(hp["ngram_size"])
@@ -109,36 +143,54 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         # int64 hash constants must stay exact; 1-D tensors force F32, so use KV
         if name.endswith("ple_embedding.layer_multipliers"):
             self._ple_multipliers = [int(x) for x in data_torch.tolist()]
-            return []
+            return
         if name.endswith("ple_embedding.ngram_heads_offsets"):
             self._ple_head_offsets = [int(x) for x in data_torch.tolist()]
-            return []
+            return
         if name.endswith("ple_embedding.ngram_heads_vocab_sizes"):
             self._ple_head_vocab_sizes = [int(x) for x in data_torch.tolist()]
-            return []
+            return
 
         if ".ngram_embedding.shard_" in name:
-            return self._place_ple_shard(data_torch, name)
+            yield from self._place_ple_shard(data_torch, name)
+            return
+
+        # eh_proj([e ; h_s]) = fc_embedding(e) + fc_hidden(h_s) for every hc stream s
+        if name.endswith((".nextn_fc_embedding.weight", ".nextn_fc_hidden.weight")):
+            self._mtp_fc[name.rsplit(".", 2)[1]] = data_torch
+            if len(self._mtp_fc) < 2:
+                return
+            eh = torch.cat([self._mtp_fc.pop("nextn_fc_embedding"), self._mtp_fc.pop("nextn_fc_hidden")], dim=1)
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.NEXTN_EH_PROJ, bid, ".weight"), eh)
+            return
 
         # one projection feeds indexer q and k; split it, as minimax-m3 does
         if ".indexer.index_qk_proj.weight" in name:
             n_q = self.hparams["indexer_n_heads"] * self.hparams["indexer_head_dim"]
-            q = data_torch[:n_q]
-            k = data_torch[n_q:]
-            return [
-                (self.format_tensor_name(gguf.MODEL_TENSOR.INDEXER_Q_PROJ, bid, ".weight"), q),
-                (self.format_tensor_name(gguf.MODEL_TENSOR.INDEXER_K_PROJ, bid, ".weight"), k),
-            ]
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.INDEXER_Q_PROJ, bid, ".weight"), data_torch[:n_q])
+            yield (self.format_tensor_name(gguf.MODEL_TENSOR.INDEXER_K_PROJ, bid, ".weight"), data_torch[n_q:])
+            return
 
         # Gemma zero-centred gammas the inherited norm.weight rule misses
         if name.endswith((".ple.norm_key.weight", ".ple.norm_query.weight", ".ple.norm_conv.weight",
                           ".indexer.q_layernorm.weight", ".indexer.k_layernorm.weight")):
-            return [(self.map_tensor_name(name), data_torch + 1)]
+            yield (self.map_tensor_name(name), data_torch + 1)
+            return
 
         if name.endswith(".ple.conv1d.weight"):
-            return [(self.map_tensor_name(name), data_torch.squeeze())]
+            yield (self.map_tensor_name(name), data_torch.squeeze())
+            return
 
-        return super().modify_tensors(data_torch, name, bid)
+        yield from super().modify_tensors(data_torch, name, bid)
+
+    # matmuls that read the same input, written as one weight [a | b] so the runtime does one matmul:
+    # (merged tensor, (a, b), linear-attention layers only)
+    _SHARED_INPUT_MERGES = (
+        (gguf.MODEL_TENSOR.HC_ATTN_DOWN_INJECT, (gguf.MODEL_TENSOR.HC_ATTN_DOWN, gguf.MODEL_TENSOR.HC_ATTN_INJECT), False),
+        (gguf.MODEL_TENSOR.HC_FFN_DOWN_INJECT,  (gguf.MODEL_TENSOR.HC_FFN_DOWN,  gguf.MODEL_TENSOR.HC_FFN_INJECT),  False),
+        (gguf.MODEL_TENSOR.ATTN_QKV_GATE,       (gguf.MODEL_TENSOR.ATTN_QKV,     gguf.MODEL_TENSOR.ATTN_GATE),      True),
+        (gguf.MODEL_TENSOR.SSM_BETA_ALPHA_CAT,  (gguf.MODEL_TENSOR.SSM_BETA,     gguf.MODEL_TENSOR.SSM_ALPHA),      True),
+    )
 
     # the shards concatenate into a tensor of well over 100 GB
     # use LazyChunkedTensor here, a single shard resident at a time
@@ -163,25 +215,37 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                     f"PLE shard {shard} has row dim {int(shape[-1])}, expected {self._ple_row_dim}")
             rows += int(shape[0])
 
+        # an FP8 table keeps its bytes and gets a scale tensor, any other type has the scale folded in
+        keep_fp8 = name in self._fp8_e4m3_preserved
         table = gguf.LazyChunkedTensor(
-            [self._load_ple_shard(shard) for shard in shards],
+            [self._load_ple_shard(shard, keep_fp8) for shard in shards],
             shape=(rows, self._ple_row_dim),
-            dtype=np.float32,
+            dtype=np.uint8 if keep_fp8 else np.float32,
         )
         gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
-        return [(gguf_name + ".weight", cast(Tensor, table))]
+        out = [(gguf_name + ".weight", cast(Tensor, table))]
+        if keep_fp8 and self._ple_scale is not None:
+            out.append((gguf_name + ".scale", torch.tensor([self._ple_scale], dtype=torch.float32)))
+        return out
 
-    def _load_ple_shard(self, name: str):
+    def _load_ple_shard(self, name: str, keep_fp8: bool):
         def load() -> np.ndarray:
-            from .base import LazyTorchTensor
-
             # a fresh lazy tensor every call, or to_eager() memoizes every shard
             eager = LazyTorchTensor.to_eager(self.model_tensors[name]())
-            return eager.to(torch.float32).contiguous().numpy()
+            if keep_fp8:
+                if eager.dtype != torch.float8_e4m3fn:
+                    raise ValueError(f"PLE shard {name} is {eager.dtype}, expected FP8 like the other shards")
+                return eager.contiguous().view(torch.uint8).numpy()
+            data = eager.to(torch.float32)
+            if self._ple_scale is not None:
+                data = data * self._ple_scale
+            return data.contiguous().numpy()
         return load
 
     def prepare_tensors(self):
         super().prepare_tensors()
+        if self._mtp_fc:
+            raise ValueError(f"MTP projection missing its other half: {sorted(self._mtp_fc)}")
         n_parts = self.hparams.get("split_ngram_parts", 0)
         if self._ple_shards and len(self._ple_shards) != n_parts:
             raise ValueError(

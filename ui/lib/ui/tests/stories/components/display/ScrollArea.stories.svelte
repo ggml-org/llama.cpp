@@ -1,0 +1,29 @@
+<script lang="ts" module>
+	import { ScrollArea } from '@ggml-org/llama-ui/ui/scroll-area';
+	import { Separator } from '@ggml-org/llama-ui/ui/separator';
+	import { defineMeta } from '@storybook/addon-svelte-csf';
+
+	const { Story } = defineMeta({
+		component: ScrollArea,
+		parameters: {
+			layout: 'centered'
+		},
+		title: 'Llama UI/Components/Display/ScrollArea'
+	});
+
+	const chats = Array.from({ length: 30 }, (_, i) => `Conversation ${i + 1}`);
+</script>
+
+<Story asChild name="Default">
+	<ScrollArea class="h-72 w-56 rounded-md border">
+		<div class="p-4">
+			<h4 class="mb-4 text-label">Conversations</h4>
+
+			{#each chats as chat (chat)}
+				<div class="text-body-sm">{chat}</div>
+
+				<Separator class="my-2" />
+			{/each}
+		</div>
+	</ScrollArea>
+</Story>

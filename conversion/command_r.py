@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import re
-from typing import Iterable, TYPE_CHECKING
+from typing import Callable, Iterable, TYPE_CHECKING
 
 import torch
 
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import ModelBase, TextModel, gguf, logger
+from .base import MmprojModel, ModelBase, TextModel, gguf, logger
 
 
 @ModelBase.register("CohereForCausalLM")
@@ -180,3 +180,28 @@ class Cohere2MoeModel(TextModel):
         experts = [k for d in self._experts for k in d.keys()]
         if len(experts) > 0:
             raise ValueError(f"Unprocessed experts: {experts}")
+
+
+@ModelBase.register("Cohere2VisionForConditionalGeneration")
+# [TAG_HF_EXAMPLE_GATED] CohereLabs/command-a-vision-07-2025 is gated
+@ModelBase.example("CohereLabs/command-a-plus-05-2026-bf16")
+class Cohere2VisionModel(MmprojModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.COHERE2V)
+        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams["layer_norm_eps"])
+        self.gguf_writer.add_vision_projector_scale_factor(self.global_config["downsample_factor"])
+        self.gguf_writer.add_vision_preproc_max_tiles(self.preprocessor_config["max_patches"])
+        self.gguf_writer.add_vision_use_gelu(True)
+
+    def tensor_force_quant(self, name, new_name, bid, n_dims):
+        if ".embeddings." in name:
+            return gguf.GGMLQuantizationType.F32
+        return super().tensor_force_quant(name, new_name, bid, n_dims)
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+        if not name.startswith(("model.vision_tower.", "model.multi_modal_projector.")):
+            return None
+        return super().filter_tensors((name, gen))

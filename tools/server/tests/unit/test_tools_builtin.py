@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 
@@ -53,22 +54,102 @@ def test_tools_builtin_grep_search():
     assert "Total matches: 1" in text
 
 
-def test_tools_builtin_read_file():
+def _grep_matches(text: str) -> list[tuple[str, int, str]]:
+    matches = []
+    for line in text.splitlines():
+        match = re.match(r"^(.*):(\d+):(match-\d+)$", line)
+        if match:
+            path, line_number, identity = match.groups()
+            matches.append((path, int(line_number), identity))
+    return matches
+
+
+def test_tools_builtin_grep_search_pagination(tmp_path):
     global server
     server.start()
 
-    this_file = os.path.join(PROJECT_ROOT, "tools", "server", "tests", "unit", "test_tools_builtin.py")
-    res = call_tool("read_file", {"path": this_file})
+    path = tmp_path / "matches.txt"
+    expected = [f"match-{i:03d}" for i in range(231)]
+    path.write_text("\n".join(expected) + "\n")
+    params = {"path": str(path), "pattern": "match-", "return_line_numbers": True}
+
+    pages = []
+    next_offset = 0
+    for page_index, expected_size in enumerate([100, 100, 31]):
+        page_params = params if not pages else {**params, "offset": next_offset}
+        text = call_tool("grep_search", page_params)["plain_text_response"]
+        matches = _grep_matches(text)
+        pages.append(matches)
+        assert len(matches) == expected_size
+        assert f"\n---\nTotal matches: {expected_size}\n" in text
+
+        continuation = re.search(r"Continue with offset=(\d+) and the same search arguments\.", text)
+        if page_index < 2:
+            assert continuation is not None
+            next_offset = int(continuation.group(1))
+            assert next_offset == (page_index + 1) * 100
+        else:
+            assert continuation is None
+
+    assert [identity for page in pages for _, _, identity in page] == expected
+
+
+def test_tools_builtin_grep_search_exact_page_has_no_continuation(tmp_path):
+    global server
+    server.start()
+
+    path = tmp_path / "matches.txt"
+    path.write_text("".join(f"match-{i:03d}\n" for i in range(100)) + "unrelated\n")
+    res = call_tool("grep_search", {"path": str(path), "pattern": "match-", "return_line_numbers": True})
     text = res["plain_text_response"]
-    assert GREP_MARKER in text
-    assert "def test_tools_builtin_read_file" in text
+
+    assert len(_grep_matches(text)) == 100
+    assert "Total matches: 100" in text
+    assert "Continue with offset=" not in text
+    assert "matches limit reached" not in text
 
 
-def test_tools_builtin_write_then_edit_file():
+def test_tools_builtin_grep_search_page_order_with_context(tmp_path):
     global server
     server.start()
 
-    log_path = os.path.join(PROJECT_ROOT, "test.log")
+    (tmp_path / "z.txt").write_text("".join(f"match-{i:03d}\n" for i in range(50)))
+    (tmp_path / "a.txt").write_text("".join(f"match-{i:03d}\n" for i in range(50, 120)))
+    params = {"path": str(tmp_path), "pattern": "match-", "context_lines": 1}
+
+    first = call_tool("grep_search", {**params, "offset": 0})["plain_text_response"]
+    second = call_tool("grep_search", {**params, "offset": 100})["plain_text_response"]
+    past_end = [call_tool("grep_search", {**params, "offset": offset})["plain_text_response"] for offset in (121, 1 << 32)]
+
+    expected = [("a.txt", line, f"match-{line + 49:03d}") for line in range(1, 71)]
+    expected += [("z.txt", line, f"match-{line - 1:03d}") for line in range(1, 51)]
+    assert _grep_matches(first) == expected[:100]
+    assert _grep_matches(second) == expected[100:]
+    assert "Continue with offset=100 and the same search arguments." in first
+    assert "Continue with offset=" not in second
+    for text in past_end:
+        assert _grep_matches(text) == []
+        assert "Total matches: 0" in text
+        assert "Continue with offset=" not in text
+
+
+def test_tools_builtin_read_file(tmp_path):
+    global server
+    server.start()
+
+    # a file of its own keeps the test below the read limit, unlike this file which grows with every test
+    path = str(tmp_path / "read.txt")
+    with open(path, "w", newline="\n") as f:
+        f.write("line1\nline2\nline3\n")
+    res = call_tool("read_file", {"path": path})
+    assert res["plain_text_response"] == "line1\nline2\nline3\n"
+
+
+def test_tools_builtin_write_then_edit_file(tmp_path):
+    global server
+    server.start()
+
+    log_path = str(tmp_path / "test.log")
     try:
         write_res = call_tool("write_file", {"path": log_path, "content": "line1\nline2\nline3\n"})
         assert write_res["result"] == "file written successfully"
@@ -93,11 +174,11 @@ def test_tools_builtin_write_then_edit_file():
             os.remove(log_path)
 
 
-def test_tools_builtin_edit_file_rejects_non_unique_old_text():
+def test_tools_builtin_edit_file_rejects_non_unique_old_text(tmp_path):
     global server
     server.start()
 
-    log_path = os.path.join(PROJECT_ROOT, "test.log")
+    log_path = str(tmp_path / "test.log")
     try:
         call_tool("write_file", {"path": log_path, "content": "dup\ndup\n"})
         err = call_tool_expect_error("edit_file", {
@@ -108,6 +189,23 @@ def test_tools_builtin_edit_file_rejects_non_unique_old_text():
     finally:
         if os.path.exists(log_path):
             os.remove(log_path)
+
+
+def test_tools_builtin_exec_shell_command_asks_for_a_description():
+    global server
+    server.start()
+
+    res = server.make_request("GET", "/tools")
+    assert res.status_code == 200, res.body
+    tool = next(t for t in res.body if t["tool"] == "exec_shell_command")
+    params = tool["definition"]["function"]["parameters"]
+    # first, so a client can show it while the command still streams
+    assert list(params["properties"])[0] == "description"
+    assert "description" in params["required"]
+
+    # the tool runs without it, as before
+    res = call_tool("exec_shell_command", {"command": "echo hi"})
+    assert "hi" in res["plain_text_response"]
 
 
 def test_tools_builtin_exec_shell_command_stream():
@@ -128,27 +226,21 @@ def test_tools_builtin_exec_shell_command_stream():
     assert "[exit code: 0]" in chunks
 
 
-def test_tools_builtin_cwd_header():
+def test_tools_builtin_cwd_header(tmp_path):
     global server
     server.start()
 
-    cwd_dir = os.path.join(PROJECT_ROOT, "tools", "server", "tests", "unit")
-    headers = {"x-tool-cwd": cwd_dir}
+    headers = {"x-tool-cwd": str(tmp_path)}
 
-    res = call_tool("read_file", {"path": "test_tools_builtin.py"}, headers=headers)
-    assert GREP_MARKER in res["plain_text_response"]
+    (tmp_path / "cwd.txt").write_text("cwd-content")
+    res = call_tool("read_file", {"path": "cwd.txt"}, headers=headers)
+    assert "cwd-content" in res["plain_text_response"]
 
     # exec_shell_command should also run with that directory as its working directory:
-    # writing to a relative filename must land inside cwd_dir
+    # writing to a relative filename must land inside it
     marker_name = "llama_cpp_test_tools_builtin_cwd_marker.txt"
-    marker_path = os.path.join(cwd_dir, marker_name)
-    try:
-        command = f"echo hello > {marker_name}"
-        call_tool("exec_shell_command", {"command": command}, headers=headers)
-        assert os.path.exists(marker_path)
-    finally:
-        if os.path.exists(marker_path):
-            os.remove(marker_path)
+    call_tool("exec_shell_command", {"command": f"echo hello > {marker_name}"}, headers=headers)
+    assert (tmp_path / marker_name).exists()
 
 
 def _container_engine_unavailable_reason(engine: str) -> str | None:
@@ -204,6 +296,21 @@ def test_tools_builtin_runtime_header(container_engine: str, container_id: str):
 
     exec_res = call_tool("exec_shell_command", {"command": "cat test.log"}, headers=headers)
     assert "hello container" in exec_res["plain_text_response"]
+
+
+def test_tools_builtin_runtime_header_refused_with_configured_runtime(container_engine: str, container_id: str):
+    global server
+    server.server_tools_runtime = f"{container_engine}-container:{container_id}"
+    server.start()
+
+    res = call_tool("exec_shell_command", {"command": "echo sandboxed"})
+    assert "sandboxed" in res["plain_text_response"]
+
+    for runtime in ["ssh:user@internal-host", f"{container_engine}-container:other", server.server_tools_runtime]:
+        res = server.make_request("POST", "/tools",
+                                  data={"tool": "exec_shell_command", "params": {"command": "echo hi"}},
+                                  headers={"x-tool-runtime": runtime})
+        assert res.status_code == 403, res.body
 
 
 def test_tools_builtin_runtime_header_unknown_scheme():
@@ -275,11 +382,11 @@ def test_tools_builtin_docker_runtime_cleans_up_spawned_container():
     assert leftover.returncode != 0, f"container {container_id} was not cleaned up after server exit"
 
 
-def test_tools_builtin_edit_file_rejects_overlapping_edits():
+def test_tools_builtin_edit_file_rejects_overlapping_edits(tmp_path):
     global server
     server.start()
 
-    log_path = os.path.join(PROJECT_ROOT, "test.log")
+    log_path = str(tmp_path / "test.log")
     try:
         call_tool("write_file", {"path": log_path, "content": "line1\nline2\n"})
         err = call_tool_expect_error("edit_file", {

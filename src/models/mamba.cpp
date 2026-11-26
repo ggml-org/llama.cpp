@@ -81,10 +81,10 @@ void llama_model_mamba::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_mamba::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_mamba::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_build_mamba_base(params) {
+llama_model_mamba::graph::graph(const llm_graph_params & params) : llm_build_mamba_base(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -101,9 +101,9 @@ llama_model_mamba::graph::graph(const llama_model & model, const llm_graph_param
         cb(cur, "attn_norm", il);
 
         if (model.arch == LLM_ARCH_MAMBA2) {
-            cur = build_mamba2_layer(rs_inp, cur, model, ubatch, il);
+            cur = build_mamba2_layer(rs_inp, cur, ubatch, il);
         } else {
-            cur = build_mamba_layer(rs_inp, cur, model, ubatch, il);
+            cur = build_mamba_layer(rs_inp, cur, ubatch, il);
         }
 
         if (il == n_layer - 1 && inp_out_ids) {
@@ -132,6 +132,4 @@ llama_model_mamba::graph::graph(const llama_model & model, const llm_graph_param
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

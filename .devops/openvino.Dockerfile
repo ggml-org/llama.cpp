@@ -1,18 +1,18 @@
-ARG OPENVINO_VERSION_MAJOR=2026.3.1
-ARG OPENVINO_VERSION_FULL=2026.3.1.22476.56d9685302d
+ARG OPENVINO_VERSION_MAJOR=2026.4.1
+ARG OPENVINO_VERSION_FULL=2026.4.1.22982.07f9c262b05
 ARG UBUNTU_VERSION=24.04
 
 # Intel GPU driver versions. https://github.com/intel/compute-runtime/releases
-ARG IGC_VERSION=v2.40.13
-ARG IGC_VERSION_FULL=2_2.40.13+22418
-ARG COMPUTE_RUNTIME_VERSION=26.31.39395.13
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.31.39395.13-0
-ARG IGDGMM_VERSION=22.10.0
+ARG IGC_VERSION=v2.42.6
+ARG IGC_VERSION_FULL=2_2.42.6+23070
+ARG COMPUTE_RUNTIME_VERSION=26.40.40196.8
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.40.40196.8-0
+ARG IGDGMM_VERSION=22.10.2
 
 # Intel NPU driver versions. https://github.com/intel/linux-npu-driver/releases
-ARG NPU_DRIVER_VERSION=v1.35.0
-ARG NPU_DRIVER_FULL=v1.35.0.20260722-29947505341
-ARG LIBZE1_VERSION=1.28.2-1~24.04~ppa1
+ARG NPU_DRIVER_VERSION=v1.38.0
+ARG NPU_DRIVER_FULL=v1.38.0.20260910-34487311128
+ARG LIBZE1_VERSION=1.32.0-1~24.04~ppa1
 
 # Optional proxy build arguments
 ARG http_proxy=
@@ -28,12 +28,17 @@ FROM docker.io/node:$NODE_VERSION AS web
 
 ARG APP_VERSION
 
-WORKDIR /app/tools/ui
+WORKDIR /app/ui/apps/chat
 
-COPY tools/ui/package.json tools/ui/package-lock.json ./
+COPY ui/apps/chat/package.json ui/apps/chat/package-lock.json ./
 RUN npm ci
 
-COPY tools/ui/ ./
+COPY ui/apps/chat/ ./
+# the app compiles Llama UI, Llama Voice and the harness from their sources next to it
+COPY ui/lib/ui/package.json /app/ui/lib/ui/package.json
+COPY ui/lib/ui/src/lib/ /app/ui/lib/ui/src/lib/
+COPY ui/lib/voice/src/ /app/ui/lib/voice/src/
+COPY ui/lib/harness/src/ /app/ui/lib/harness/src/
 RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 ## Build Image
@@ -83,7 +88,7 @@ WORKDIR /app
 
 COPY . .
 
-COPY --from=web /app/tools/ui/dist tools/ui/dist
+COPY --from=web /app/ui/apps/chat/dist ui/apps/chat/dist
 
 # Build Stage
 RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \
@@ -173,7 +178,7 @@ RUN --mount=type=cache,target=/var/cache/intel-npu,sharing=locked \
     fi; \
     DEB=/var/cache/intel-npu/libze1_${LIBZE1_VERSION}_amd64.deb; \
     if [ ! -f "$DEB" ]; then \
-        wget -q -O "$DEB" https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260606T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb; \
+        wget -q -O "$DEB" https://snapshot.ppa.launchpadcontent.net/kobuk-team/intel-graphics/ubuntu/20260830T100000Z/pool/main/l/level-zero-loader/libze1_${LIBZE1_VERSION}_amd64.deb; \
     fi; \
     mkdir /tmp/npu/ && cd /tmp/npu/ && tar -xf "$TGZ" && cp "$DEB" .; \
     apt-get update; \
@@ -227,6 +232,7 @@ ENTRYPOINT [ "/app/llama-cli" ]
 FROM base AS server
 
 ENV LLAMA_ARG_HOST=0.0.0.0
+ENV LLAMA_ARG_PORT=8080
 
 COPY --from=build /app/full/llama /app/full/llama-server /app/
 

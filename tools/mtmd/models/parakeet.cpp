@@ -4,7 +4,7 @@ static constexpr int PARAKEET_LOCAL_ATTN_THRESHOLD = 8192;
 static constexpr int PARAKEET_LOCAL_ATTN_WINDOW    = 128;
 
 // conv subsampling + conformer encoder
-ggml_cgraph * clip_graph_parakeet::build() {
+ggml_cgraph * mtmd_graph_parakeet::build() {
 
     // Conv subsampling
     ggml_tensor * inp = build_inp_raw(1);
@@ -287,8 +287,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
                     const auto n_frame    = rel_pos_scores->ne[1];
                     const auto n_head     = rel_pos_scores->ne[2];
 
-                    rel_pos_scores = ggml_pad(ctx0, rel_pos_scores, 1, 0, 0, 0);
-                    rel_pos_scores = ggml_roll(ctx0, rel_pos_scores, 1, 0, 0, 0);
+                    rel_pos_scores = ggml_pad_ext(ctx0, rel_pos_scores, 1, 0, 0, 0, 0, 0, 0, 0);
 
                     rel_pos_scores = ggml_reshape_3d(ctx0, rel_pos_scores, n_frame, pos_window + 1, n_head);
                     rel_pos_scores = ggml_cont(ctx0, rel_pos_scores);
@@ -297,23 +296,16 @@ ggml_cgraph * clip_graph_parakeet::build() {
                     int center = pos_window / 2;
                     size_t offset = rel_pos_scores->nb[0] * (center+1);
 
+                    // nb1 is the diagonal-extraction stride, not the source row stride
                     rel_pos_scores = ggml_view_3d(ctx0, rel_pos_scores,
-                                                  n_frame, pos_window, n_head,
-                                                  (pos_window) * 4,
+                                                  content_scores->ne[0],
+                                                  content_scores->ne[1],
+                                                  n_head,
+                                                  (size_t) pos_window * rel_pos_scores->nb[0],
                                                   rel_pos_scores->nb[2],
                                                   offset);
                     rel_pos_scores = ggml_cont(ctx0, rel_pos_scores);
                     ggml_format_name(rel_pos_scores, "enc_%d_attn_rel_pos_shifted", il);
-
-                    rel_pos_scores = ggml_view_3d(ctx0, rel_pos_scores,
-                                                  content_scores->ne[0],
-                                                  content_scores->ne[1],
-                                                  rel_pos_scores->ne[2],
-                                                  rel_pos_scores->nb[1],
-                                                  rel_pos_scores->nb[2],
-                                                  0);
-                    rel_pos_scores = ggml_cont(ctx0, rel_pos_scores);
-                    ggml_format_name(rel_pos_scores, "enc_%d_attn_rel_pos_shifted_view", il);
                 }
 
                 struct ggml_tensor * attn_scores = ggml_add(ctx0, content_scores, rel_pos_scores);
@@ -366,9 +358,7 @@ ggml_cgraph * clip_graph_parakeet::build() {
 
             // use ggml_ssm_conv for f32 precision
             const int dw_pad = (hparams.audio_conv_kernel_size - 1) / 2;
-            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
-            cur = ggml_roll(ctx0, cur, dw_pad, 0, 0, 0);
-            cur = ggml_pad(ctx0, cur, dw_pad, 0, 0, 0);
+            cur = ggml_pad_ext(ctx0, cur, dw_pad, dw_pad, 0, 0, 0, 0, 0, 0);
             ggml_format_name(cur, "enc_%d_conv_dw_pad", il);
 
             cur = ggml_ssm_conv(ctx0, cur, layer.conv_dw_w);

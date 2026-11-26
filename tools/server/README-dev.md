@@ -15,7 +15,7 @@ In-scope types of feature:
     - Multimodal input/output
     - Memory management: save/load state, context checkpoints
     - Model management
-    - Features that are required by the Web UI
+    - Features that are required by Llama Chat
 - Frontend:
     - Chat-oriented features, example: basic chat, image upload, edit messages
     - Agentic features, example: MCP
@@ -182,7 +182,7 @@ For detailed instructions, see the [test documentation](./tests/README.md).
 
 ### API for tools
 
-This endpoint is intended to be used internally by the Web UI and subject to change or to be removed in the future.
+This endpoint is intended to be used internally by Llama Chat and subject to change or to be removed in the future.
 
 **GET /tools**
 
@@ -201,9 +201,9 @@ Invoke a tool call, request body is a JSON object with:
 
 Headers:
 - `x-tool-cwd`: optional; if set, use as the CWD for tool; this is not part of tool's params because it's meant to be set by the runtime, not the LLM itself
-- `x-tool-runtime`: optional; if set, run the tool inside this isolate instead of on the host. Either `docker-container:<id>` or `podman-container:<id>`, using an already-running container, or `ssh:<target>`, running the tool on a remote host
+- `x-tool-runtime`: optional; if set, run the tool inside this isolate instead of on the host. Either `docker-container:<id>` or `podman-container:<id>`, using an already-running container, or `ssh:<target>`, running the tool on a remote host. Refused with 403 when the server is started with `--tools-runtime`, so clients cannot move tools out of that sandbox
 
-Returns JSON object. There are two response formats (MCP tools use the same two formats: their result content is concatenated into `plain_text_response`, and RPC or tool errors are surfaced as the `error` string):
+Returns JSON object. There are two response formats (MCP tools use the same two formats: their text parts are concatenated into `plain_text_response`, image and audio parts are rendered there as `data:<mime>;base64,...` lines, and RPC or tool errors are surfaced as the `error` string):
 
 Format 1: Plain text. The text will be placed into a field called `plain_text_response`, example:
 
@@ -238,6 +238,8 @@ That requires `JSON.stringify` when formatted to message content:
     "content": "{\"error\":\"cannot open this file\"}"
 }
 ```
+
+When the client disconnects during an MCP tool call, or the call exceeds `timeout_ms`, `llama-server` sends `notifications/cancelled` with the request id to the MCP server and returns an error.
 
 Set `stream: true` in the request body to stream a tool's output as it runs, instead of waiting for it to finish. Only certain tools accept this (for ex. `exec_shell_command`);
 returns 404 if tool doesn't support it.
@@ -277,7 +279,7 @@ For the direction from router to child:
 
 Model management API was added via PR [#23976](https://github.com/ggml-org/llama.cpp/pull/23976)
 
-The main goal of this API is to allow downloading models and/or removing models from the web UI. It relies on the model cache infrastructure under the hood to manage the list of models dynamically.
+The main goal of this API is to allow downloading models and/or removing models from Llama Chat. It relies on the model cache infrastructure under the hood to manage the list of models dynamically.
 
 Instead of building everything from the ground up (like what most AI agents will do when you ask them to implement a similar feature), we built on top of existing, already well-engineered components inside the codebase:
 - Model cache infrastructure as mentioned above (`common/download.h`)
@@ -286,7 +288,7 @@ Instead of building everything from the ground up (like what most AI agents will
 
 The flow for downloading a new model:
 - POST request comes in --> `post_router_models` --> validation
-- A new `llama-server` subprocess will be spawned with special `SERVER_CHILD_MODE_DOWNLOAD`
+- A new `llama-server` subprocess will be spawned with the `SERVER_ROLE_DOWNLOAD` role (see `server_role_type` in `server-common.h`)
 - Child process runs the download and report status back to router via stdin/out
 - If a stop request comes in, the router asks the child process to stop (same mechanism as running a model in child process)
 - Otherwise, upon completion, we call `load_models()` to refresh the list of models
@@ -321,6 +323,8 @@ Call stack on waking up:
 
 Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, `/metrics`) skip `wait_until_no_sleep`, so they answer from the cached responses instead of waking the server.
 
+IMPORTANT: any handler that touches the model or contexts (`ctx_server.mctx`, `ctx_server.vocab`, etc.) must call `create_response()` before that access, and keep the returned object alive until it is done with them. While sleeping, these pointers are freed, so using them before waking up leads to a crash. The returned object also holds an inflight count (released in its destructor) that prevents the server from going back to sleep. This applies to every route type, not only HTTP routes: for example, the `/v1/realtime` websocket handler calls `create_response()` first and holds it for the whole session.
+
 ### Notable Related PRs
 
 - Initial server implementation: https://github.com/ggml-org/llama.cpp/pull/1443
@@ -340,11 +344,11 @@ Endpoints created with `create_response(true)` (`/health`, `/props`, `/models`, 
 
 
 
-## Web UI
+## Llama Chat
 
-The project includes a web-based user interface for interacting with `llama-server`. It supports both single-model (`MODEL` mode) and multi-model (`ROUTER` mode) operation.
+The project includes Llama Chat, a web-based chat app for interacting with `llama-server`. It supports both single-model (`MODEL` mode) and multi-model (`ROUTER` mode) operation.
 
-The SvelteKit-based Web UI is introduced in this PR: https://github.com/ggml-org/llama.cpp/pull/14839
+The SvelteKit-based app is introduced in this PR: https://github.com/ggml-org/llama.cpp/pull/14839
 
 ### Features
 
@@ -376,7 +380,7 @@ Routes → Components → Hooks → Stores → Services → Storage/API
 -   **Services** - stateless API/database communication (`ChatService`, `ModelsService`, `PropsService`, `DatabaseService`)
 -   **Hooks** - reusable logic (`useModelChangeValidation`, `useProcessingState`)
 
-For detailed architecture diagrams, see [`tools/ui/docs/`](../ui/docs/):
+For detailed architecture diagrams, see [`ui/apps/chat/docs/`](../../ui/apps/chat/docs/):
 
 -   `high-level-architecture.mmd` - full architecture with all modules
 -   `high-level-architecture-simplified.mmd` - simplified overview
@@ -388,7 +392,7 @@ For detailed architecture diagrams, see [`tools/ui/docs/`](../ui/docs/):
 
 ```sh
 # make sure you have Node.js installed
-cd tools/ui
+cd ui/apps/chat
 npm i
 
 # run dev server (with hot reload)
@@ -403,4 +407,4 @@ npm run build
 
 After `public/index.html` has been generated, rebuild `llama-server` as described in the [build](#build) section to include the updated UI.
 
-**Note:** The Vite dev server automatically proxies API requests to `http://localhost:8080`. Make sure `llama-server` is running on that port during development.
+**Note:** The Vite dev server automatically proxies API requests to `http://localhost:9931`. Make sure `llama-server` is running on that port during development.

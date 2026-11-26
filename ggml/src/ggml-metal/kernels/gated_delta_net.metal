@@ -3,6 +3,7 @@
 constant short FC_gated_delta_net_ne20 [[function_constant(FC_GATED_DELTA_NET + 0)]];
 constant short FC_gated_delta_net_ne30 [[function_constant(FC_GATED_DELTA_NET + 1)]];
 constant short FC_gated_delta_net_K    [[function_constant(FC_GATED_DELTA_NET + 2)]];
+constant bool  FC_gated_delta_net_rep  [[function_constant(FC_GATED_DELTA_NET + 3)]];
 
 #if 1
 template<short NSG>
@@ -15,6 +16,11 @@ kernel void kernel_gated_delta_net_impl(
         device const char * b,
         device const char * s,
         device       char * dst,
+        device       char * dst_fuse,
+        device const char * pk,
+        device const char * pv,
+        device const char * pgb,
+        device const char * n_rep,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]])  {
@@ -64,6 +70,68 @@ kernel void kernel_gated_delta_net_impl(
     const uint state_size_per_snap = S_v * S_v * args.ne21 * args.ne23;
     // per-(seq,head) offset within a slot
     const uint state_out_base = (i23*args.ne21 + i21)*S_v*S_v + i20*S_v;
+
+    // when fused with the cache cpy, write the snapshots straight into the cache buffer using
+    // the slot stride; otherwise append them after the attn scores (nb_out == 0)
+    const bool fused = args.nb_out > 0;
+    const device float * state_out = fused ? (device float *)dst_fuse : (device float *)dst + attn_size;
+    const uint slot_stride = fused ? (uint)args.nb_out : state_size_per_snap;
+
+    // replay: pending tokens to run before the new ones (see ggml_gated_delta_net_ext)
+    if (FC_gated_delta_net_rep) {
+        const int n_r = ((device const int32_t *) n_rep)[i23];
+
+        device const char * pk_ptr  = pk  + i23*args.nb63 + i11*args.nb61;
+        device const char * pv_ptr  = pv  + i23*args.nb73 + i21*args.nb71;
+        device const char * pgb_ptr = pgb + i23*args.nb83 + i21*args.nb81;
+
+        for (int t = 0; t < n_r; t++) {
+            device const float * k_t = (device const float *) (pk_ptr  + t*args.nb62);
+            device const float * g_t = (device const float *) (pgb_ptr + t*args.nb82);
+
+            const float v_t    = ((device const float *) (pv_ptr + t*args.nb72))[i20];
+            const float beta_t = *(device const float *) (pgb_ptr + (args.n_pend + t)*args.nb82);
+
+            // same update as below, without the attention output
+            float s_k = 0.0f;
+
+            if (G == 1) {
+                const float g_exp = exp(g_t[0]);
+
+                FOR_UNROLL (short j = 0; j < NSG; j++) {
+                    const short is = tx*NSG + j;
+                    ls[j] *= g_exp;
+
+                    s_k += ls[j]*k_t[is];
+                }
+            } else {
+                // KDA
+                FOR_UNROLL (short j = 0; j < NSG; j++) {
+                    const short is = tx*NSG + j;
+                    ls[j] *= exp(g_t[is]);
+
+                    s_k += ls[j]*k_t[is];
+                }
+            }
+
+            s_k = simd_sum(s_k);
+
+            const float d = (v_t - s_k)*beta_t;
+
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                const short is = tx*NSG + j;
+                ls[j] += k_t[is]*d;
+            }
+        }
+
+        if (args.keep) {
+            device float * dst_state = (device float *)state_out + state_out_base;
+            FOR_UNROLL (short j = 0; j < NSG; j++) {
+                const short is = tx*NSG + j;
+                dst_state[is] = ls[j];
+            }
+        }
+    }
 
     for (short t = 0; t < args.ne22; t++) {
         float s_k = 0.0f;
@@ -116,7 +184,7 @@ kernel void kernel_gated_delta_net_impl(
         if (K > 1) {
             const int target_slot = (int)args.ne22 - 1 - (int)t;
             if (target_slot >= 0 && target_slot < (int)K) {
-                device float * dst_state = (device float *) (dst) + attn_size + (uint)target_slot * state_size_per_snap + state_out_base;
+                device float * dst_state = (device float *)state_out + (uint)target_slot * slot_stride + state_out_base;
                 FOR_UNROLL (short j = 0; j < NSG; j++) {
                     const short is = tx*NSG + j;
                     dst_state[is] = ls[j];
@@ -125,8 +193,9 @@ kernel void kernel_gated_delta_net_impl(
         }
     }
 
-    if (K == 1) {
-        device float * dst_state = (device float *) (dst) + attn_size + state_out_base;
+    // replay with keep: the state output is the state after the replay
+    if (K == 1 && !(FC_gated_delta_net_rep && args.keep)) {
+        device float * dst_state = (device float *)state_out + state_out_base;
         FOR_UNROLL (short j = 0; j < NSG; j++) {
             const short is = tx*NSG + j;
             dst_state[is] = ls[j];
@@ -158,6 +227,7 @@ kernel void kernel_gated_delta_net_impl(
         device const char * b,
         device const char * s,
         device       char * dst,
+        device       char * dst_fuse,
         uint3 tgpig[[threadgroup_position_in_grid]],
         uint3 tpitg[[thread_position_in_threadgroup]],
         uint3   ntg[[threads_per_threadgroup]])  {
@@ -230,7 +300,13 @@ kernel void kernel_gated_delta_net_impl(
         dst_attn += args.ne21*S_v;
     }
 
-    device float * dst_state  = (device float *) (dst) + args.ne23*args.ne22*args.ne21*S_v + (i23*args.ne21 + i21)*S_v*S_v + i20;
+    // when fused with the cache cpy, write the snapshots straight into the cache buffer using
+    // the slot stride; otherwise append them after the attn scores (nb_out == 0)
+    const bool fused = args.nb_out > 0;
+    const device float * state_out = fused ? (device float *)dst_fuse : (device float *)dst + args.ne23*args.ne22*args.ne21*S_v;
+    const uint slot_stride = fused ? (uint)args.nb_out : S_v*S_v;
+
+    device float * dst_state  = (device float *)state_out + (i23*args.ne21 + i21)*slot_stride + i20;
     device T     * dstt_state = (device T     *) (dst_state);
 
     FOR_UNROLL (short j = 0; j < NSG; j++) {

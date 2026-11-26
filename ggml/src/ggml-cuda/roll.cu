@@ -17,6 +17,10 @@ static __global__ void roll_f32_cuda(const float * __restrict__ src,
                                      const int64_t ne01,
                                      const int64_t ne02,
                                      const int64_t ne03,
+                                     const int64_t nb00,
+                                     const int64_t nb01,
+                                     const int64_t nb02,
+                                     const int64_t nb03,
                                      const int     s0,
                                      const int     s1,
                                      const int     s2,
@@ -39,7 +43,7 @@ static __global__ void roll_f32_cuda(const float * __restrict__ src,
     const int64_t d3 = wrap_index(i3 - s3, ne03);
 
     dst[i3 * (ne00 * ne01 * ne02) + i2 * (ne01 * ne00) + i1 * ne00 + i0] =
-        src[d3 * (ne00 * ne01 * ne02) + d2 * (ne01 * ne00) + d1 * ne00 + d0];
+        src[(d3 * nb03 + d2 * nb02 + d1 * nb01 + d0 * nb00) / sizeof(float)];
 }
 
 void ggml_cuda_op_roll(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -63,5 +67,5 @@ void ggml_cuda_op_roll(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     int64_t num_blocks = (sz + CUDA_ROLL_BLOCK_SIZE - 1) / CUDA_ROLL_BLOCK_SIZE;
 
     roll_f32_cuda<<<num_blocks, CUDA_ROLL_BLOCK_SIZE, 0, stream>>>(
-        src0_d, dst_d, ne00, ne01, ne02, ne03, s0, s1, s2, s3);
+        src0_d, dst_d, ne00, ne01, ne02, ne03, nb00, nb01, nb02, nb03, s0, s1, s2, s3);
 }

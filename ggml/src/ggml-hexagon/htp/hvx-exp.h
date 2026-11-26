@@ -173,7 +173,7 @@ static inline void hvx_exp_f32(uint8_t * restrict dst, const uint8_t * restrict 
         HVX_Vector * p_vec_in1 = (HVX_Vector *) src;
         HVX_Vector * p_vec_out = (HVX_Vector *) dst;
 
-        #pragma unroll(4)
+        #pragma unroll(2)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             if (true == negate) {
                 HVX_Vector neg_vec_in = hvx_vec_neg_f32(*p_vec_in1++);
@@ -183,7 +183,7 @@ static inline void hvx_exp_f32(uint8_t * restrict dst, const uint8_t * restrict 
             }
         }
     } else {
-        #pragma unroll(4)
+        #pragma unroll(2)
         for (int i = 0; i < num_elems_whole; i += VLEN_FP32) {
             HVX_Vector in = *(HVX_UVector *) (src + i * SIZEOF_FP32);
 
@@ -214,7 +214,25 @@ static inline void hvx_exp_f32(uint8_t * restrict dst, const uint8_t * restrict 
     }
 }
 
-static inline HVX_Vector hvx_vec_exp2_f16(HVX_Vector x_v) {
+// 2^x on 64 fp16 lanes, requires x <= 0
+#if __HVX_ARCH__ >= 81
+#define HVX_EXP2_FIXED_G0 (-12573)
+#define HVX_EXP2_FIXED_G1 (15210)
+#define HVX_EXP2_FIXED_G2 (-2645)
+#define HVX_EXP2_FIXED_G2_PAIR ((int32_t) ((uint32_t) (uint16_t) HVX_EXP2_FIXED_G2 * 0x00010001u))
+
+static inline HVX_Vector hvx_vec_exp2_neg_f16(HVX_Vector x_v) {
+    const HVX_Vector z   = Q6_Vuh_vmin_VuhVuh(Q6_V_vand_VV(x_v, Q6_Vh_vsplat_R(0x7FFF)), Q6_Vh_vsplat_R(0x4E40));
+    const HVX_Vector t   = Q6_Vh_equals_Vhf_rnd(Q6_Vh_vadd_VhVh(z, Q6_Vh_vsplat_R(0x2800)));
+    const HVX_Vector rho = Q6_V_vand_VV(t, Q6_Vh_vsplat_R(0x03FF));
+    const HVX_Vector r15 = Q6_Vh_vasl_VhR(rho, 5);
+    HVX_Vector       r   = Q6_Vh_vadd_VhVh(Q6_Vh_vmpy_VhRh_s1_rnd_sat(r15, HVX_EXP2_FIXED_G2_PAIR), Q6_Vh_vsplat_R(HVX_EXP2_FIXED_G1));
+    r                    = Q6_Vh_vadd_VhVh(Q6_Vh_vmpy_VhVh_s1_rnd_sat(r, r15), Q6_Vh_vsplat_R(HVX_EXP2_FIXED_G0));
+    const HVX_Vector b   = Q6_Vh_vadd_VhVh(Q6_Vh_vsub_VhVh(Q6_Vh_vsplat_R(0x6400), t), Q6_Vh_vmpy_VhVh_s1_rnd_sat(r, rho));
+    return Q6_Vhf_equals_Wqf32(Q6_Wqf32_vmpy_VhfVhf(b, Q6_Vh_vsplat_R(0x1400)));
+}
+#else
+static inline HVX_Vector hvx_vec_exp2_neg_f16(HVX_Vector x_v) {
     const HVX_Vector zero_v    = Q6_V_vzero();
     const HVX_Vector half_hf_v = Q6_Vh_vsplat_R(0x3800);  // fp16 0.5
 
@@ -230,7 +248,7 @@ static inline HVX_Vector hvx_vec_exp2_f16(HVX_Vector x_v) {
     HVX_Vector x_qf16 = Q6_Vqf16_vsub_VhfVhf(x_v, f_v);        // fractional part in qf16
 
     // Horner: y = ((((E5*x + E4)*x + E3)*x + E2)*x + E1)*x + E0
-    HVX_Vector y = Q6_Vqf16_vmpy_Vqf16Vqf16(Q6_Vh_vsplat_R(0x5082), x_qf16); // E5*x
+    HVX_Vector y = Q6_Vqf16_vmpy_Vqf16Vqf16(Q6_Vqf16_vadd_VhfVhf(Q6_Vh_vsplat_R(0x090c), zero_v), x_qf16); // E5*x
     y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x157d));        // + E4
     y            = Q6_Vqf16_vmpy_Vqf16Vqf16(y, x_qf16);
     y            = Q6_Vqf16_vadd_Vqf16Vhf(y, Q6_Vh_vsplat_R(0x20ed));        // + E3
@@ -251,5 +269,6 @@ static inline HVX_Vector hvx_vec_exp2_f16(HVX_Vector x_v) {
     y                          = Q6_Vh_vaslacc_VhVhR(y, k_v, 10);
     return Q6_V_vmux_QVV(q_underflow, zero_v, y);
 }
+#endif
 
 #endif /* HVX_EXP_H */

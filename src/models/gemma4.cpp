@@ -1,8 +1,9 @@
 #include "models.h"
+#include "llama-impl.h"
 
 void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-    ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl, hparams.n_layer());
+    ml.get_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, hparams.is_swa_impl);
 
     uint32_t n_kv_shared_layers = 0;
     ml.get_key(LLM_KV_ATTENTION_SHARED_KV_LAYERS, n_kv_shared_layers, false);
@@ -10,14 +11,25 @@ void llama_model_gemma4::load_arch_hparams(llama_model_loader & ml) {
     hparams.n_layer_kv_from_start = hparams.n_layer_all - (int32_t)n_kv_shared_layers;
     hparams.f_attention_scale     = 1.0f; // Gemma4 uses self.scaling = 1.0 (no pre-attn scaling)
 
+    // shared layers read the KV of the last layer with own KV and the same SWA type
+    GGML_ASSERT(hparams.n_layer_kv_from_start >= 2);
+    for (uint32_t il = hparams.n_layer_kv_from_start; il < hparams.n_layer_all; il++) {
+        hparams.kv_source_impl[il] = hparams.n_layer_kv_from_start - (hparams.is_swa(il) ? 2 : 1);
+    }
+
     ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA,          hparams.rope_freq_base_train_swa, false);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp, false);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all, false);
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,    hparams.n_swa);
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,  hparams.n_embd_per_layer);
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_SWA,    hparams.n_embd_head_k_swa);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_SWA,  hparams.n_embd_head_v_swa);
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING,     hparams.f_final_logit_softcapping, false);
+
+    // when non_causal is set, the model will use bidirectional attention on SWA layers only, while dense layers will remain causal
+    // ref: use_bidirectional_attention == "vision" in HF config
+    // note: E2B/E4B are always causal, bypassing this logic
+    hparams.non_causal_type = LLAMA_NON_CAUSAL_TYPE_SWA_ONLY;
 
     switch (hparams.n_layer()) {
         case 30: type = LLM_TYPE_26B_A4B; break;
@@ -32,7 +44,7 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
     const uint32_t n_embd_per_layer = hparams.n_embd_per_layer;
-    const int64_t  n_ff_exp         = hparams.n_ff_exp;
+    const int64_t  n_ff_exp         = hparams.n_ff_exp();
 
     if (n_embd_head_k != n_embd_head_v) {
         throw std::runtime_error("Gemma 4 requires n_embd_head_k == n_embd_head_v");
@@ -41,13 +53,13 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
         throw std::runtime_error("Gemma 4 requires n_embd_head_k_swa == n_embd_head_v_swa");
     }
 
+    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
     output = create_tensor(tn(LLM_TENSOR_OUTPUT, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
     // if output is NULL, init from the input tok embed
     if (output == NULL) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
-
-    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
 
     if (n_embd_per_layer > 0) {
         per_layer_tok_embd   = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),    {n_embd_per_layer * n_layer, n_vocab}, TENSOR_READ_LAZY);
@@ -70,9 +82,13 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
         layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
 
         // note: use_alternative_attention (v_proj is optional, if it's not present, use k_proj)
-        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head * n_head}, 0);
-        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_k}, kv_flags);
-        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_v}, TENSOR_NOT_REQUIRED);
+        layer.wqkv = create_tensor(tn(LLM_TENSOR_ATTN_QKV, "weight", i),
+            {n_embd, n_embd_head * n_head + n_embd_k + n_embd_v}, TENSOR_NOT_REQUIRED | TENSOR_SKIP_IF_VIRTUAL);
+        if (!layer.wqkv) {
+            layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q, "weight", i), {n_embd, n_embd_head * n_head}, 0);
+            layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K, "weight", i), {n_embd, n_embd_k}, kv_flags);
+            layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V, "weight", i), {n_embd, n_embd_v}, TENSOR_NOT_REQUIRED);
+        }
         layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head * n_head, n_embd}, 0);
 
         layer.attn_q_norm    = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM,    "weight", i), {n_embd_head}, 0);
@@ -132,27 +148,54 @@ void llama_model_gemma4::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_gemma4::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // get 2D slice view from a 3D tensor, the idx corresponds to the 3rd dim
-static ggml_tensor * ggml_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
+static ggml_tensor * gemma4_view_2d_slice(ggml_context * ctx0, ggml_tensor * x, int idx) {
     GGML_ASSERT(idx < (int) x->ne[2]);
-    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], ggml_row_size(x->type, x->ne[0]),
-                        idx * x->ne[0] * x->ne[1] * ggml_element_size(x));
+    return ggml_view_2d(ctx0, x, x->ne[0], x->ne[1], x->nb[1], idx * x->nb[2]);
 }
 
-llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_params & params) :
+class llm_graph_input_gemma4_prune : public llm_graph_input_i {
+    int64_t n_slices;
+    int64_t n_slice_tokens;
+    int64_t n_slice_outputs;
+public:
+    ggml_tensor * full_mask      = nullptr;
+    ggml_tensor * full_mask_swa  = nullptr;
+    ggml_tensor * out_mask       = nullptr;
+    ggml_tensor * out_mask_swa   = nullptr;
+    ggml_tensor * inp_prune_ids  = nullptr;
+    ggml_tensor * inp_prune_keep = nullptr;
+    llm_graph_input_gemma4_prune(int64_t n_slices, int64_t n_slice_tokens, int64_t n_slice_outputs)
+            : n_slices(n_slices), n_slice_tokens(n_slice_tokens), n_slice_outputs(n_slice_outputs) {}
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    static int64_t max_outputs_per_slice(
+        const llama_ubatch & ubatch, int64_t n_slices, int64_t n_slice_tokens
+    );
+};
+
+llama_model_gemma4::graph::graph(const llm_graph_params & params) :
         llm_graph_context(params),
-        model(model),
         n_embd_per_layer(model.hparams.n_embd_per_layer) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
-    inpL = build_inp_embd(model.tok_embd);
+    // do the PLE first to guarantee it is done in the host buffer
+    // ref: https://github.com/ggml-org/llama.cpp/pull/30160
+    ggml_tensor * inp_per_layer = nullptr;
+    if (model.per_layer_tok_embd) {
+        inp_per_layer = build_inp_per_layer();
+        ggml_build_forward_expand(gf, inp_per_layer);
+    }
 
     // important: do not normalize weights for raw embeddings input (i.e. encoded image emdeddings)
-    inpL = ggml_scale(ctx0, inpL, ubatch.token ? sqrtf(n_embd) : 1.0f);
+    inpL = build_inp_embd(model.tok_embd, sqrtf(n_embd));
     cb(inpL, "inp_scaled", -1);
 
     // inp_pos - contains the positions
@@ -161,27 +204,77 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     // TODO: is causal == true correct? might need some changes
     auto * inp_attn = build_attn_inp_kv_iswa();
 
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
+    auto inp_attn_prune = *inp_attn;
 
-    ggml_tensor * inp_per_layer = nullptr;
     if (model.per_layer_tok_embd) {
-        inp_per_layer = build_inp_per_layer();
-        ggml_build_forward_expand(gf, inp_per_layer);
+        // fold per_layer_input_scale (1/sqrt(2)) from project_per_layer_inputs() into tok_embd_scale
+        const float tok_embd_scale = sqrtf((float) n_embd_per_layer) / sqrtf(2.0f);
+
+        inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
+        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, inp_per_layer->ne[1]);
 
         // inp_per_layer shape: [n_embd_per_layer, n_tokens, n_layer]
         inp_per_layer = project_per_layer_inputs(inpL, inp_per_layer);
     }
 
+    const bool needs_unmasked_nextn =
+        cparams.embeddings_nextn && !cparams.embeddings_nextn_masked;
+
+    // KV-shared layers do not write to the KV cache, so prune non-output token rows before the first KV-shared layer
+    bool prune_shared = !needs_unmasked_nextn &&
+                        hparams.n_layer_kv_from_start > 0 && hparams.n_layer_kv_from_start < n_layer &&
+                        !cparams.embeddings;
+    for (int il = (int) hparams.n_layer_kv_from_start; prune_shared && il <= n_layer; ++il) {
+        prune_shared = !cparams.embeddings_layer_inp[il];
+    }
+
+    int64_t n_rows = n_tokens;
+
+    ggml_tensor * inp_prune_ids = nullptr;
+    ggml_tensor * inp_prune_keep = nullptr;
+    ggml_tensor * inp_out_ids = prune_shared ? nullptr : build_inp_out_ids();
+
     for (int il = 0; il < n_layer; ++il) {
+        if (prune_shared && il == (int) hparams.n_layer_kv_from_start) {
+            ggml_tensor * full     = inp_attn->self_attn_mask.raw;
+            ggml_tensor * full_swa = inp_attn->self_attn_mask_swa.raw;
+
+            const int64_t n_slices = full->ne[3], n_slice_tokens = full->ne[1];
+            const int64_t n_slice_outputs = llm_graph_input_gemma4_prune::max_outputs_per_slice(ubatch, n_slices, n_slice_tokens);
+
+            n_rows = n_slices * n_slice_outputs;
+
+            auto prune_input = std::make_unique<llm_graph_input_gemma4_prune>(n_slices, n_slice_tokens, n_slice_outputs);
+            prune_input->full_mask = full;
+            prune_input->full_mask_swa = full_swa;
+            prune_input->out_mask = ggml_new_tensor_4d(ctx0, full->type, full->ne[0], n_slice_outputs, 1, n_slices);
+            prune_input->out_mask_swa = ggml_new_tensor_4d(ctx0, full_swa->type, full_swa->ne[0], n_slice_outputs, 1, n_slices);
+            prune_input->inp_prune_ids  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
+            prune_input->inp_prune_keep = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_outputs);
+
+            ggml_set_input(prune_input->out_mask);
+            ggml_set_input(prune_input->out_mask_swa);
+            ggml_set_input(prune_input->inp_prune_ids);
+            ggml_set_input(prune_input->inp_prune_keep);
+
+            inp_prune_ids  = prune_input->inp_prune_ids;
+            inp_prune_keep = prune_input->inp_prune_keep;
+
+            inpL = ggml_get_rows(ctx0, inpL, inp_prune_ids);
+            inp_pos = ggml_reshape_1d(ctx0, ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, inp_pos, 1, n_tokens), inp_prune_ids), n_rows);
+
+            inp_attn_prune.self_attn_mask.raw = prune_input->out_mask;
+            inp_attn_prune.self_attn_mask_swa.raw = prune_input->out_mask_swa;
+            inp_attn = &inp_attn_prune;
+
+            res->add_input(std::move(prune_input));
+        }
+
         const int64_t n_embd_head = hparams.n_embd_head_k(il);
         GGML_ASSERT(n_embd_head == hparams.n_embd_head_v(il));
 
         const int64_t n_head    = hparams.n_head(il);
         const int64_t n_head_kv = hparams.n_head_kv(il);
-
-        const float freq_base_l  = model.get_rope_freq_base(cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-        const int   n_rot_l      = hparams.n_rot(il);
 
         res->t_layer_inp[il] = inpL;
 
@@ -189,37 +282,48 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         cur = build_norm(inpL, model.layers[il].attn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        ggml_tensor * freq_factors = nullptr;
-        if (!hparams.is_swa(il)) {
-            // full_attention layers use rope_freqs for proportional rope
-            freq_factors = model.layers[il].rope_freqs;
-        }
-
         // Q projection (shared for both non-KV and KV layers)
         // this is to mirror Gemma4Attention in pytorch code
+        ggml_tensor * qkv_fused = nullptr;
         ggml_tensor * Qcur;
-        {
+        if (model.layers[il].wqkv) {
+            qkv_fused = build_lora_mm(model.layers[il].wqkv, cur, model.layers[il].wqkv_s);
+            cb(qkv_fused, "wqkv", il);
+            const int64_t q_dim = n_embd_head * n_head;
+            Qcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, q_dim, n_rows, qkv_fused->nb[1], 0));
+        } else {
             Qcur = build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
+        }
+        {
             cb(Qcur, "Qcur", il);
 
-            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_tokens);
+            Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head, n_rows);
 
             Qcur = build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
             cb(Qcur, "Qcur_normed", il);
 
-            Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Qcur = build_rope(Qcur, inp_pos, il);
             cb(Qcur, "Qcur_pos", il);
         }
 
         // self-attention
         if (hparams.has_kv(il)) {
-            ggml_tensor * Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+            ggml_tensor * Kcur;
+            ggml_tensor * Vcur;
+            if (qkv_fused) {
+                const int64_t q_dim = n_embd_head * n_head;
+                const int64_t k_dim = n_embd_head * n_head_kv;
+                const int64_t v_dim = n_embd_head * n_head_kv;
+                const size_t  esize = ggml_element_size(qkv_fused);
+                Kcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, k_dim, n_tokens, qkv_fused->nb[1], q_dim * esize));
+                Vcur = ggml_cont(ctx0, ggml_view_2d(ctx0, qkv_fused, v_dim, n_tokens, qkv_fused->nb[1], (q_dim + k_dim) * esize));
+            } else {
+                Kcur = build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+                Vcur = model.layers[il].wv
+                       ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
+                       : Kcur; // if v_proj is not present, use Kcur as Vcur
+            }
             cb(Kcur, "Kcur", il);
-
-            ggml_tensor * Vcur = model.layers[il].wv
-                                    ? build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
-                                    : Kcur; // if v_proj is not present, use Kcur as Vcur
             cb(Vcur, "Vcur", il);
 
             Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
@@ -231,8 +335,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             cb(Kcur, "Kcur_normed", il);
             cb(Vcur, "Vcur_normed", il);
 
-            Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, freq_factors, n_rot_l, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                                 ext_factor, attn_factor, beta_fast, beta_slow);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Kcur, "Kcur_pos", il);
 
@@ -246,9 +349,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                     Qcur, nullptr, nullptr, nullptr, nullptr, nullptr, hparams.f_attention_scale, il);
         }
 
-        // TODO @ngxson : strip unused token right after the last KV layer to speed up prompt processing
         // keep all rows when extracting unmasked nextn embeddings (MTP target needs the hidden state for every token)
-        if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+        if (!prune_shared && il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
             cur  = ggml_get_rows(ctx0,  cur, inp_out_ids);
             inpL = ggml_get_rows(ctx0, inpL, inp_out_ids);
         }
@@ -290,7 +392,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * tmp = ggml_rms_norm(ctx0, attn_out, hparams.f_norm_rms_eps);
             tmp = ggml_scale(ctx0, tmp, 1.0f / sqrtf((float) n_embd));
             tmp = ggml_mul(ctx0, tmp, model.layers[il].ffn_gate_inp_s);
-            ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_tokens]
+            ggml_tensor * logits = build_lora_mm(model.layers[il].ffn_gate_inp, tmp); // [n_expert, n_rows]
             cb(logits, "ffn_moe_logits", il);
 
             cur_moe = build_moe_ffn(cur_moe,
@@ -304,10 +406,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
                     1.0f,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
                     il, logits,
-                    model.layers[il].ffn_gate_up_exps,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    model.layers[il].ffn_gate_up_exps);
             cur_moe = build_norm(cur_moe,
                     model.layers[il].ffn_post_norm_2, nullptr,
                     LLM_NORM_RMS, il);
@@ -342,18 +441,19 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
             ggml_tensor * pe_in = cur;
             cb(cur, "pe_in", il);
 
-            cur = build_lora_mm(model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_tokens]
+            cur = build_lora_mm(model.layers[il].per_layer_inp_gate, cur); // [n_embd_per_layer, n_rows]
             cur = ggml_gelu(ctx0, cur);
 
-            ggml_tensor * inp_this_layer = ggml_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
+            ggml_tensor * inp_this_layer = gemma4_view_2d_slice(ctx0, inp_per_layer, il); // [n_embd_per_layer, n_tokens]
 
-            // TODO @ngxson : improve this
-            if (il == n_layer - 1 && inp_out_ids && cparams.embeddings_nextn_masked) {
+            if (prune_shared && !hparams.has_kv(il)) {
+                inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_prune_ids);
+            } else if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
                 inp_this_layer = ggml_get_rows(ctx0, inp_this_layer, inp_out_ids);
             }
 
             cur = ggml_mul(ctx0, cur, inp_this_layer);
-            cur = build_lora_mm(model.layers[il].per_layer_proj, cur); // [n_embd, n_tokens]
+            cur = build_lora_mm(model.layers[il].per_layer_proj, cur); // [n_embd, n_rows]
             cur = build_norm(cur, model.layers[il].per_layer_post_norm, nullptr, LLM_NORM_RMS, il);
             cb(cur, "per_layer_embd_out", il);
 
@@ -374,6 +474,9 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
         inpL = cur;
     }
     cur = inpL;
+    if (prune_shared) {
+        cur = ggml_get_rows(ctx0, cur, inp_prune_keep);
+    }
 
     cur = build_norm(cur,
             model.output_norm, nullptr,
@@ -386,7 +489,7 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
     cb(cur, "h_nextn", -1);
     res->t_h_nextn = cur;
 
-    if (!cparams.embeddings_nextn_masked && inp_out_ids) {
+    if (crop_after_nextn(inp_out_ids)) {
         cur = ggml_get_rows(ctx0, cur, inp_out_ids);
     }
 
@@ -404,42 +507,70 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }
+
+class llm_graph_input_gemma4_ple : public llm_graph_input_i {
+public:
+    llm_graph_input_gemma4_ple(const llama_model & model) : model(model) {}
+
+    void set_input(const llama_ubatch * ubatch) override {
+        ggml_tensor * ple = model.per_layer_tok_embd;
+
+        const bool prefetch = model.can_prefetch.count(ple);
+
+        if (ubatch->token) {
+            if (prefetch) {
+                llama_prefetch_rows(ple, ubatch->token, ubatch->n_tokens);
+            }
+            ggml_backend_tensor_set(tokens, ubatch->token, 0, ubatch->n_tokens * ggml_element_size(tokens));
+        } else {
+            const int32_t padding = 0;
+            if (prefetch) {
+                // [TAG_GEMMA4_IMG_PADDING]
+                llama_prefetch_rows(ple, &padding, 1);
+            }
+            ggml_backend_tensor_set(token0, &padding, 0, ggml_element_size(token0));
+        }
+    }
+
+    bool can_reuse(const llm_graph_params & params) override {
+        return params.ubatch.token ? tokens && tokens->ne[0] == params.ubatch.n_tokens : tokens == nullptr;
+    }
+
+    ggml_tensor * tokens = nullptr;
+    ggml_tensor * token0 = nullptr;
+
+    const llama_model & model;
+};
 
 // equivalent to get_per_layer_inputs() in python code
 // output shape: [n_embd_per_layer, n_layer, n_tokens]
 ggml_tensor * llama_model_gemma4::graph::build_inp_per_layer() {
-    auto inp = std::make_unique<llm_graph_input_embd>(n_embd);
+    auto inp = std::make_unique<llm_graph_input_gemma4_ple>(model);
 
     ggml_tensor * inp_per_layer;
-    float tok_embd_scale = sqrtf((float) n_embd_per_layer);
+    // mixed ubatch: embd rows have token id 0, same padding row as below
+    // TODO: use ggml_build_forward_select
     if (ubatch.token) {
         inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, ubatch.n_tokens);
         ggml_set_input(inp->tokens);
         res->t_inp_tokens = inp->tokens;
 
-        inp_per_layer = ggml_get_rows  (ctx0, model.per_layer_tok_embd, inp->tokens);
-        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, n_tokens);
-        inp_per_layer = ggml_scale     (ctx0, inp_per_layer, tok_embd_scale);
+        inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->tokens);
         cb(inp_per_layer, "inp_per_layer_selected", -1);
-
-        res->add_input(std::move(inp));
     } else {
         // Multimodal embedding path: use padding token (ID=0) embedding
         // TODO: verify if this is the correct behavior in transformers implementation
-        const int64_t embd_size = model.per_layer_tok_embd->ne[0];  // n_embd_per_layer * n_layer
 
-        // Extract and dequantize padding token embedding (row 0)
-        ggml_tensor * padding = ggml_view_1d(ctx0, model.per_layer_tok_embd, embd_size, 0);
-        inp_per_layer = ggml_cast (ctx0, padding, GGML_TYPE_F32);
-        inp_per_layer = ggml_scale(ctx0, inp_per_layer, tok_embd_scale);
+        // [TAG_GEMMA4_IMG_PADDING]
+        inp->token0 = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, 1);
+        ggml_set_input(inp->token0);
+        res->t_inp_tokens = inp->token0;
 
-        // Reshape to [n_embd_per_layer, n_layer, 1]
-        inp_per_layer = ggml_reshape_3d(ctx0, inp_per_layer, n_embd_per_layer, n_layer, 1);
+        inp_per_layer = ggml_get_rows(ctx0, model.per_layer_tok_embd, inp->token0);
         cb(inp_per_layer, "inp_per_layer_multimodal", -1);
     }
+    res->add_input(std::move(inp));
     return inp_per_layer;
 }
 
@@ -453,19 +584,108 @@ ggml_tensor * llama_model_gemma4::graph::project_per_layer_inputs(ggml_tensor * 
     const float per_layer_input_scale      = 1.0f / sqrtf(2.0f);
 
     // note: this matrix multiplication will be performed in the input layer (i.e. on the CPU)
+    // fold per_layer_input_scale into proj_norm_w and per_layer_projection_scale into proj_eps
+    ggml_tensor * proj_norm_w = ggml_scale(ctx0, model.per_layer_proj_norm, per_layer_input_scale);
+    ggml_build_forward_expand(gf, proj_norm_w);
+
     ggml_tensor * per_layer_proj;
     per_layer_proj = ggml_mul_mat   (ctx0, model.per_layer_model_proj, inp_batch);
-    per_layer_proj = ggml_scale     (ctx0, per_layer_proj, per_layer_projection_scale);
     per_layer_proj = ggml_reshape_3d(ctx0, per_layer_proj, n_embd_per_layer, n_layer, n_tokens);
 
-    per_layer_proj = build_norm(per_layer_proj, model.per_layer_proj_norm, nullptr, LLM_NORM_RMS, -1);
+    const float proj_eps = hparams.f_norm_rms_eps / (per_layer_projection_scale * per_layer_projection_scale);
+    per_layer_proj = ggml_rms_norm(ctx0, per_layer_proj, proj_eps);
+    per_layer_proj = ggml_mul(ctx0, per_layer_proj, proj_norm_w);
     cb(per_layer_proj, "per_layer_proj", -1);
 
-    inp_per_layer = ggml_add  (ctx0, per_layer_proj, inp_per_layer);
-    inp_per_layer = ggml_scale(ctx0, inp_per_layer, per_layer_input_scale);
+    inp_per_layer = ggml_add(ctx0, per_layer_proj, inp_per_layer);
     cb(inp_per_layer, "inp_per_layer", -1);
 
     // permute to shape: [n_embd_per_layer, n_tokens, n_layer]
-    inp_per_layer = ggml_cont(ctx0, ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3));
-    return inp_per_layer;
+    return ggml_permute(ctx0, inp_per_layer, 0, 2, 1, 3);
+}
+
+void llm_graph_input_gemma4_prune::set_input(const llama_ubatch * ubatch) {
+    std::vector<std::vector<int32_t>> selected(n_slices);
+
+    for (int32_t s = 0; s < n_slices; ++s) {
+        for (int32_t t = 0; t < n_slice_tokens; ++t) {
+            const int32_t i = s * n_slice_tokens + t;
+            if (ubatch->output[i]) {
+                selected[s].push_back(i);
+            }
+        }
+    }
+
+    std::vector<int32_t> take, keep;
+    for (int32_t s = 0; s < n_slices; ++s) {
+        const auto & ids = selected[s];
+
+        for (int32_t j = 0; j < int32_t(ids.size()); ++j) {
+            keep.push_back(s * n_slice_outputs + j);
+        }
+
+        take.insert(take.end(), ids.begin(), ids.end());
+        const int32_t dummy = ids.empty() ? s * n_slice_tokens : ids.back();
+        take.insert(take.end(), n_slice_outputs - ids.size(), dummy);
+    }
+
+    GGML_ASSERT(take.size() == size_t(inp_prune_ids->ne[0]));
+    if (!take.empty()) {
+        ggml_backend_tensor_set(inp_prune_ids, take.data(), 0,
+                                take.size() * sizeof(int32_t));
+    }
+
+    auto copy_mask = [&](const ggml_tensor * full, ggml_tensor * out) {
+        if (take.empty() || !out->buffer) {
+            return;
+        }
+
+        GGML_ASSERT(full->buffer && ggml_backend_buffer_is_host(full->buffer));
+        const size_t row_bytes = full->ne[0] * ggml_element_size(full);
+        const auto * src = static_cast<const uint8_t *>(full->data);
+        std::vector<uint8_t> packed(take.size() * row_bytes);
+
+        for (size_t j = 0; j < take.size(); ++j) {
+            memcpy(packed.data() + j * row_bytes,
+                        src + take[j] * row_bytes,
+                        row_bytes);
+        }
+
+        ggml_backend_tensor_set(out, packed.data(), 0, packed.size());
+    };
+
+    copy_mask(full_mask, out_mask);
+    copy_mask(full_mask_swa, out_mask_swa);
+
+    if (!keep.empty()) {
+        ggml_backend_tensor_set(
+            inp_prune_keep, keep.data(), 0,
+            keep.size() * sizeof(int32_t));
+    }
+}
+
+bool llm_graph_input_gemma4_prune::can_reuse(const llm_graph_params & params) {
+    const auto & ubatch = params.ubatch;
+
+    if (ubatch.n_tokens != n_slices * n_slice_tokens || !ubatch.output) {
+        return false;
+    }
+
+    return max_outputs_per_slice(ubatch, n_slices, n_slice_tokens) == n_slice_outputs;
+}
+
+int64_t llm_graph_input_gemma4_prune::max_outputs_per_slice(const llama_ubatch & ubatch, int64_t n_slices, int64_t n_slice_tokens) {
+    int64_t res = 0;
+
+    for (int32_t s = 0; s < n_slices; ++s) {
+        int64_t m = 0;
+        for (int32_t t = 0; t < n_slice_tokens; ++t) {
+            const int32_t i = s * n_slice_tokens + t;
+            if (ubatch.output[i]) {
+                m++;
+            }
+        }
+        res = std::max(res, m);
+    }
+    return res;
 }

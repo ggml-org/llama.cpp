@@ -3,7 +3,7 @@
 void llama_model_afmoe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_LEADING_DENSE_BLOCK_COUNT,   hparams.n_layer_dense_lead, false);
-    ml.get_key(LLM_KV_EXPERT_FEED_FORWARD_LENGTH,  hparams.n_ff_exp);
+    ml.get_key_or_arr(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, hparams.n_ff_exp_arr, hparams.n_layer_all);
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
     ml.get_key(LLM_KV_EXPERT_GATING_FUNC,          hparams.expert_gating_func, false);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale, false);
@@ -14,15 +14,17 @@ void llama_model_afmoe::load_arch_hparams(llama_model_loader & ml) {
     // Pattern: 3 sliding - 1 full (global_attn_every_n_layers = 4)
     if (hparams.n_swa > 0) {
         hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-        uint32_t swa_period = 4;
-        ml.get_key_or_arr(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, swa_period, false);
-        hparams.set_swa_pattern(swa_period);
+        load_swa_pattern(ml, 4);
 
         hparams.rope_freq_base_train_swa  = hparams.rope_freq_base_train;
         hparams.rope_freq_scale_train_swa = hparams.rope_freq_scale_train;
         ml.get_key(LLM_KV_ROPE_FREQ_BASE_SWA, hparams.rope_freq_base_train_swa, false);
     } else {
         hparams.swa_type = LLAMA_SWA_TYPE_NONE;
+    }
+
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        hparams.rope_pattern[il] = (il + 1) % hparams.n_no_rope_layer_step != 0;
     }
 
     // Default to sigmoid if not set
@@ -52,7 +54,7 @@ void llama_model_afmoe::load_arch_tensors(llama_model_loader &) {
         output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
     }
 
-    const int64_t n_ff_exp = hparams.n_ff_exp;
+    const int64_t n_ff_exp = hparams.n_ff_exp();
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
@@ -103,10 +105,10 @@ void llama_model_afmoe::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_afmoe::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_afmoe::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
@@ -128,14 +130,8 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
     const float kq_scale = 1.0f/sqrtf(float(n_embd_head));
 
     for (int il = 0; il < n_layer; ++il) {
-        const float freq_base_l  = model.get_rope_freq_base (cparams, il);
-        const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
 
         ggml_tensor * inpSA = inpL;
-
-        // This overlaps with SWA layers in current models, so get_rope_freq_base/scale may be superfluous
-        const bool use_rope = hparams.n_no_rope_layer_step > 0 &&
-                              (il + 1) % hparams.n_no_rope_layer_step != 0;
 
         // dual attention normalization (pre)
         cur = build_norm(inpL,
@@ -160,19 +156,11 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
             cb(Qcur, "Qcur_normed", il);
             cb(Kcur, "Kcur_normed", il);
 
-            if (use_rope) {
-                Qcur = ggml_rope_ext(
-                        ctx0, Qcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Qcur, "Qcur_rope", il);
+            Qcur = build_rope(Qcur, inp_pos, il);
+            cb(Qcur, "Qcur_rope", il);
 
-                Kcur = ggml_rope_ext(
-                        ctx0, Kcur, inp_pos, nullptr,
-                        n_rot, rope_type, n_ctx_orig, freq_base_l, freq_scale_l,
-                        ext_factor, attn_factor, beta_fast, beta_slow);
-                cb(Kcur, "Kcur_rope", il);
-            }
+            Kcur = build_rope(Kcur, inp_pos, il);
+            cb(Kcur, "Kcur_rope", il);
 
             cur = build_attn(inp_attn,
                     NULL, NULL, NULL,  // wo will be applied after gating
@@ -280,6 +268,4 @@ llama_model_afmoe::graph::graph(const llama_model & model, const llm_graph_param
     cur = build_lora_mm(model.output, cur, model.output_s);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

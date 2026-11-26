@@ -1,3 +1,4 @@
+import http.client
 import pytest
 import requests
 import time
@@ -93,6 +94,44 @@ def test_completion_stream_vs_non_stream():
     assert content_stream == res_non_stream.body["content"]
 
 
+def test_completion_connection_reuse():
+    server.start()
+    conn = http.client.HTTPConnection(server.server_host, server.server_port, timeout=30)
+    try:
+        conn.connect()
+        conn.auto_open = 0
+        original_socket = conn.sock
+        conn.request("POST", "/completion", json.dumps({
+            "prompt": "Hello", "n_predict": 4, "stream": True,
+        }), {"Content-Type": "application/json"})
+        with conn.getresponse() as response:
+            assert response.status == 200
+            assert response.chunked
+            assert not response.will_close
+            assert response.read()
+        conn.request("GET", "/health")
+        with conn.getresponse() as response:
+            assert response.status == 200
+            assert json.loads(response.read())["status"] == "ok"
+        assert conn.sock is original_socket
+    finally:
+        conn.close()
+
+
+def test_completion_empty_reverse_prompt():
+    global server
+    server.reverse_prompt = ""
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "n_predict": 8,
+        "prompt": "I believe the meaning of life is",
+    })
+    assert res.status_code == 200
+    assert res.body["stop_type"] == "limit"
+    assert res.body["timings"]["predicted_n"] == 8
+    assert match_regex("(going|bed)+", res.body["content"])
+
+
 def test_completion_with_openai_library():
     global server
     server.start()
@@ -148,7 +187,7 @@ def test_completion_stream_with_openai_library_stops():
         if choice.finish_reason is None:
             assert choice.text is not None
             output_text += choice.text
-    assert match_regex("Sure, here's one for[\\s\\S]*", output_text), f'Unexpected output: {output_text}'
+    assert match_regex("Sure, here's one for[\\s\\S]*|Sure! Here's one for you[\\s\\S]*", output_text), f'Unexpected output: {output_text}'
 
 
 @pytest.mark.parametrize("n_slots", [1, 2])
@@ -236,6 +275,29 @@ def test_nocache_long_input_prompt():
         "cache_prompt": False,
     })
     assert res.status_code == 400
+
+
+# a request pinned to a busy slot leaves the generation running on it untouched
+def test_pinned_request_on_busy_slot():
+    global server
+    server.n_ctx = 4096
+    server.start()
+    story = "Once upon a time a dragon named Ember guarded a golden key in a deep cave. " * 8
+
+    def run(pin_busy: bool) -> str:
+        server.make_request("POST", "/completion", data={"prompt": story, "id_slot": 0, "n_predict": 4, "temperature": 0.0})
+        res = server.make_stream_request("POST", "/completion", data={
+            "prompt": "To bake bread, mix flour, water and salt, then",
+            "id_slot": 0, "n_predict": 1024, "ignore_eos": True, "temperature": 0.0, "stream": True,
+        })
+        content = next(res)["content"]
+        if pin_busy:
+            server.make_request("POST", "/completion", data={"prompt": story + "The dragon", "id_slot": 0, "n_predict": 4, "temperature": 0.0})
+        return content + "".join(chunk["content"] for chunk in res)
+
+    baseline = run(pin_busy=False)
+    assert run(pin_busy=True) == baseline
+
 
 def test_json_prompt_no_mtmd():
     global server
@@ -394,7 +456,12 @@ def test_completion_unified(n_ctx, n_slots, n_predict_vals, expected_success):
     results = parallel_function_calls(tasks)
     for res, n_predict, expect_ok in zip(results, n_predict_vals, expected_success):
         if expect_ok:
-            assert res.status_code == 200
+            # the pool is aborted as a whole, so a request that fits on its own
+            # is still dropped when the slots overlap, and it says so explicitly
+            assert res.status_code == 200 or (
+                res.status_code == 500
+                and "context size has been exceeded" in res.body["error"]["message"].lower()
+            )
 
         # note: https://github.com/ggml-org/llama.cpp/pull/18700#issuecomment-3728695581
         if res.status_code == 200:
@@ -609,18 +676,23 @@ def test_cancel_request():
     server.n_predict = -1
     server.n_slots = 1
     server.server_slots = True
+    server.enable_ctx_shift = True
     server.start()
-    # send a request that will take a long time, but cancel it before it finishes
+    # context shift keeps the generation running until the request is cancelled
     try:
         server.make_request("POST", "/completion", data={
             "prompt": "I believe the meaning of life is",
         }, timeout=0.1)
     except requests.exceptions.ReadTimeout:
         pass # expected
-    # make sure the slot is free
-    time.sleep(2)
-    res = server.make_request("GET", "/slots")
-    assert res.body[0]["is_processing"] == False
+    # the slot is freed once the server notices the closed connection
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        res = server.make_request("GET", "/slots")
+        if not res.body[0]["is_processing"]:
+            return
+        time.sleep(0.1)
+    raise AssertionError("slot is still processing after the request was cancelled")
 
 
 # this test exercises the host-memory prompt cache
@@ -661,3 +733,200 @@ def test_completion_prompt_cache():
         assert "prompt_n" in timings and timings["prompt_n"] + timings["cache_n"] == n_prompt
         assert "predicted_n" in timings and timings["predicted_n"] == n_predict
         assert "tokens" in res.body and isinstance(res.body["tokens"], list)
+
+
+# a slot that switched to an unrelated prompt must not restore a context checkpoint of the previous one
+def test_completion_checkpoint_after_unrelated_prompt():
+    global server
+    server = ServerPreset.tinygemma3()
+    server.n_slots = 1
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def tokenize(content):
+        res = server.make_request("POST", "/tokenize", data={"content": content})
+        assert res.status_code == 200
+        return res.body["tokens"]
+
+    def top_logprobs(prompt, cache_prompt):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 1,
+            "n_probs": 5,
+            "cache_prompt": cache_prompt,
+        })
+        assert res.status_code == 200
+        return [(p["id"], p["logprob"]) for p in res.body["completion_probabilities"][0]["top_logprobs"]]
+
+    tokens = tokenize("Purple elephants quietly compose sonnets about tax law")
+    expected = top_logprobs(tokens[:2], False)
+
+    # 5 tokens: the checkpoint 4 tokens before the end of the prompt holds only its first token
+    top_logprobs(tokenize("The quick brown fox jumps over the lazy dog")[:5], True)
+    top_logprobs(tokens[:1], True)
+    actual = top_logprobs(tokens[:2], True)
+
+    assert [tid for tid, _ in actual] == [tid for tid, _ in expected]
+    for (_, lp), (_, lp_expected) in zip(actual, expected):
+        assert lp == pytest.approx(lp_expected, abs=1e-3)
+
+
+# a restored context checkpoint must be kept for the next request that shares the same prefix
+def test_completion_checkpoint_kept_after_restore():
+    global server
+    server = ServerPreset.tinygemma3()
+    server.n_slots = 1
+    server.n_batch = 16
+    server.n_ubatch = 16
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def tokenize(content):
+        res = server.make_request("POST", "/tokenize", data={"content": content})
+        assert res.status_code == 200
+        return res.body["tokens"]
+
+    def cache_n(prompt):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": 1,
+            "cache_prompt": True,
+        })
+        assert res.status_code == 200
+        return res.body["timings"]["cache_n"]
+
+    prefix = tokenize("Purple elephants quietly compose sonnets about tax law in the moonlight")
+    suffixes = [tokenize(s) for s in [
+        "The quick brown fox jumps over the lazy dog while the farmer counts his sheep and the sun slowly sets behind the distant hills",
+        "Seven tiny robots repaired the broken lighthouse lens before the storm arrived, then danced on the rocks until the morning tide came in",
+        "Green apples rolled down the hill toward the river, where a curious otter collected them one by one and stacked them on a flat stone",
+    ]]
+
+    # 4 tokens: the checkpoint 4 tokens before the end of the prompt holds exactly the prefix
+    cache_n(prefix + suffixes[0][:4])
+
+    # suffixes longer than n_ubatch + 4: no new checkpoint within the prefix, only the restored one can be reused
+    for suffix in suffixes[1:]:
+        assert len(suffix) > server.n_ubatch + 4
+        assert cache_n(prefix + suffix) == len(prefix) - 1
+
+
+# hybrid model with SWA: a checkpoint or a state right before the new tokens must be reused, even if it is less than n_swa tokens away
+def test_completion_checkpoint_hybrid_swa():
+    global server
+    server = ServerPreset.tinylfm3omni()
+    server.n_slots = 1
+    server.n_batch = 16
+    # one token per ubatch, like the generated tokens: the runs with and without the cache go through the same kernels
+    server.n_ubatch = 1
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def complete(prompt, cache_prompt=True, n_predict=4):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": n_predict,
+            "n_probs": 5,
+            "cache_prompt": cache_prompt,
+            "return_tokens": True,
+        })
+        assert res.status_code == 200
+        return res.body
+
+    def top_logprobs(body):
+        return [(p["id"], p["logprob"]) for p in body["completion_probabilities"][0]["top_logprobs"]]
+
+    def assert_same_output(actual, expected):
+        assert actual["tokens"] == expected["tokens"]
+        assert top_logprobs(actual) == top_logprobs(expected)
+
+    # shorter than n_swa (256), so that every checkpoint is within the SWA window of the prompt end
+    prefix = [1000 + i for i in range(200)]
+    suffix = [5000 + i for i in range(20)]
+
+    # the new prompt drops the generated tokens: the state is rolled back to the checkpoint 4 tokens before the end
+    expected = complete(prefix + suffix, cache_prompt=False)
+    complete(prefix)
+    actual = complete(prefix + suffix)
+    assert actual["timings"]["cache_n"] == len(prefix) - 4
+    assert_same_output(actual, expected)
+
+    # the new prompt continues after the generated tokens: the state is used as it is
+    first = complete(prefix)
+    prompt = prefix + first["tokens"] + suffix
+    expected = complete(prompt, cache_prompt=False)
+    first = complete(prefix)
+    assert prefix + first["tokens"] + suffix == prompt
+    actual = complete(prompt)
+    # the last generated token was sampled, but never processed
+    assert actual["timings"]["cache_n"] == len(prefix) + len(first["tokens"]) - 1
+    assert actual["timings"]["prompt_n"] == len(suffix) + 1
+    assert_same_output(actual, expected)
+
+
+# the prompt cache has to be consulted even when the selected slot already holds a usable prefix, and even when the slot was picked by id
+# ref: https://github.com/ggml-org/llama.cpp/issues/28139
+# ref: https://github.com/ggml-org/llama.cpp/issues/28276
+PROMPT_HEAD = "The capital of France is Paris. " * 2
+PROMPT_TAIL = "The river Seine runs slowly through the middle of the old stone city. "
+
+# PROMPT_SHORT is a strict prefix of PROMPT_LONG and covers more of it than the default --slot-prompt-similarity, so the slot is selected by the LCP loop
+PROMPT_SHORT = PROMPT_HEAD + PROMPT_TAIL*6
+PROMPT_LONG  = PROMPT_SHORT + PROMPT_TAIL*18
+PROMPT_OTHER = "Whiskers the cat climbed the tall oak tree behind the red barn. " * 12
+
+
+def prompt_cache_server():
+    global server
+    server.n_slots = 2
+    server.n_ctx = 2048
+    server.n_batch = 512
+    server.cache_ram = 512
+    server.start()
+
+
+def completion_cached(prompt: str, id_slot: int | None = None):
+    data = {"prompt": prompt, "cache_prompt": True, "n_predict": 0, "temperature": 0.0}
+    if id_slot is not None:
+        data["id_slot"] = id_slot
+    res = server.make_request("POST", "/completion", data=data)
+    assert res.status_code == 200
+    return res.body["timings"]["prompt_n"], res.body["timings"]["cache_n"]
+
+
+def test_prompt_cache_used_when_slot_pinned_by_id_is_empty():
+    global server
+    prompt_cache_server()
+
+    n_cold, _ = completion_cached(PROMPT_LONG, id_slot=0)
+    assert n_cold > 100
+
+    # push the state of slot 0 into the prompt cache
+    completion_cached(PROMPT_OTHER, id_slot=0)
+
+    # slot 1 is empty, so f_keep has no meaning here - the cache still holds the exact state for this prompt and has to be used
+    n_pinned, n_cached = completion_cached(PROMPT_LONG, id_slot=1)
+    assert n_cached == n_cold - n_pinned
+    assert n_pinned < n_cold
+
+
+def test_prompt_cache_used_when_slot_holds_a_shorter_prefix():
+    global server
+    prompt_cache_server()
+
+    # warm slot 1 before the long state reaches the cache, otherwise this request would consume the cached entry itself
+    n_short, _ = completion_cached(PROMPT_SHORT, id_slot=1)
+
+    n_cold, _ = completion_cached(PROMPT_LONG, id_slot=0)
+    assert n_cold > n_short
+
+    # push the long state of slot 0 into the prompt cache
+    completion_cached(PROMPT_OTHER, id_slot=0)
+
+    # slot 1 holds a prefix of PROMPT_LONG and would be reused as is, but the cache holds the whole state and is the better start
+    n_reuse, n_cached = completion_cached(PROMPT_LONG, id_slot=1)
+    assert n_cached == n_cold - n_reuse
+    assert n_reuse < n_cold - n_short

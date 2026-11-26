@@ -132,7 +132,7 @@ kernel void kernel_mul_mv_mxfp4_f32_flat(
         global float4 * y4 = (global float4 *)yb;
 
         #pragma unroll
-        for (short row = 0; row < N_R0_MXFP4; row++) {
+        for (short row = 0; row < N_R0_MXFP4 && first_row + row < ne0; row++) {
             uchar xb_e = x_e[row * nb + ib];
 #ifdef SRC0Q_IMG
             ushort4 xb_q = as_ushort4(read_imageui(src0_q, (offset_q + row * nb + ib) * 2 + it).xy);

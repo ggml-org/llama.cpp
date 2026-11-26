@@ -128,7 +128,7 @@ Note: to debug the inference graph: you can use [llama-eval-callback](/examples/
 If the new model supports multimodal inputs, you will need to add a new encoder definition in `libmtmd`. You can find more information about llama.cpp's multimodal support in [the docs](../multimodal.md) and in the `tools/mtmd` source directory.
 
 1. In the conversion script, make sure you add a subclass that extends `MmprojModel` or another class that inherits from the same base class.
-2. Add the encoder definition in `clip.cpp`.
+2. Add the encoder definition: hparams and tensor loading in `mtmd-model.cpp`, graph inputs in `mtmd-subcontext.cpp`.
 3. Implement the preprocessor in `mtmd.cpp`. In most cases, you can reuse an existing preprocessor.
 4. Implement the encoder GGML graph, either in a dedicated file if the model is truly different from existing ones, or by reusing an existing implementation (for example: siglip, pixtral, or qwen) and adding a model-specific projector.
 
@@ -138,6 +138,23 @@ Note:
 - Adding a model-specific API or CLI is an anti-pattern in `libmtmd`. The goal of `libmtmd` is to provide an easy-to-use, model-agnostic library for multimodal pipeline.
 - In most cases, `llama-mtmd-cli` should not be modified. If a model requires a specific prompt, either let the user provide it or bake it into the Jinja chat template.
 - For audio generation models, see `tools/mtmd/README-dev.md`
+
+## Add a decision model
+
+A decision model answers typed questions about a state in one forward pass. It is served by `POST /v1/systemone` in `llama-server`, see [the server docs](../../tools/server/README.md).
+
+The conversion is the same as above, but a new model needs its own `DecisionType` in `gguf-py/gguf/constants.py`. See the existing models and follow the pattern.
+
+> [!IMPORTANT]
+>
+> Most of the logic is handled in `tools/server/server-decision.cpp`, to avoid too many changes to `libllama`.
+
+Note:
+- If a new public API is needed in `libllama`, add it to `llama-ext.h`.
+- Metadata with a single use case must be hard-coded in `server-decision.cpp` instead of being saved to the GGUF. This avoids bloating the conversion code.
+- Most importantly, keep your change as small and as self-contained as possible. Reuse the existing infrastructure whenever you can.
+
+For more information, see [PR #29818](https://github.com/ggml-org/llama.cpp/pull/29818).
 
 ## Tips and tricks
 

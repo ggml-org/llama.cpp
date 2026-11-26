@@ -15,48 +15,51 @@ static __global__ void pad_f32(const float * src, size_t s00, size_t s01, size_t
     // blockIdx.z: i3*ne2+i2
     // blockIdx.y: i1
     // blockIDx.x: i0 / CUDA_PAD_BLOCK_SIZE
-    // gridDim.y:  ne1
+    // gridDim.y and gridDim.z are capped at 65535, blocks stride over larger ne1 and ne2*ne3
     int i0 = threadIdx.x + blockIdx.x * blockDim.x;
-    int i1 = blockIdx.y;
-    int i2 = blockIdx.z % ne2;
-    int i3 = blockIdx.z / ne2;
-
-    if (i0 >= ne0 || i1 >= ne1 || i2 >= ne2 || i3 >= ne3) {
+    if (i0 >= ne0) {
         return;
     }
 
-    const int64_t dst_idx = i3 * (ne0 * ne1 * ne2) + i2 * (ne0 * ne1) + i1 * ne0 + i0;
+    for (int i1 = blockIdx.y; i1 < ne1; i1 += gridDim.y) {
+        for (int i23 = blockIdx.z; i23 < ne2 * ne3; i23 += gridDim.z) {
+            int i2 = i23 % ne2;
+            int i3 = i23 / ne2;
 
-    if (!circular) {
-        if ((i0 >= lp0 && i0 < ne0 - rp0) && (i1 >= lp1 && i1 < ne1 - rp1) && (i2 >= lp2 && i2 < ne2 - rp2) &&
-            (i3 >= lp3 && i3 < ne3 - rp3)) {
-            const int64_t i00  = i0 - lp0;
-            const int64_t i01  = i1 - lp1;
-            const int64_t i02  = i2 - lp2;
-            const int64_t i03  = i3 - lp3;
+            const int64_t dst_idx = i3 * (ne0 * ne1 * ne2) + i2 * (ne0 * ne1) + i1 * ne0 + i0;
 
-            const int64_t src_idx = i03 * s03 + i02 * s02 + i01 * s01 + i00 * s00;
+            if (!circular) {
+                if ((i0 >= lp0 && i0 < ne0 - rp0) && (i1 >= lp1 && i1 < ne1 - rp1) && (i2 >= lp2 && i2 < ne2 - rp2) &&
+                    (i3 >= lp3 && i3 < ne3 - rp3)) {
+                    const int64_t i00  = i0 - lp0;
+                    const int64_t i01  = i1 - lp1;
+                    const int64_t i02  = i2 - lp2;
+                    const int64_t i03  = i3 - lp3;
 
-            dst[dst_idx] = src[src_idx];
-        } else {
-            dst[dst_idx] = 0.0f;
+                    const int64_t src_idx = i03 * s03 + i02 * s02 + i01 * s01 + i00 * s00;
+
+                    dst[dst_idx] = src[src_idx];
+                } else {
+                    dst[dst_idx] = 0.0f;
+                }
+            }
+            // circular means on a torus, so x and y wrap around
+            else {
+                const int64_t ne00 = ne0 - lp0 - rp0;
+                const int64_t ne01 = ne1 - lp1 - rp1;
+                const int64_t ne02 = ne2 - lp2 - rp2;
+                const int64_t ne03 = ne3 - lp3 - rp3;
+
+                const int64_t i00 = wrap_around(i0 - lp0, ne00);
+                const int64_t i01 = wrap_around(i1 - lp1, ne01);
+                const int64_t i02 = wrap_around(i2 - lp2, ne02);
+                const int64_t i03 = wrap_around(i3 - lp3, ne03);
+
+                const int64_t src_idx = i03 * s03 + i02 * s02 + i01 * s01 + i00 * s00;
+
+                dst[dst_idx] = src[src_idx];
+            }
         }
-    }
-    // circular means on a torus, so x and y wrap around
-    else {
-        const int64_t ne00 = ne0 - lp0 - rp0;
-        const int64_t ne01 = ne1 - lp1 - rp1;
-        const int64_t ne02 = ne2 - lp2 - rp2;
-        const int64_t ne03 = ne3 - lp3 - rp3;
-
-        const int64_t i00 = wrap_around(i0 - lp0, ne00);
-        const int64_t i01 = wrap_around(i1 - lp1, ne01);
-        const int64_t i02 = wrap_around(i2 - lp2, ne02);
-        const int64_t i03 = wrap_around(i3 - lp3, ne03);
-
-        const int64_t src_idx = i03 * s03 + i02 * s02 + i01 * s01 + i00 * s00;
-
-        dst[dst_idx] = src[src_idx];
     }
 }
 
@@ -67,7 +70,7 @@ static void pad_f32_cuda(const float * src, size_t s00, size_t s01, size_t s02, 
     const int ne0, const int ne1, const int ne2, const int ne3,
     const bool circular, cudaStream_t stream) {
     int  num_blocks = (ne0 + CUDA_PAD_BLOCK_SIZE - 1) / CUDA_PAD_BLOCK_SIZE;
-    dim3 gridDim(num_blocks, ne1, ne2 * ne3);
+    dim3 gridDim(num_blocks, std::min(ne1, 65535), std::min(ne2 * ne3, 65535));
     pad_f32<<<gridDim, CUDA_PAD_BLOCK_SIZE, 0, stream>>>(src, s00, s01, s02, s03, dst,
                                                          lp0, rp0, lp1, rp1, lp2, rp2, lp3, rp3,
                                                          ne0, ne1, ne2, ne3, circular);

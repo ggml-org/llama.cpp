@@ -5,14 +5,15 @@
 #include <climits>
 #include <openvino/core/node.hpp>
 #include <openvino/core/node_output.hpp>
+#include <openvino/op/add.hpp>
 #include <openvino/op/broadcast.hpp>
 #include <openvino/op/concat.hpp>
 #include <openvino/op/constant.hpp>
 #include <openvino/op/convert.hpp>
 #include <openvino/op/gather.hpp>
+#include <openvino/op/reshape.hpp>
 #include <openvino/op/shape_of.hpp>
 #include <openvino/op/slice.hpp>
-#include <openvino/op/squeeze.hpp>
 #include <openvino/op/unsqueeze.hpp>
 
 namespace ov {
@@ -24,7 +25,26 @@ OutputVector translate_get_rows(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
 
     Output<Node> res;
-    auto data = process_view_input_new(context, 0);
+    Output<Node> data;
+    int64_t row_offset = 0;
+    if (context.get_view_input_size(0) > 0 && context.get_input(0).get_partial_shape().rank() == 2) {
+        // A row range view over a 2D weight Constant folds into the gather indices,
+        // which keeps the dequantization subgraph intact for the plugins.
+        const auto view_shape = context.get_view_input_ggml_shape(0, 0);
+        const auto view_stride = context.get_view_input_stride(0, 0);
+        const size_t view_offset = context.get_view_input_offset(0, 0);
+        const size_t row_bytes = view_stride[2];
+        data = context.get_input(0);
+        FRONT_END_OP_CONVERSION_CHECK(row_bytes > 0 && view_offset % row_bytes == 0 &&
+                                          data.get_partial_shape()[1].compatible(view_shape[3]),
+                                      "GET_ROWS: view over a weight must be a row range");
+        row_offset = static_cast<int64_t>(view_offset / row_bytes);
+    } else if (context.get_view_input_size(0) > 0) {
+        data = process_view_input_new(context, 0);
+    } else {
+        // gemma-4 gathers the mask rows of its output tokens for the KV-shared layers
+        data = get_kq_mask_input(context, 0);
+    }
 
     auto op_case = context.get_op_case();
     ov::Output<ov::Node> indices;
@@ -47,21 +67,57 @@ OutputVector translate_get_rows(const NodeContext & context) {
         indices = process_view_input_new(context, 1);
     }
 
+    if (op_case == 5) {
+        // data [b3, b2, rows, row_size], indices [b3, b2, k]: one gather per (b3, b2) batch. The leading dims reach
+        // here in either layout (stateful models merge b3 into b2), so restore them from the static inner dims
+        const auto data_shape = context.get_input_shape(0);
+        const auto indices_shape = context.get_input_shape(1);
+        data = std::make_shared<ov::op::v1::Reshape>(
+            data,
+            ov::op::v0::Constant::create(ov::element::i64, {4},
+                                         {(int64_t) -1, data_shape[1].get_length(), data_shape[2].get_length(),
+                                          data_shape[3].get_length()}),
+            false);
+        indices = std::make_shared<ov::op::v1::Reshape>(
+            indices,
+            ov::op::v0::Constant::create(ov::element::i64, {3},
+                                         {(int64_t) -1, indices_shape[2].get_length(), indices_shape[3].get_length()}),
+            false);
+        auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {2});
+        res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 2);
+        if (res.get_element_type() != context.get_output_type()) {
+            res = std::make_shared<ov::op::v0::Convert>(res, context.get_output_type());
+        }
+        return rename_outputs_with_suffix({res}, context.get_name());
+    }
+
     // data[1,b,x,y] ind[1,1,b,x'] test-backend-ops case
     // data[x,y] ind[1,1,1,x'] normal case
-    indices =
-        std::make_shared<ov::op::v0::Squeeze>(indices, ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
+    // Drop the leading dims down to [b,x']. Stateful models drop one rank, so a hardcoded
+    // {0,1} would also strip the batch dim whenever b == 1 (every decode step).
+    const auto indices_rank = indices.get_partial_shape().rank();
+    FRONT_END_OP_CONVERSION_CHECK(indices_rank.is_static(), "Expected static rank for GET_ROWS indices");
+    if (indices_rank.get_length() > 2) {
+        // Keep zero-token batches: GPU Squeeze-to-Reshape can treat a zero dimension as a copy marker.
+        indices = std::make_shared<ov::op::v1::Reshape>(
+            indices, get_dimensions(std::make_shared<ov::op::v3::ShapeOf>(indices),
+                                    {int(indices_rank.get_length() - 2), int(indices_rank.get_length() - 1)}), false);
+    }
+    if (row_offset != 0) {
+        indices = std::make_shared<ov::op::v1::Add>(
+            indices, ov::op::v0::Constant::create(indices.get_element_type(), {}, {row_offset}));
+    }
     if (data.get_partial_shape().rank() == 4) {
         if (!(data.get_partial_shape()[1].is_dynamic()) && data.get_partial_shape()[1].get_length() == 1) {
             // Work-around for a bug in ov cpu plugin for test-backend-ops
-            data = std::make_shared<ov::op::v0::Squeeze>(data,
-                                                         ov::op::v0::Constant::create(ov::element::i64, {2}, {0, 1}));
+            data = std::make_shared<ov::op::v1::Reshape>(
+                data, get_dimensions(data.get_node_shared_ptr(), {2, 3}), false);
             auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
             res = std::make_shared<ov::op::v8::Gather>(data, indices, axis);
         } else {
             auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
-            data =
-                std::make_shared<ov::op::v0::Squeeze>(data, ov::op::v0::Constant::create(ov::element::i64, {1}, {0}));
+            data = std::make_shared<ov::op::v1::Reshape>(
+                data, get_dimensions(data.get_node_shared_ptr(), {1, 2, 3}), false);
             // data: [batch, rows, ...], indices: [batch, n] - this is a batched gather
             // (batch_dims=1) along the rows axis. The data and indices batch dims are
             // logically equal (both == n_tokens) but reach this node through independent
@@ -123,8 +179,15 @@ OutputVector translate_get_rows(const NodeContext & context) {
         auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {1});
         res = std::make_shared<ov::op::v8::Gather>(data, indices, axis, 1);
     } else {
-        auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
-        res = std::make_shared<ov::op::v8::Gather>(data, indices, axis);
+        // For a tied embedding the same weight also feeds the lm_head matmul. Gathering the
+        // dequantized table would give that dequantization chain a second consumer, forcing the
+        // full table to be materialized; gather the packed rows instead and dequantize those.
+        if (auto compressed = gather_compressed_rows(data, indices)) {
+            res = compressed;
+        } else {
+            auto axis = ov::op::v0::Constant::create(ov::element::i32, ov::Shape{}, {0});
+            res = std::make_shared<ov::op::v8::Gather>(data, indices, axis);
+        }
     }
 
     if (res.get_element_type() != context.get_output_type()) {

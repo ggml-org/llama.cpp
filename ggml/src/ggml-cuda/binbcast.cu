@@ -1,4 +1,5 @@
 #include "binbcast.cuh"
+#include "convert.cuh"
 #include <cstdint>
 #include <utility>
 
@@ -82,14 +83,14 @@ static __global__ void k_bin_bcast(const src0_t *         src0,
     for (uint32_t i0 = i0s; i0 < ne0; i0 += s0) {
         const uint32_t i10 = fastmodulo(i0, ne10);
 
-        float result = src0_row ? (float) src0_row[size_t(i0)*s00] : 0.0f;
+        float result = src0_row ? ggml_cuda_cast<float>(src0_row[size_t(i0)*s00]) : 0.0f;
         if constexpr (sizeof...(src1_ptrs) > 0) {
-            result = (..., (result = bin_op(result, (float)src1s[i_src1 + size_t(i10)*s10])));
+            result = (..., (result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + size_t(i10)*s10]))));
         } else {
-            result = bin_op(result, (float)src1[i_src1 + size_t(i10)*s10]);
+            result = bin_op(result, ggml_cuda_cast<float>(src1[i_src1 + size_t(i10)*s10]));
         }
 
-        dst_row[i0] = (dst_t) result;
+        dst_row[i0] = ggml_cuda_cast<dst_t>(result);
 
         // protect i0 from overflow
         if (ne0 - i0 <= s0) {
@@ -154,14 +155,14 @@ static __global__ void k_bin_bcast_unravel(const src0_t *         src0,
     const uint32_t i10 = fastmodulo(i0, ne10);
 
     ggml_cuda_pdl_sync();
-    float result = src0_row ? (float) src0_row[size_t(i0)*s00] : 0.0f;
+    float result = src0_row ? ggml_cuda_cast<float>(src0_row[size_t(i0)*s00]) : 0.0f;
     if constexpr (sizeof...(src1_ptrs) > 0) {
-        result = (..., (result = bin_op(result, (float)src1s[i_src1 + size_t(i10)*s10])));
+        result = (..., (result = bin_op(result, ggml_cuda_cast<float>(src1s[i_src1 + size_t(i10)*s10]))));
     } else {
-        result = bin_op(result, (float)src1[i_src1 + size_t(i10)*s10]);
+        result = bin_op(result, ggml_cuda_cast<float>(src1[i_src1 + size_t(i10)*s10]));
     }
 
-    dst_row[i0] = (dst_t) result;
+    dst_row[i0] = ggml_cuda_cast<dst_t>(result);
 }
 
 template <float (*bin_op)(const float, const float), typename src0_t, typename src1_t, typename dst_t, size_t... I>
@@ -254,6 +255,18 @@ static void launch_bin_bcast_pack(const ggml_tensor * src0, const ggml_tensor * 
         size_t s01 = nb01 / sizeof(src0_t);
         size_t s02 = nb02 / sizeof(src0_t);
         size_t s03 = nb03 / sizeof(src0_t);
+
+        // the index of a dim of size 1 is always 0, so its stride is never applied,
+        // but after collapsing contiguous dims it can be the whole tensor size and exceed 32 bits
+        if (cne0[1] == 1) { s01 = 0; }
+        if (cne0[2] == 1) { s02 = 0; }
+        if (cne0[3] == 1) { s03 = 0; }
+        if (cne1[1] == 1) { s11 = 0; }
+        if (cne1[2] == 1) { s12 = 0; }
+        if (cne1[3] == 1) { s13 = 0; }
+        if (ne1 == 1) { s1 = 0; }
+        if (ne2 == 1) { s2 = 0; }
+        if (ne3 == 1) { s3 = 0; }
 
         GGML_ASSERT(ne0 <= std::numeric_limits<uint32_t>::max());
         GGML_ASSERT(ne1 <= std::numeric_limits<uint32_t>::max());
@@ -413,10 +426,14 @@ static void ggml_cuda_op_bin_bcast(
     const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
     const void * src0_dd, const void * src1_dd, void * dst_dd, cudaStream_t stream) {
 
-    GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16 || src1->type == GGML_TYPE_BF16);
 
-    if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if (src0->type == GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16 && dst->type == GGML_TYPE_F32) {
         op()(src0, src1, dst, (const float *)src0_dd, (const float *)src1_dd, (float *)dst_dd, stream);
+    } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) {
+        op()(src0, src1, dst, (const nv_bfloat16 *) src0_dd, (const nv_bfloat16 *) src1_dd, (nv_bfloat16 *) dst_dd, stream);
+    } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_BF16) {
+        op()(src0, src1, dst, (const nv_bfloat16 *) src0_dd, (const float *) src1_dd, (nv_bfloat16 *) dst_dd, stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
         op()(src0, src1, dst, (const half *) src0_dd, (const half *)src1_dd, (half *) dst_dd, stream);
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16) {
@@ -457,9 +474,17 @@ static void ggml_cuda_op_fused_binbcast_impl(ggml_backend_cuda_context & ctx, gg
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    if (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+    if (src0->type == GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16 && dst->type == GGML_TYPE_F32) {
         launch_bin_bcast_pack<op, float, float, float>(src0, src1, dst,
             (const float *) src0->data, (const float *) src1->data, (float *) dst->data,
+            stream, std::make_index_sequence<n_fuse>{});
+    } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_BF16 && dst->type == GGML_TYPE_BF16) {
+        launch_bin_bcast_pack<op, nv_bfloat16, nv_bfloat16, nv_bfloat16>(src0, src1, dst,
+            (const nv_bfloat16 *) src0->data, (const nv_bfloat16 *) src1->data, (nv_bfloat16 *) dst->data,
+            stream, std::make_index_sequence<n_fuse>{});
+    } else if (src0->type == GGML_TYPE_BF16 && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_BF16) {
+        launch_bin_bcast_pack<op, nv_bfloat16, float, nv_bfloat16>(src0, src1, dst,
+            (const nv_bfloat16 *) src0->data, (const float *) src1->data, (nv_bfloat16 *) dst->data,
             stream, std::make_index_sequence<n_fuse>{});
     } else if (src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) {
         launch_bin_bcast_pack<op, half, half, half>(src0, src1, dst,
@@ -567,8 +592,7 @@ void ggml_cuda_op_repeat_back(ggml_backend_cuda_context & ctx, ggml_tensor * dst
             float       * dst_d  = (float       *) dst->data;
             repeat_back_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s00, s01, s02, s03, ne0, ne1, ne2, ne3, stream);
         } break;
-        default: {
+        default:
             GGML_ASSERT(false);
-        } break;
     }
 }

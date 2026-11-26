@@ -5,22 +5,13 @@
 #include "common.h"
 #include "json-schema-to-grammar.h"
 #include "log.h"
+#include "parsers/parsers.h"
 #include "peg-parser.h"
 
 #include <stdexcept>
 #include <string>
 
 using json = common_json;
-
-// Helper to iterate over tools/functions
-static void foreach_function(const json & tools, const std::function<void(const json &)> & fn) {
-    for (const auto & tool : tools) {
-        if (!tool.contains("type") || tool.at("type") != "function" || !tool.contains("function")) {
-            continue;
-        }
-        fn(tool);
-    }
-}
 
 namespace autoparser {
 
@@ -67,11 +58,10 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
             data.generation_prompt += msg.render_content();
         }
 
-        data.prompt += data.generation_prompt;
+        data.prompt.append(data.generation_prompt);
     }
 
-    auto parser = autoparser.build_parser(inputs, parser_generation_prompt);
-    data.parser = parser.save();
+    data.parser = autoparser.build_parser(inputs, parser_generation_prompt);
 
     // Build grammar if tools are present
     bool has_tools =
@@ -79,31 +69,36 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &  
     std::string trigger_marker = !autoparser.tools.format.section_start.empty() ? autoparser.tools.format.section_start :
                                                                                   autoparser.tools.format.per_call_start;
 
+    // bare JSON calls without a start marker (e.g. Llama 3.x): trigger the lazy grammar on the call's opening instead
+    std::string trigger_pattern;
+    {
+        const auto & fmt = autoparser.tools.format;
+        bool top_level_name = (fmt.function_field.empty() || fmt.function_field == "function") &&
+                              fmt.name_field.find('.') == std::string::npos;
+        if (trigger_marker.empty() && fmt.mode == tool_format::JSON_NATIVE && !fmt.fun_name_is_key &&
+            !fmt.tools_array_wrapped && top_level_name) {
+            trigger_pattern = "\\{\\s*\"" + regex_escape(fmt.name_field) + "\"\\s*:";
+        }
+    }
+
     bool has_response_format = !inputs.json_schema.empty() && inputs.json_schema.is_object();
     bool include_grammar = has_response_format || (has_tools &&
-            ((inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO && !trigger_marker.empty()) ||
+            ((inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO && (!trigger_marker.empty() || !trigger_pattern.empty())) ||
               inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED));
 
     if (include_grammar) {
         data.grammar_lazy = !has_response_format && inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
         data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
-            foreach_function(inputs.tools, [&](const json & tool) {
-                const auto & function = tool.at("function");
-                auto         schema   = function.contains("parameters") ? function.at("parameters") : json::object();
-                builder.resolve_refs(schema);
-            });
-            if (has_response_format) {
-                auto schema = inputs.json_schema;
-                builder.resolve_refs(schema);
-            }
-            parser.build_grammar(builder, data.grammar_lazy);
+            data.parser.build_grammar(builder, data.grammar_lazy);
         });
 
         // Set grammar triggers based on tool section markers (fall back to per-call markers)
         if (data.grammar_lazy) {
-            data.grammar_triggers = {
-                { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker }
-            };
+            if (!trigger_marker.empty()) {
+                data.grammar_triggers = { { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, trigger_marker } };
+            } else {
+                data.grammar_triggers = { { COMMON_GRAMMAR_TRIGGER_TYPE_PATTERN, trigger_pattern } };
+            }
             if (autoparser.tools.format.openai_wrapper_trigger) {
                 // model emits the OpenAI function wrapper, trigger on it
                 data.grammar_triggers.push_back({ COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "{\"type\": \"function\"," });
@@ -230,13 +225,13 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         auto single_tool_parser = p.standard_json_tools(
             format.per_call_start, format.per_call_end, inputs.tools, inputs.parallel_tool_calls,
             inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
-            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger, inputs.tool_choice);
         tools_parser = p.trigger_rule("tool-calls", p.one_or_more(single_tool_parser + p.space()));
     } else {
         tools_parser = p.standard_json_tools(
             format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,
             inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
-            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger, inputs.tool_choice);
     }
 
     // Handle content wrappers if present
@@ -309,10 +304,10 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](const json & tool) {
+    common_chat_foreach_tool(inputs.tools, inputs.tool_choice, [&](size_t tool_index, const json & tool) {
         const auto & func   = tool.at("function");
         std::string  name   = func.at("name");
-        const auto & schema = func.contains("parameters") ? func.at("parameters") : json::object();
+        const auto   schema = common_chat_tool_parameters(func);
 
         // Build call_id parser based on position (if supported)
         bool have_call_id = false;
@@ -326,7 +321,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
             }
             have_call_id = true;
         }
-        auto args_parser = p.tool_args(p.schema(p.json(), "tool-" + name + "-schema", schema));
+        auto args_parser = p.tool_args(p.schema(p.json(), "tool-" + std::to_string(tool_index) + "-schema", schema));
         if (!arguments.start.empty()) {
             args_parser = p.literal(arguments.start) + args_parser;
         }
@@ -336,7 +331,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
         auto atomic_peek = !arguments.start.empty() ? std::optional(p.peek(p.literal(arguments.start))) : std::nullopt;
         auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_parser, atomic_peek);
-        tool_choice |= p.rule("tool-" + name, func_parser);
+        tool_choice |= p.rule("tool-" + std::to_string(tool_index), func_parser);
     });
 
     auto require_calls = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;
@@ -378,48 +373,38 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
     auto &       p           = ctx.p;
     const auto & inputs      = ctx.inputs;
 
-    auto until_suffix = p.rule("until-suffix", p.until(arguments.value_suffix));
+    // A raw string value needs a suffix to end on, without one it is parsed as JSON
+    bool raw_strings  = !arguments.value_suffix.empty();
+    auto until_suffix = raw_strings ? p.rule("until-suffix", p.until(arguments.value_suffix)) : p.eps();
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](const json & tool) {
-        const auto &          func       = tool.at("function");
-        std::string           name       = func.at("name");
-        auto                  params     = func.contains("parameters") ? func.at("parameters") : json::object();
-        const auto &          properties = params.contains("properties") ? params.at("properties") : json::object();
-
-        std::set<std::string> required;
-        if (params.contains("required")) {
-            required = params.at("required").get<std::set<std::string>>();
-        }
-
-        auto schema_info = common_schema_info();
-        schema_info.resolve_refs(params);
+    common_chat_foreach_tool(inputs.tools, inputs.tool_choice, [&](size_t tool_index, const json & tool) {
+        const auto & func = tool.at("function");
+        std::string  name = func.at("name");
 
         // Build parser for each argument, separating required and optional
         std::vector<common_peg_parser> required_parsers;
         std::vector<common_peg_parser> optional_parsers;
-        for (const auto & [param_name, param_schema] : properties.items()) {
-            bool is_required = required.find(param_name) != required.end();
-
+        foreach_parameter(func, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
             auto arg =
-                p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
+                p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param.name)) +
                                            arguments.name_suffix) +
                            arguments.value_prefix +
-                           (schema_info.resolves_to_string(param_schema) ?
-                                p.ac(p.tool_arg_string_value(until_suffix) +
-                                    p.tool_arg_close(p.literal(arguments.value_suffix)), arguments.value_suffix) :
+                           (raw_strings && param.schema->may_be_string() ?
+                                p.through(p.tool_arg_string_value(until_suffix),
+                                    p.tool_arg_close(p.literal(arguments.value_suffix))) :
                                 (p.tool_arg_json_value(p.schema(
-                                    p.json(), "tool-" + name + "-arg-" + param_name + "-schema", param_schema, false)) +
+                                    p.json(), "tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index) + "-schema", doc, *param.schema)) +
                                     p.tool_arg_close(p.literal(arguments.value_suffix)))));
 
-            auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
-            if (is_required) {
+            auto named_arg = p.rule("tool-" + std::to_string(tool_index) + "-arg-" + std::to_string(param_index), arg);
+            if (param.required) {
                 required_parsers.push_back(named_arg);
             } else {
                 optional_parsers.push_back(named_arg);
             }
-        }
+        });
 
         // Build required arg sequence in definition order
         common_peg_parser args_seq = p.eps();
@@ -464,7 +449,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         auto atomic_peek = (!arguments.name_prefix.empty() && !required_parsers.empty()) ?
             std::optional(p.peek(p.literal(arguments.name_prefix))) : std::nullopt;
         auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_seq, atomic_peek);
-        tool_choice |= p.rule("tool-" + name, func_parser);
+        tool_choice |= p.rule("tool-" + std::to_string(tool_index), func_parser);
     });
 
     auto require_tools = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED;

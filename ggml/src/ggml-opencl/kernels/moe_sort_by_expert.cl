@@ -5,8 +5,11 @@ __kernel void kernel_moe_histogram(
     __global int * hist,
     uint N,
     uint topK,
-    uint n_experts
+    uint n_experts,
+    ulong offset
 ) {
+    input = (__global const int *)((__global const char *)input + offset);
+
     uint n = get_global_id(0);
     uint k = get_global_id(1);
 
@@ -15,6 +18,9 @@ __kernel void kernel_moe_histogram(
     }
 
     int expert_id = input[n * n_experts + k];
+    if (expert_id == -1) { // skipped slot, owned by no expert
+        return;
+    }
     atomic_inc(&hist[expert_id]);
 }
 
@@ -47,8 +53,11 @@ __kernel void kernel_moe_scatter(
     __global int * slot_counter,
     int N,
     int topK,
-    uint n_experts
+    uint n_experts,
+    ulong offset
 ) {
+    input = (__global const int *)((__global const char *)input + offset);
+
     uint n = get_global_id(0);
     uint k = get_global_id(1);
 
@@ -57,6 +66,9 @@ __kernel void kernel_moe_scatter(
     }
 
     int val = input[n * n_experts + k];
+    if (val == -1) { // skipped slot, owned by no expert
+        return;
+    }
 
     int local_slot = atomic_inc(&slot_counter[val]);
 
@@ -89,8 +101,11 @@ __kernel void kernel_moe_scatter_stable(
     __global const int * tile_offset,
     int N,
     int topK,
-    uint n_experts
+    uint n_experts,
+    ulong offset
 ) {
+    input = (__global const int *)((__global const char *)input + offset);
+
     const int e   = get_group_id(1);
     const int lid = get_local_id(0);
     const int M   = N * topK;

@@ -8,13 +8,21 @@
 #ifndef CPPHTTPLIB_HTTPLIB_H
 #define CPPHTTPLIB_HTTPLIB_H
 
-#define CPPHTTPLIB_VERSION "0.54.1"
-#define CPPHTTPLIB_VERSION_NUM "0x003601"
+#define CPPHTTPLIB_VERSION "0.67.0"
+#define CPPHTTPLIB_VERSION_NUM "0x004300"
 
 #ifdef _WIN32
 #if defined(_WIN32_WINNT) && _WIN32_WINNT < 0x0A00
 #error                                                                         \
     "cpp-httplib doesn't support Windows 8 or lower. Please use Windows 10 or later."
+#endif
+#endif
+
+#if defined(__SANITIZE_THREAD__)
+#define CPPHTTPLIB_THREAD_SANITIZER
+#elif defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+#define CPPHTTPLIB_THREAD_SANITIZER
 #endif
 #endif
 
@@ -122,12 +130,26 @@
 #define CPPHTTPLIB_REDIRECT_MAX_COUNT 20
 #endif
 
+#ifndef CPPHTTPLIB_INTERIM_RESPONSE_MAX_COUNT
+#define CPPHTTPLIB_INTERIM_RESPONSE_MAX_COUNT 100
+#endif
+
 #ifndef CPPHTTPLIB_MULTIPART_FORM_DATA_FILE_MAX_COUNT
 #define CPPHTTPLIB_MULTIPART_FORM_DATA_FILE_MAX_COUNT 1024
 #endif
 
 #ifndef CPPHTTPLIB_PAYLOAD_MAX_LENGTH
 #define CPPHTTPLIB_PAYLOAD_MAX_LENGTH (100 * 1024 * 1024) // 100MB
+#endif
+
+// How much of an unread request body the server skips to reuse the connection,
+// 0 for no limit
+#ifndef CPPHTTPLIB_UNREAD_PAYLOAD_MAX_LENGTH
+#define CPPHTTPLIB_UNREAD_PAYLOAD_MAX_LENGTH (256 * 1024) // 256KB
+#endif
+
+#ifndef CPPHTTPLIB_SSE_MAX_EVENT_LENGTH
+#define CPPHTTPLIB_SSE_MAX_EVENT_LENGTH (16 * 1024 * 1024) // 16MB
 #endif
 
 #ifndef CPPHTTPLIB_FORM_URL_ENCODED_PAYLOAD_MAX_LENGTH
@@ -211,12 +233,50 @@
 #define CPPHTTPLIB_MAX_LINE_LENGTH 32768
 #endif
 
+// These bound the parsing of every request, so 0 cannot lift them.
+static_assert(CPPHTTPLIB_REQUEST_URI_MAX_LENGTH > 0,
+              "CPPHTTPLIB_REQUEST_URI_MAX_LENGTH must be positive");
+static_assert(CPPHTTPLIB_HEADER_MAX_LENGTH > 0,
+              "CPPHTTPLIB_HEADER_MAX_LENGTH must be positive");
+static_assert(CPPHTTPLIB_HEADER_MAX_COUNT > 0,
+              "CPPHTTPLIB_HEADER_MAX_COUNT must be positive");
+static_assert(CPPHTTPLIB_MAX_LINE_LENGTH > 0,
+              "CPPHTTPLIB_MAX_LINE_LENGTH must be positive");
+
 #ifndef CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH
 #define CPPHTTPLIB_WEBSOCKET_MAX_PAYLOAD_LENGTH 16777216
 #endif
 
-#ifndef CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND
-#define CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND 300
+// One macro used to set the read timeout for both sides. They want different
+// defaults: a client's read timeout is the caller's own tool (it waits forever
+// until asked not to), while a server keeps a ceiling that reclaims a worker
+// from a peer that has gone quiet. The old name still works and sets both.
+#ifdef CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND
+#pragma message(                                                               \
+    "CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND is deprecated; define "          \
+    "CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND and/or "                  \
+    "CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND instead")
+#ifndef CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND                        \
+  CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND
+#endif
+#ifndef CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND                        \
+  CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND
+#endif
+#endif
+
+// 0 waits forever. A read timeout is how a caller gets control back to send on
+// the same connection; it is not a liveness check (that is ping/pong). Only a
+// timeout set at runtime through set_read_timeout() is reported as
+// ws::Timeout; when one of these compile-time defaults elapses, read() returns
+// ws::Fail and closes the connection.
+#ifndef CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND 0
+#endif
+
+#ifndef CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND
+#define CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND 300
 #endif
 
 #ifndef CPPHTTPLIB_WEBSOCKET_CLOSE_TIMEOUT_SECOND
@@ -312,7 +372,6 @@ using socklen_t = int;
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
-#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -423,6 +482,7 @@ using socket_t = int;
 
 #include <openssl/err.h>
 #include <openssl/evp.h>
+#include <openssl/rand.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
@@ -553,6 +613,10 @@ namespace ws {
 class WebSocket;
 } // namespace ws
 
+namespace sse {
+class SSEClient;
+} // namespace sse
+
 namespace detail {
 
 /*
@@ -632,6 +696,15 @@ inline bool equal(const std::string &a, const std::string &b) {
          });
 }
 
+// For a literal, without building a std::string from it.
+template <size_t N>
+inline bool equal(const std::string &a, const char (&b)[N]) {
+  return a.size() == N - 1 &&
+         std::equal(a.begin(), a.end(), b, [](char ca, char cb) {
+           return to_lower(ca) == to_lower(cb);
+         });
+}
+
 struct equal_to {
   bool operator()(const std::string &a, const std::string &b) const {
     return equal(a, b);
@@ -640,17 +713,13 @@ struct equal_to {
 
 struct hash {
   size_t operator()(const std::string &key) const {
-    return hash_core(key.data(), key.size(), 0);
-  }
-
-  size_t hash_core(const char *s, size_t l, size_t h) const {
-    return (l == 0) ? h
-                    : hash_core(s + 1, l - 1,
-                                // Unsets the 6 high bits of h, therefore no
-                                // overflow happens
-                                (((std::numeric_limits<size_t>::max)() >> 6) &
-                                 h * 33) ^
-                                    static_cast<unsigned char>(to_lower(*s)));
+    size_t h = 0;
+    for (auto c : key) {
+      // Unsets the 6 high bits of h, therefore no overflow happens
+      h = (((std::numeric_limits<size_t>::max)() >> 6) & h * 33) ^
+          static_cast<unsigned char>(to_lower(c));
+    }
+    return h;
   }
 };
 
@@ -708,6 +777,7 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
   }
   if (p == last) { return {first, std::errc::invalid_argument}; }
 
+  auto radix = static_cast<T>(base);
   T result = 0;
   for (; p != last; ++p) {
     char c = *p;
@@ -723,10 +793,11 @@ inline from_chars_result<T> from_chars(const char *first, const char *last,
     }
 
     if (digit < 0 || digit >= base) { break; }
-    if (result > ((std::numeric_limits<T>::max)() - digit) / base) {
+    auto d = static_cast<T>(digit);
+    if (result > ((std::numeric_limits<T>::max)() - d) / radix) {
       return {p, std::errc::result_out_of_range};
     }
-    result = result * base + digit;
+    result = result * radix + d;
   }
 
   if (p == first || (negative && p == first + 1)) {
@@ -803,12 +874,19 @@ inline from_chars_result<double> from_chars(const char *first, const char *last,
   return {p, std::errc{}};
 }
 
-inline bool parse_port(const char *s, size_t len, int &port) {
+inline bool parse_int_in_range(const char *s, size_t len, int lo, int hi,
+                               int &out) {
   int val = 0;
   auto r = from_chars(s, s + len, val);
-  if (r.ec != std::errc{} || val < 1 || val > 65535) { return false; }
-  port = val;
+  if (r.ec != std::errc{} || r.ptr != s + len || val < lo || val > hi) {
+    return false;
+  }
+  out = val;
   return true;
+}
+
+inline bool parse_port(const char *s, size_t len, int &port) {
+  return parse_int_in_range(s, len, 1, 65535, port);
 }
 
 inline bool parse_port(const std::string &s, int &port) {
@@ -846,6 +924,12 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
   auto has_authority = has_authority_prefix || (!url.empty() && url[0] != '/' &&
                                                 url[0] != '?' && url[0] != '#');
   if (has_authority) {
+    // userinfo is not supported, and a backslash that some parsers take for
+    // '/' would leave them seeing another host than this one.
+    if (url.find_first_of("@\\", pos) < url.find_first_of("/?#", pos)) {
+      return false;
+    }
+
     if (pos < url.size() && url[pos] == '[') {
       auto close = url.find(']', pos);
       if (close == std::string::npos) { return false; }
@@ -909,6 +993,63 @@ inline bool parse_url(const std::string &url, UrlComponents &uc) {
   }
 
   return true;
+}
+
+// Removes "." and ".." segments from a path that starts with '/' (RFC 3986
+// section 5.2.4).
+inline std::string remove_dot_segments(const std::string &path) {
+  std::string out;
+  size_t i = 0;
+  while (i < path.size()) {
+    auto next = (std::min)(path.find('/', i + 1), path.size());
+    auto segment = path.substr(i + 1, next - i - 1);
+    auto is_last = next == path.size();
+    if (segment == "." || segment == "..") {
+      if (segment == "..") {
+        out.erase((std::min)(out.rfind('/'), out.size()));
+      }
+      if (is_last) { out += '/'; }
+    } else {
+      out += '/';
+      out += segment;
+    }
+    i = next;
+  }
+  if (out.empty()) { out = "/"; }
+  return out;
+}
+
+// Resolves a relative-path or query-only Location value against the path of
+// the request being redirected (RFC 3986 section 5.2). Absolute URIs and
+// references starting with '/' are returned unchanged.
+inline std::string resolve_relative_location(const std::string &location,
+                                             const std::string &base) {
+  if (location.empty() || location[0] == '/') { return location; }
+
+  // A ':' in the first segment means the value has a scheme.
+  if (location.find(':') < location.find_first_of("/?#")) { return location; }
+
+  // A path starting with "//" would be re-parsed as an authority. Prefix "/."
+  // (as the URL Standard does); remove_dot_segments strips it later.
+  auto on_this_host = [](std::string path) -> std::string {
+    if (path.compare(0, 2, "//") == 0) { path.insert(0, "/."); }
+    return path;
+  };
+
+  if (location[0] == '#') {
+    return on_this_host(base.substr(0, base.find('#')) + location);
+  }
+
+  auto base_path = base.substr(0, base.find_first_of("?#"));
+  if (location[0] == '?') { return on_this_host(base_path + location); }
+
+  if (base_path.empty() || base_path[0] != '/') { base_path = "/"; }
+  auto merged = base_path.substr(0, base_path.rfind('/') + 1) + location;
+
+  // Remove "." and ".." segments from the merged path.
+  auto path_end = (std::min)(merged.find_first_of("?#"), merged.size());
+  return on_this_host(remove_dot_segments(merged.substr(0, path_end)) +
+                      merged.substr(path_end));
 }
 
 } // namespace detail
@@ -1064,8 +1205,7 @@ private:
     pointer operator->() const { return data_ + idx_; }
 
     iterator_t &operator++() {
-      // Saturating, so that advancing past the last entry of a key (which
-      // get_multimap_value() does when asked for an out-of-range id) stays at
+      // Saturating, so that advancing past the last entry of a key stays at
       // end() instead of running off the container.
       if (idx_ >= size_) { return *this; }
       ++idx_;
@@ -1204,7 +1344,7 @@ public:
   size_type erase(const std::string &key) {
     auto before = entries_.size();
     entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
-                                  [&](const value_type &entry) {
+                                  [key](const value_type &entry) {
                                     return keys_equal(entry.first, key);
                                   }),
                    entries_.end());
@@ -1727,7 +1867,9 @@ struct Request {
   bool is_multipart_form_data() const;
 
   // private members...
+  bool body_read_started_ = false;
   bool body_consumed_ = false;
+  bool expect_100_continue_pending_ = false;
   size_t redirect_count_ = CPPHTTPLIB_REDIRECT_MAX_COUNT;
   size_t content_length_ = 0;
   ContentProvider content_provider_;
@@ -1813,14 +1955,17 @@ struct Response {
   ContentProvider content_provider_;
   ContentProviderResourceReleaser content_provider_resource_releaser_;
   bool is_chunked_content_provider_ = false;
+  bool is_file_content_provider_ = false;
   bool content_provider_success_ = false;
   std::string file_content_path_;
   std::string file_content_content_type_;
 
-  // Content coding chosen for a file-backed content provider, decided once
-  // where the file is opened so that the ETag and the body cannot disagree.
-  // `EncodingType::None` for every other kind of response.
-  detail::EncodingType file_content_encoding_ = detail::EncodingType::None;
+  // Content coding chosen for the response body, decided once so that the
+  // headers and the body cannot disagree: where the file is opened for a
+  // file-backed content provider (keeping the ETag honest), and in
+  // `apply_ranges()` for a chunked content provider. `EncodingType::None`
+  // for every other kind of response.
+  detail::EncodingType content_coding_ = detail::EncodingType::None;
 };
 
 enum class Error {
@@ -1890,6 +2035,16 @@ public:
   virtual void set_read_timeout(time_t sec, time_t usec = 0) {
     (void)sec;
     (void)usec;
+  }
+
+  // Bounds the reads from now on to `msec` in total, on top of the timeout of
+  // each one. 0 lifts the bound.
+  virtual void set_max_timeout(time_t msec) { (void)msec; }
+
+  // Lets a wait for data end early once `interrupted` returns true, so that
+  // another thread can stop a blocked read on every platform.
+  virtual void set_read_interrupt(std::function<bool()> interrupted) {
+    (void)interrupted;
   }
 
   // Bytes already pulled off the socket and sitting in this stream's own
@@ -2223,6 +2378,8 @@ public:
 
   Server &set_payload_max_length(size_t length);
 
+  Server &set_compress(bool on);
+
   Server &set_static_file_compression(bool on);
   Server &set_static_file_compression_min_length(size_t length);
   Server &set_static_file_compression_max_length(size_t length);
@@ -2258,10 +2415,11 @@ protected:
   // Runs the per-connection serving loop and stops an exception thrown by a
   // user callback from escaping the worker thread.
   //
-  // process_request() wraps only routing() in a try/catch. Content providers,
-  // the post-routing, error, logging and expect-100 handlers and WebSocket
-  // handlers all run outside it, and the task queue calls the job without a
-  // catch, so an exception from any of those would terminate the process.
+  // process_request() wraps only routing() and the hooks before a WebSocket
+  // upgrade in a try/catch. Content providers, the post-routing, error,
+  // logging and expect-100 handlers and WebSocket handlers all run outside
+  // it, and the task queue calls the job without a catch, so an exception
+  // from any of those would terminate the process.
   //
   // No 500 is possible here: by the time a content provider runs, the status
   // line and headers are already on the wire. Report it through the error
@@ -2285,6 +2443,8 @@ protected:
   }
 
   std::atomic<socket_t> svr_sock_{INVALID_SOCKET};
+  // stop() takes the listening socket away; listen() then waits for handlers
+  bool is_stopping() const { return svr_sock_ == INVALID_SOCKET; }
 
   std::vector<std::string> trusted_proxies_;
 
@@ -2297,6 +2457,7 @@ protected:
   time_t idle_interval_sec_ = CPPHTTPLIB_IDLE_INTERVAL_SECOND;
   time_t idle_interval_usec_ = CPPHTTPLIB_IDLE_INTERVAL_USECOND;
   size_t payload_max_length_ = CPPHTTPLIB_PAYLOAD_MAX_LENGTH;
+  bool compress_ = true;
   bool static_file_compression_ = false;
   size_t static_file_compression_min_length_ =
       CPPHTTPLIB_STATIC_FILE_COMPRESSION_MIN_LENGTH;
@@ -2345,7 +2506,11 @@ private:
   int bind_internal(const std::string &host, int port, int socket_flags);
   bool listen_internal();
 
-  bool routing(Request &req, Response &res, Stream &strm);
+  bool routing(Request &req, Response &res, Stream &strm,
+               bool skip_pre_routing);
+#ifndef CPPHTTPLIB_NO_EXCEPTIONS
+  bool handle_exception(Request &req, Response &res);
+#endif
   bool handle_file_request(Request &req, Response &res);
   bool check_if_not_modified(const Request &req, Response &res,
                              const std::string &etag, time_t mtime) const;
@@ -2359,6 +2524,7 @@ private:
 
   bool parse_request_line(const char *s, Request &req) const;
   detail::EncodingType static_file_encoding(const Request &req,
+                                            const Response &res,
                                             const std::string &content_type,
                                             size_t length) const;
   bool apply_static_file_compression(const Request &req, Response &res) const;
@@ -2643,6 +2809,7 @@ public:
 
   private:
     friend class ClientImpl;
+    friend class sse::SSEClient;
 
     ssize_t read_with_decompression(char *buf, size_t len);
 
@@ -2771,7 +2938,12 @@ public:
   size_t is_socket_open() const;
   socket_t socket() const;
 
+  [[deprecated("Use set_direct_hostname_addr_map() instead.")]]
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_direct_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_tunnel_hostname_addr_map(std::map<std::string, std::string> addr_map);
 
   void set_default_headers(Headers headers);
 
@@ -2853,20 +3025,35 @@ protected:
   //   shutdown_socket
   //   close_socket
   //   disconnect
-  // should ONLY be called when socket_mutex_ is locked, and only when
-  // no other thread is using the socket.
+  // should ONLY be called on socket_ with socket_mutex_ locked, or on a
+  // connection being opened, and only when no other thread is using it.
   virtual void shutdown_ssl(Socket &socket, bool shutdown_gracefully);
   void shutdown_socket(Socket &socket) const;
   void close_socket(Socket &socket);
   void disconnect(bool gracefully);
 
+  // Under socket_mutex_: whether the connection kept alive can take another
+  // request. One with anything to read, or one set up under TLS settings
+  // changed since, is closed instead.
+  bool socket_reusable();
+
+  // Makes socket_ ready for a request, with socket_mutex_ held by guard. A new
+  // connection is opened without the lock, so that stop() can end it.
+  bool
+  prepare_socket(std::unique_lock<std::mutex> &guard,
+                 std::chrono::time_point<std::chrono::steady_clock> start_time,
+                 Response &res, bool &success, Error &error);
+
+  // TLS settings apply as a connection is set up, so a change makes the
+  // connection kept alive unfit for the next request.
+  void tls_settings_changed() { tls_settings_version_++; }
+
+  std::string make_request_target(const Request &req) const;
   bool process_request(Stream &strm, Request &req, Response &res,
                        bool close_connection, Error &error);
 
   bool write_content_with_provider(Stream &strm, const Request &req,
                                    Error &error) const;
-
-  void copy_settings(const ClientImpl &rhs);
 
   void output_log(const Request &req, const Response &res) const;
   void output_error_log(const Error &err, const Request *req) const;
@@ -2879,15 +3066,33 @@ protected:
   Socket socket_;
   mutable std::mutex socket_mutex_;
   std::recursive_mutex request_mutex_;
+  // How many send() calls are running on this client, guarded by
+  // request_mutex_
+  size_t send_depth_ = 0;
+  // Also guarded by request_mutex_
+  size_t socket_tls_settings_version_ = 0;
 
   // These are all protected under socket_mutex
   size_t socket_requests_in_flight_ = 0;
   std::thread::id socket_requests_are_from_thread_ = std::thread::id();
   bool socket_should_be_closed_when_request_is_done_ = false;
 
+  // Set by stop(), cleared as a send() or an open_stream() starts. Its waits
+  // poll it: shutdown() does not reach a connection being opened, nor wake a
+  // read on Windows.
+  std::atomic<bool> stop_requested_{false};
+  std::function<bool()> stop_interrupt() const {
+    return [this] { return stop_requested_.load(); };
+  }
+
+  std::atomic<size_t> tls_settings_version_{0};
+
   // Hostname to connection target map. The value is an IP literal or another
   // hostname; only the connection target changes, never the identity.
   std::map<std::string, std::string> addr_map_;
+
+  // Hostname to CONNECT target map, used only through a proxy.
+  std::map<std::string, std::string> tunnel_addr_map_;
 
   // Default headers
   Headers default_headers_;
@@ -2954,7 +3159,7 @@ private:
   bool read_response_line(Stream &strm, const Request &req, Response &res,
                           bool skip_100_continue = true) const;
   bool write_request(Stream &strm, Request &req, bool close_connection,
-                     Error &error, bool skip_body = false);
+                     Error &error, bool skip_body, bool &rejected_locally);
   bool write_request_body(Stream &strm, Request &req, Error &error);
   void prepare_default_headers(Request &r, bool for_stream,
                                const std::string &ct);
@@ -2990,6 +3195,9 @@ private:
   virtual bool is_ssl() const;
 
   void transfer_socket_ownership_to_handle(StreamHandle &handle);
+  StreamHandle open_stream_(Request &req);
+  void add_credential_headers(Request &req);
+  std::string proxy_target_prefix() const;
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
 public:
@@ -3018,6 +3226,24 @@ protected:
   uint64_t last_backend_error_ = 0;
 #endif
 };
+
+namespace detail {
+
+// Stands in for a client that Client could not make from its arguments, so a
+// request fails rather than going through a null pointer.
+class InvalidClientImpl final : public ClientImpl {
+public:
+  InvalidClientImpl() : ClientImpl(std::string(), 0) {}
+  bool is_valid() const override { return false; }
+
+private:
+  bool create_and_connect_socket(Socket &, Error &error) override {
+    error = Error::Connection;
+    return false;
+  }
+};
+
+} // namespace detail
 
 class Client {
 public:
@@ -3157,7 +3383,12 @@ public:
   size_t is_socket_open() const;
   socket_t socket() const;
 
+  [[deprecated("Use set_direct_hostname_addr_map() instead.")]]
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_direct_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_tunnel_hostname_addr_map(std::map<std::string, std::string> addr_map);
 
   void set_default_headers(Headers headers);
 
@@ -3283,7 +3514,14 @@ private:
   bool process_and_close_socket(socket_t sock) override;
 
   tls::ctx_t ctx_ = nullptr;
+  // update_certs_pem() replaces the certificates and CAs that handshakes read
+  // from ctx_, so it waits for the handshakes in progress, which their timeout
+  // bounds, and new ones wait while it is pending so that they cannot keep it
+  // waiting.
   std::mutex ctx_mutex_;
+  std::condition_variable ctx_cv_;
+  size_t handshakes_in_progress_ = 0;
+  size_t updates_pending_ = 0;
 
   int last_ssl_error_ = 0;
 };
@@ -3360,10 +3598,18 @@ private:
 
   // Tracks whether a custom CA store was applied via set_ca_cert_store(),
   // since the store handle itself is owned by ctx_ and leaves no other trace.
-  // Used to keep custom CA configuration exclusive with system CA loading.
   bool ca_cert_store_set_ = false;
 
+  // Set by set_ca_cert_store() and load_ca_cert_store() even when they bring
+  // no certificate, so that a CA that failed to come through fails
+  // verification instead of letting the system CAs in.
+  bool custom_ca_loaded_ = false;
+
   std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
+
+  // Like ca_cert_store_set_, keeps what ctx_ cannot report back: the verifier
+  // set_server_certificate_verifier() installed there.
+  tls::VerifyCallback server_certificate_verifier_;
 
 #ifdef CPPHTTPLIB_WINDOWS_AUTOMATIC_ROOT_CERTIFICATES_UPDATE
   bool enable_windows_cert_verification_ = true;
@@ -3392,13 +3638,20 @@ inline bool is_numeric(const std::string &str) {
   return !str.empty() && std::all_of(str.cbegin(), str.cend(), is_ascii_digit);
 }
 
+// std::ranges::next(first, n, last) for C++11
+template <typename It> inline It bounded_next(It first, size_t n, It last) {
+  for (; n > 0 && first != last; --n) {
+    ++first;
+  }
+  return first;
+}
+
 inline size_t get_header_value_u64(const Headers &headers,
                                    const std::string &key, size_t def,
                                    size_t id, bool &is_invalid_value) {
   is_invalid_value = false;
   auto rng = headers.equal_range(key);
-  auto it = rng.first;
-  std::advance(it, static_cast<ssize_t>(id));
+  auto it = bounded_next(rng.first, id, rng.second);
   if (it != rng.second) {
     if (is_numeric(it->second)) {
       // Parse at size_t width so an out-of-range Content-Length is reported
@@ -3480,7 +3733,7 @@ inline void ClientImpl::set_max_timeout(
     const std::chrono::duration<Rep, Period> &duration) {
   auto msec =
       std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-  set_max_timeout(msec);
+  set_max_timeout(static_cast<time_t>(msec));
 }
 
 template <class Rep, class Period>
@@ -3590,6 +3843,8 @@ template <typename T>
 bool check_and_write_headers(Stream &strm, Headers &headers, T header_writer,
                              Error &error);
 
+bool write_data(Stream &strm, const char *d, size_t l);
+
 std::string trim_copy(const std::string &s);
 
 void divide(
@@ -3625,15 +3880,14 @@ bool process_client_socket(
     std::chrono::time_point<std::chrono::steady_clock> start_time,
     std::function<bool(Stream &)> callback);
 
-socket_t create_client_socket(const std::string &host, const std::string &ip,
-                              int port, int address_family, bool tcp_nodelay,
-                              bool ipv6_v6only, SocketOptions socket_options,
-                              time_t connection_timeout_sec,
-                              time_t connection_timeout_usec,
-                              time_t read_timeout_sec, time_t read_timeout_usec,
-                              time_t write_timeout_sec,
-                              time_t write_timeout_usec,
-                              const std::string &intf, Error &error);
+socket_t create_client_socket(
+    const std::string &host, const std::string &ip, int port,
+    int address_family, bool tcp_nodelay, bool ipv6_v6only,
+    SocketOptions socket_options, time_t connection_timeout_sec,
+    time_t connection_timeout_usec, time_t read_timeout_sec,
+    time_t read_timeout_usec, time_t write_timeout_sec,
+    time_t write_timeout_usec, const std::string &intf, Error &error,
+    const std::function<bool()> &interrupted = nullptr);
 
 const char *get_header_value(const Headers &headers, const std::string &key,
                              const char *def, size_t id);
@@ -3662,6 +3916,9 @@ ssize_t send_socket(socket_t sock, const void *ptr, size_t size, int flags);
 ssize_t read_socket(socket_t sock, void *ptr, size_t size, int flags);
 
 EncodingType encoding_type(const Request &req, const std::string &content_type);
+
+EncodingType encoding_type(const Request &req, const Response &res,
+                           const std::string &content_type);
 
 EncodingType encoding_type(const Request &req, const Response &res);
 
@@ -3834,6 +4091,7 @@ struct ChunkedDecoder {
   char line_buf[64];
   size_t last_chunk_total = 0;
   size_t last_chunk_offset = 0;
+  size_t overhead = 0;
 
   explicit ChunkedDecoder(Stream &s);
 
@@ -3843,6 +4101,8 @@ struct ChunkedDecoder {
   bool parse_trailers_into(Headers &dest, const Headers &src_headers);
 };
 
+// A regular file opened to be served: mapped on Windows, read with pread()
+// elsewhere.
 class mmap {
 public:
   mmap(const char *path);
@@ -3853,18 +4113,20 @@ public:
 
   bool is_open() const;
   size_t size() const;
-  const char *data() const;
+  // Copies up to len bytes from offset into buf and returns how many: fewer,
+  // down to 0, if the file has shrunk since it was opened.
+  size_t read(size_t offset, char *buf, size_t len) const;
 
 private:
 #if defined(_WIN32)
   HANDLE hFile_ = NULL;
   HANDLE hMapping_ = NULL;
+  void *addr_ = nullptr;
+  bool is_open_empty_file = false;
 #else
   int fd_ = -1;
 #endif
   size_t size_ = 0;
-  void *addr_ = nullptr;
-  bool is_open_empty_file = false;
 };
 
 // NOTE: https://www.rfc-editor.org/rfc/rfc9110#section-5
@@ -3879,6 +4141,8 @@ bool is_field_vchar(char c);
 bool is_field_content(const std::string &s);
 bool is_field_value(const std::string &s);
 bool is_field_valid(const std::string &name, const std::string &value);
+bool is_request_target(const std::string &s);
+bool is_host(const std::string &s);
 
 } // namespace fields
 } // namespace detail
@@ -3907,8 +4171,10 @@ struct MbedTlsContext {
   mbedtls_x509_crt own_cert;
   mbedtls_pk_context own_key;
   bool is_server = false;
+  // Peer certificate required (set_verify_client()); a client defaults to true
   bool verify_client = false;
-  bool has_verify_callback = false;
+  // Set by tls::set_verify_callback().
+  VerifyCallback verify_callback;
 
   MbedTlsContext();
   ~MbedTlsContext();
@@ -3931,8 +4197,10 @@ namespace impl {
 struct WolfSSLContext {
   WOLFSSL_CTX *ctx = nullptr;
   bool is_server = false;
+  // Peer certificate required (set_verify_client()); a client defaults to true
   bool verify_client = false;
-  bool has_verify_callback = false;
+  // Replaced under verify_callback_mutex()
+  std::shared_ptr<VerifyCallback> verify_callback;
   std::string ca_pem_data_; // accumulated PEM for get_ca_names/get_ca_certs
 
   WolfSSLContext();
@@ -4275,7 +4543,7 @@ public:
 
   // State accessors
   bool is_connected() const;
-  const std::string &last_event_id() const;
+  std::string last_event_id() const;
 
   // Blocking start - runs event loop with auto-reconnect
   void start();
@@ -4287,7 +4555,6 @@ public:
   void stop();
 
 private:
-  bool parse_sse_line(const std::string &line, SSEMessage &msg, int &retry_ms);
   void run_event_loop();
   void dispatch_event(const SSEMessage &msg);
   bool should_reconnect(int count) const;
@@ -4312,7 +4579,9 @@ private:
   // State
   std::atomic<bool> running_{false};
   std::atomic<bool> connected_{false};
+  // Written by the event loop, which start_async() runs on its own thread
   std::string last_event_id_;
+  mutable std::mutex last_event_id_mutex_;
 
   // Async support
   std::thread async_thread_;
@@ -4320,7 +4589,43 @@ private:
 
 } // namespace sse
 
+namespace detail {
+
+// Interprets an event stream fed in chunks of any size
+class SSEParser {
+public:
+  using EventHandler = std::function<void(const sse::SSEMessage &msg)>;
+  using IdHandler = std::function<void(const std::string &id)>;
+  using RetryHandler = std::function<void(int retry_ms)>;
+
+  SSEParser(EventHandler on_event, IdHandler on_id, RetryHandler on_retry,
+            size_t max_event_length = CPPHTTPLIB_SSE_MAX_EVENT_LENGTH);
+
+  // Returns false once the line and the event still waiting for their end
+  // exceed max_event_length. 0 means no limit.
+  bool parse(const char *buf, size_t n);
+
+private:
+  void parse_line(const std::string &line);
+
+  EventHandler on_event_;
+  IdHandler on_id_;
+  RetryHandler on_retry_;
+  size_t max_event_length_;
+
+  std::string buffer_;
+  sse::SSEMessage msg_;
+  bool has_data_ = false;
+  bool has_id_ = false;
+  bool first_line_ = true;
+  bool after_cr_ = false;
+};
+
+} // namespace detail
+
 namespace ws {
+
+class WebSocketClient;
 
 enum class Opcode : uint8_t {
   Continuation = 0x0,
@@ -4345,12 +4650,17 @@ enum class CloseStatus : uint16_t {
   InternalError = 1011,
 };
 
-enum ReadResult : int { Fail = 0, Text = 1, Binary = 2 };
+// Timeout is returned only when a read timeout was set and it elapsed before
+// any byte of a frame arrived: nothing was consumed and the connection is
+// still open, so the caller can send on it and read again. `msg` is left
+// untouched, so a `while (ws.read(msg))` loop must not treat it as a message.
+enum ReadResult : int { Fail = 0, Text = 1, Binary = 2, Timeout = 3 };
 
 // Result of WebSocketClient::connect(). Truthy only when the WebSocket
 // upgrade handshake fully succeeded. On failure error() identifies the
 // failing layer; status()/headers() expose the server's upgrade response
-// when one was received (status() is -1 otherwise).
+// when one was received (status() is -1 otherwise), or the proxy's reply to
+// CONNECT when error() is ProxyConnection.
 class Result {
 public:
   Result() = default;
@@ -4405,30 +4715,52 @@ public:
   const Request &request() const;
   bool is_open() const;
 
+  // Bound how long read() waits before returning Timeout. 0 waits forever.
+  // A server handler owns its connection's timeout this way; a client sets it
+  // through WebSocketClient. Safe to call while another thread is in read().
+  //
+  // Only a timeout set here is reported as Timeout. The compile-time default
+  // (CPPHTTPLIB_WEBSOCKET_SERVER_READ_TIMEOUT_SECOND) is a backstop rather
+  // than a request for control, so when it elapses read() returns Fail and
+  // closes the connection, and `while (ws.read(msg))` ends as it always has.
+  void set_read_timeout(time_t sec, time_t usec = 0);
+  template <class Rep, class Period>
+  void set_read_timeout(const std::chrono::duration<Rep, Period> &duration);
+
 private:
   friend class httplib::Server;
-  friend class WebSocketClient;
+  friend class httplib::ws::WebSocketClient;
 
   WebSocket(
       Stream &strm, const Request &req, bool is_server,
       time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND,
-      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS)
+      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS,
+      std::function<bool()> server_stopping = nullptr)
       : strm_(strm), req_(req), is_server_(is_server),
         ping_interval_sec_(ping_interval_sec),
-        max_missed_pongs_(max_missed_pongs) {
+        max_missed_pongs_(max_missed_pongs),
+        server_stopping_(std::move(server_stopping)) {
+    interrupt_reads();
     start_heartbeat();
   }
 
   WebSocket(
       std::unique_ptr<Stream> &&owned_strm, const Request &req, bool is_server,
       time_t ping_interval_sec = CPPHTTPLIB_WEBSOCKET_PING_INTERVAL_SECOND,
-      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS)
+      int max_missed_pongs = CPPHTTPLIB_WEBSOCKET_MAX_MISSED_PONGS,
+      std::function<bool()> server_stopping = nullptr)
       : strm_(*owned_strm), owned_strm_(std::move(owned_strm)), req_(req),
         is_server_(is_server), ping_interval_sec_(ping_interval_sec),
-        max_missed_pongs_(max_missed_pongs) {
+        max_missed_pongs_(max_missed_pongs),
+        server_stopping_(std::move(server_stopping)) {
+    interrupt_reads();
     start_heartbeat();
   }
 
+  void interrupt_reads();
+  bool server_stopping() const {
+    return server_stopping_ && server_stopping_();
+  }
   void start_heartbeat();
   bool send_frame(Opcode op, const char *data, size_t len, bool fin = true);
 
@@ -4440,6 +4772,14 @@ private:
   int max_missed_pongs_;
   int unacked_pings_ = 0;
   std::atomic<bool> closed_{false};
+  // Set when the peer stopped answering pings, to end a read() waiting on it
+  std::atomic<bool> pong_timed_out_{false};
+  // A server connection's view of Server::stop(), which ends its read() too
+  std::function<bool()> server_stopping_;
+  // Set once the caller has bounded read() through set_read_timeout(). Until
+  // then the timeout in effect is the compile-time default, and elapsing it
+  // is a failure that closes the connection, not a Timeout.
+  std::atomic<bool> read_timeout_set_{false};
   std::mutex write_mutex_;
   // Owned by whichever thread is parsing frames off strm_. Only one thread
   // may do so: read_websocket_frame() reads a payload until it has the whole
@@ -4491,7 +4831,21 @@ public:
   set_connection_timeout(const std::chrono::duration<Rep, Period> &duration);
 
   void set_interface(const std::string &intf);
+  [[deprecated("Use set_direct_hostname_addr_map() instead.")]]
   void set_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_direct_hostname_addr_map(std::map<std::string, std::string> addr_map);
+  void
+  set_tunnel_hostname_addr_map(std::map<std::string, std::string> addr_map);
+
+  void set_basic_auth(const std::string &username, const std::string &password);
+  void set_bearer_token_auth(const std::string &token);
+
+  void set_proxy(const std::string &host, int port);
+  void set_proxy_basic_auth(const std::string &username,
+                            const std::string &password);
+  void set_proxy_bearer_token_auth(const std::string &token);
+  void set_no_proxy(const std::vector<std::string> &patterns);
 
 #ifdef CPPHTTPLIB_SSL_ENABLED
   struct PemMemory {
@@ -4511,13 +4865,23 @@ public:
   void enable_server_certificate_verification(bool enabled);
   void enable_server_hostname_verification(bool enabled);
   void enable_system_ca(bool enabled);
+  void set_server_certificate_verifier(tls::VerifyCallback verifier);
+  void set_session_verifier(
+      std::function<SSLVerifierResponse(tls::session_t)> verifier);
+  void set_proxy_digest_auth(const std::string &username,
+                             const std::string &password);
 #endif
 
 private:
   void shutdown_and_close();
+  std::pair<time_t, time_t> handshake_timeout() const;
   bool create_stream(std::unique_ptr<Stream> &strm, Error &error,
                      int &ssl_error, uint64_t &ssl_backend_error);
   void prepare_default_headers(Request &req);
+  bool is_proxy_enabled() const;
+  bool create_and_connect_socket(Error &error);
+  bool send_proxy_connect(Request &req, Response &proxy_res, Error &error);
+  bool connect_with_proxy(Response &proxy_res, Error &error);
 
   std::string host_;
   int port_;
@@ -4527,8 +4891,9 @@ private:
   bool is_valid_ = false;
   socket_t sock_ = INVALID_SOCKET;
   std::unique_ptr<WebSocket> ws_;
-  time_t read_timeout_sec_ = CPPHTTPLIB_WEBSOCKET_READ_TIMEOUT_SECOND;
+  time_t read_timeout_sec_ = CPPHTTPLIB_WEBSOCKET_CLIENT_READ_TIMEOUT_SECOND;
   time_t read_timeout_usec_ = 0;
+  bool read_timeout_set_ = false; // see WebSocket::read_timeout_set_
   time_t write_timeout_sec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_SECOND;
   time_t write_timeout_usec_ = CPPHTTPLIB_CLIENT_WRITE_TIMEOUT_USECOND;
   time_t websocket_ping_interval_sec_ =
@@ -4546,19 +4911,46 @@ private:
   // hostname; only the connection target changes, never the identity.
   std::map<std::string, std::string> addr_map_;
 
+  // Hostname to CONNECT target map, used only through a proxy.
+  std::map<std::string, std::string> tunnel_addr_map_;
+
+  std::string basic_auth_username_;
+  std::string basic_auth_password_;
+  std::string bearer_token_auth_token_;
+
+  std::string proxy_host_;
+  int proxy_port_ = -1;
+  std::string proxy_basic_auth_username_;
+  std::string proxy_basic_auth_password_;
+  std::string proxy_bearer_token_auth_token_;
+  std::vector<detail::NoProxyEntry> no_proxy_entries_;
+
 #ifdef CPPHTTPLIB_SSL_ENABLED
   bool is_ssl_ = false;
   tls::ctx_t tls_ctx_ = nullptr;
   tls::session_t tls_session_ = nullptr;
   std::string ca_cert_file_path_;
   std::string ca_cert_dir_path_;
+  // Set by set_ca_cert_store() and load_ca_cert_store() even when they bring
+  // no certificate, so that a CA that failed to come through fails
+  // verification instead of letting the system CAs in.
   bool custom_ca_loaded_ = false;
   bool certs_loaded_ = false;
   SystemCAMode system_ca_mode_ = SystemCAMode::Auto;
   bool server_certificate_verification_ = true;
   bool server_hostname_verification_ = true;
+  std::function<SSLVerifierResponse(tls::session_t)> session_verifier_;
+  std::string proxy_digest_auth_username_;
+  std::string proxy_digest_auth_password_;
 #endif
 };
+
+template <class Rep, class Period>
+inline void WebSocket::set_read_timeout(
+    const std::chrono::duration<Rep, Period> &duration) {
+  detail::duration_to_sec_and_usec(
+      duration, [&](time_t sec, time_t usec) { set_read_timeout(sec, usec); });
+}
 
 template <class Rep, class Period>
 inline void WebSocketClient::set_read_timeout(
@@ -4586,8 +4978,14 @@ namespace impl {
 
 bool is_valid_utf8(const std::string &s);
 
-bool read_websocket_frame(Stream &strm, Opcode &opcode, std::string &payload,
-                          bool &fin, bool expect_masked, size_t max_len);
+// Three states, because a failure that consumed bytes and one that consumed
+// none are not the same thing: the first has left the stream in the middle of
+// a frame and the connection cannot be reused, the second can just be retried.
+enum class FrameRead { Ok, Fail, Timeout };
+
+FrameRead read_websocket_frame(Stream &strm, Opcode &opcode,
+                               std::string &payload, bool &fin,
+                               bool expect_masked, size_t max_len);
 
 } // namespace impl
 

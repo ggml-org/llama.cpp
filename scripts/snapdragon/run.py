@@ -14,21 +14,73 @@ import logging
 logger = logging.getLogger("run")
 
 
+MANAGED_ENV_NAMES = (
+    "GGML_HEXAGON_DEVICES",
+    "GGML_HEXAGON_VERBOSE",
+    "GGML_HEXAGON_PROFILE",
+    "GGML_HEXAGON_NHVX",
+    "GGML_HEXAGON_NHMX",
+    "GGML_HEXAGON_POWER_MODE",
+    "GGML_HEXAGON_HOSTBUF",
+    "GGML_HEXAGON_DMA64",
+    "GGML_HEXAGON_OPBATCH",
+    "GGML_HEXAGON_OPQUEUE",
+    "GGML_HEXAGON_OPPOLL",
+    "GGML_HEXAGON_OPFILTER",
+    "GGML_HEXAGON_OPFUSION",
+    "GGML_HEXAGON_OPLOWER",
+    "GGML_HEXAGON_RT_REPACK",
+    "GGML_HEXAGON_VMEM",
+    "GGML_HEXAGON_VTCM_SIZE",
+    "GGML_HEXAGON_MBUF",
+    "GGML_HEXAGON_MM_SELECT",
+    "GGML_HEXAGON_FA_SELECT",
+    "GGML_HEXAGON_FA_SPLIT",
+    "GGML_HEXAGON_LI_SELECT",
+    "GGML_HEXAGON_GDN_SELECT",
+    "GGML_HEXAGON_SSM_SELECT",
+    "GGML_HEXAGON_AR_SELECT",
+    "GGML_HEXAGON_AR_SCATTER",
+    "GGML_HEXAGON_ETM",
+    "GGML_HEXAGON_ARCH",
+    "GGML_HEXAGON_OPTRACE",
+    "GGML_HEXAGON_LIBHTP_DIR",
+    "GGML_OPENCL_PLATFORM",
+    "GGML_OPENCL_DEVICE",
+    "GGML_OPENCL_OPFILTER",
+    "GGML_OPENCL_KERNEL_CACHE_DIR",
+    "GGML_OPENCL_KERNEL_CACHE_DEBUG",
+    "GGML_OPENCL_FA_TUNE",
+    "GGML_OPENCL_DISABLE_FUSION",
+    "GGML_OPENCL_ADRENO_XMEM_GEMM",
+    "GGML_OPENCL_ADRENO_USE_LARGE_BUFFER",
+    "GGML_SCHED_DEBUG",
+    "MTMD_BACKEND_DEVICE",
+    "D",
+    "DEVICE",
+)
+
+
 def parse_target(target_str):
     if not target_str:
-        return None, None
-    if target_str.startswith("adb") or target_str.startswith("android"):
-        parts = target_str.split(":", 1)
-        serial = parts[1] if len(parts) > 1 else None
-        return "android", serial
-    elif target_str.startswith("lnx") or target_str.startswith("linux") or target_str.startswith("ubuntu"):
-        parts = target_str.split(":", 1)
-        host = parts[1] if len(parts) > 1 else None
-        return "linux", host
+        return None, None, None
+
+    parts = target_str.split(":")
+    target_name = parts[0]
+
+    if target_name in ("adb", "android"):
+        serial = ":".join(parts[1:]) if len(parts) > 1 else None
+        return "android", serial, "adb"
+    elif target_name in ("lnx", "linux", "ubuntu"):
+        if len(parts) > 1 and parts[1] == "adb":
+            serial = ":".join(parts[2:]) if len(parts) > 2 else None
+            return "linux", serial, "adb"
+        host = ":".join(parts[1:]) if len(parts) > 1 else None
+        return "linux", host, "ssh"
     elif target_str in ("wos", "windows"):
-        return "windows", None
+        return "windows", None, None
     else:
-        return None, None
+        return None, None, None
 
 
 def shlex_join(args_list):
@@ -36,6 +88,95 @@ def shlex_join(args_list):
         return shlex.join(args_list)
     import pipes
     return " ".join(pipes.quote(x) for x in args_list)
+
+
+def default_target_dir(target_type, target_transport, home_dir):
+    if target_type == "android":
+        return "/data/local/tmp/llama.cpp"
+    if target_type == "linux":
+        if home_dir:
+            return home_dir.rstrip("/") + "/llama.cpp"
+        if target_transport == "adb":
+            return "/home/llama.cpp"
+        return "~/llama.cpp"
+    return "~/llama.cpp"
+
+
+def library_env_parts(lib_dir):
+    return [f"LD_LIBRARY_PATH={lib_dir}"]
+
+
+def adb_root(adb_base):
+    root_cmd = adb_base + ["root"]
+    logger.info(f"+ {' '.join(root_cmd)}")
+    res = subprocess.run(root_cmd)
+    if res.returncode != 0:
+        logger.error("ADB root failed.")
+        sys.exit(res.returncode)
+
+    wait_cmd = adb_base + ["wait-for-device"]
+    logger.info(f"+ {' '.join(wait_cmd)}")
+    res = subprocess.run(wait_cmd)
+    if res.returncode != 0:
+        logger.error("ADB wait-for-device failed.")
+        sys.exit(res.returncode)
+
+
+def split_device_list(devices):
+    parts = []
+    curr = []
+    bracket_depth = 0
+
+    for ch in devices:
+        if ch == '[':
+            bracket_depth += 1
+            curr.append(ch)
+        elif ch == ']':
+            if bracket_depth > 0:
+                bracket_depth -= 1
+            curr.append(ch)
+        elif ch == ',' and bracket_depth == 0:
+            part = "".join(curr).strip()
+            if part:
+                parts.append(part)
+            curr = []
+        else:
+            curr.append(ch)
+
+    part = "".join(curr).strip()
+    if part:
+        parts.append(part)
+
+    return parts
+
+
+def device_arg_from_devices(devices):
+    if devices.isdigit():
+        n = int(devices)
+        return ",".join(f"HTP{i}" for i in range(n))
+
+    names = []
+    for part in split_device_list(devices):
+        if "[" in part:
+            part = part.split("[", 1)[0].strip()
+        if part:
+            names.append(part)
+
+    return ",".join(names)
+
+
+def normalize_cmd_device_args(cmd_args):
+    exec_name = os.path.basename(cmd_args[0]) if cmd_args else ""
+    if exec_name.endswith(".exe"):
+        exec_name = exec_name[:-4]
+
+    for i, arg in enumerate(cmd_args):
+        if arg == "--device" and i + 1 < len(cmd_args):
+            cmd_args[i + 1] = device_arg_from_devices(cmd_args[i + 1])
+        elif arg.startswith("--device="):
+            cmd_args[i] = "--device=" + device_arg_from_devices(arg.split("=", 1)[1])
+        elif exec_name in ("test-backend-ops", "test-llama-archs") and arg in ("-b", "--backend") and i + 1 < len(cmd_args):
+            cmd_args[i + 1] = device_arg_from_devices(cmd_args[i + 1])
 
 
 def main():
@@ -52,8 +193,9 @@ def main():
     parser = argparse.ArgumentParser(
         description="Unified runner for llama.cpp tools on Snapdragon (natively, via ADB, or via SSH)."
     )
-    parser.add_argument("--target", help="Execution target (e.g. android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, windows/wos) (default: local run)")
-    parser.add_argument("--target-dir", help="Target directory on the device (default: /data/local/tmp/llama.cpp for Android, ~/llama.cpp for Linux)")
+    parser.add_argument("--target", help="Execution target (e.g. android[:serial]/adb[:serial], ubuntu:adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, windows/wos) (default: local run)")
+    parser.add_argument("--target-dir", help="Target directory on the device (default: /data/local/tmp/llama.cpp for Android, ~/llama.cpp for Linux, /home/llama.cpp for Linux via ADB)")
+    parser.add_argument("--home-dir", help="Home directory for Linux targets when deriving the default target directory")
     parser.add_argument("--install-dir", help="Install directory name (defaults to pkg-TARGET or pkg-TARGET-dbg prefix based on target)")
     parser.add_argument("--debug", action="store_true", help="Use debug build (defaults to pkg-TARGET-dbg folder)")
     parser.add_argument("--devices", "--device", "-d", help="Select execution devices (split into NPU and OpenCL GPUs automatically, default: HTP0)")
@@ -61,25 +203,36 @@ def main():
     parser.add_argument("--profile", help="Profiling flag (enables Hexagon profiling and OpenCL autotuning)")
     parser.add_argument("--sched-debug", action="store_true", help="Enable GGML/llama.cpp scheduler debug output (GGML_SCHED_DEBUG=2)")
     parser.add_argument("--mtmd-device", help="Specify the backend device ID for Multi-Threaded Multi-Device setup (MTMD_BACKEND_DEVICE)")
+    parser.add_argument("--no-embd-offload", action="store_true", help="Keep token embeddings and output projection on CPU (-ot token_embd.weight=CPU,output.weight=CPU)")
 
     # Hexagon specific parameters
     parser.add_argument("--hex-verbose", help="Enable verbose logging (GGML_HEXAGON_VERBOSE)")
     parser.add_argument("--hex-profile", help="Enable NPU/Hexagon profiling and performance metrics print (GGML_HEXAGON_PROFILE)")
     parser.add_argument("--hex-nhvx", help="Number of HVX units to use (GGML_HEXAGON_NHVX)")
     parser.add_argument("--hex-nhmx", help="Number of HMX units to use. 0 disables HMX power-up (GGML_HEXAGON_NHMX)")
+    parser.add_argument("--hex-power-mode", help="HTP DCVS/HMX power mode: low_power_saver, power_saver, high_power_saver, low_balanced, balanced, high_performance, sustained_high_performance, burst (GGML_HEXAGON_POWER_MODE)")
     parser.add_argument("--hex-hostbuf", help="Enable host buffers (GGML_HEXAGON_HOSTBUF)")
+    parser.add_argument("--hex-dma64", nargs="?", const="1", help="Enable (1) or disable (0) 64-bit DMA for model weights (GGML_HEXAGON_DMA64)")
     parser.add_argument("--hex-opbatch", help="Maximum number of operations to batch into a single HTP execution (GGML_HEXAGON_OPBATCH)")
     parser.add_argument("--hex-opqueue", help="Size of the asynchronous NPU operation queue (GGML_HEXAGON_OPQUEUE)")
-    parser.add_argument("--hex-oppoll", default="1", help="Enable (1) or Disable (0) polling for NPU opbatch completion (GGML_HEXAGON_OPPOLL) (default: 1)")
+    parser.add_argument("--hex-oppoll", default=None, help="NPU opbatch polling: 0=block, 1=poll, >1=hybrid poll budget in ms (GGML_HEXAGON_OPPOLL)")
     parser.add_argument("--hex-opfilter", help="Regex pattern to filter/select which operators are offloaded to NPU (GGML_HEXAGON_OPFILTER)")
     parser.add_argument("--hex-opfusion", help="NPU graph node fusion optimization level (0: disabled, 1: enabled) (GGML_HEXAGON_OPFUSION)")
+    parser.add_argument("--hex-oplower", help="NPU graph FP16 activation lowering (0: disabled, 1: enabled) (GGML_HEXAGON_OPLOWER)")
+    parser.add_argument("--hex-rt-repack", help="Runtime weight repacking mode (0: disabled, 1: all tileable weights) (GGML_HEXAGON_RT_REPACK)")
     parser.add_argument("--hex-vmem", help="Maximum NPU VMEM size limit in MB to allocate (GGML_HEXAGON_VMEM)")
-    parser.add_argument("--hex-mbuf", help="Maximum host buffer size limit in MB to allocate (GGML_HEXAGON_MBUF)")
-    parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 3:HMX,2:HVX-tiled,1:HVX-flat,0:disable")
-    parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-mbuf", help="Host buffer size limits in MB (supports K/M/G suffix): <dyn>[,<static>[,<total>]] (default: 512,1024,0) (GGML_HEXAGON_MBUF)")
+    parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 4:HMX-W8A8,3:HMX-W8A8-hybrid,2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 3:HMX-W8A8,2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-fa-split", "--hex-fa-head-split", dest="hex_fa_split", help="Enable (1) or disable (0) Flash Attention head/team split (GGML_HEXAGON_FA_SPLIT)")
+    parser.add_argument("--hex-li-select", help="Select Lightning Indexer kernel (GGML_HEXAGON_LI_SELECT) 2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-gdn-select", help="Select Gated Delta Net kernel (GGML_HEXAGON_GDN_SELECT) 2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-ssm-select", help="Select SSM Scan kernel (GGML_HEXAGON_SSM_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-ar-select", help="Select All-Reduce kernel (GGML_HEXAGON_AR_SELECT) 1:enable,0:disable")
+    parser.add_argument("--hex-ar-scatter", help="Enable (1) or disable (0) reduce-scatter for fused ALLREDUCE+ADD (GGML_HEXAGON_AR_SCATTER)")
     parser.add_argument("--hex-etm", help="Enable Embedded Trace Macrocell hardware tracing / trace logging (GGML_HEXAGON_ETM)")
     parser.add_argument("--hex-arch", help="Target Hexagon NPU architecture version override (v73, v75, v79, v81, etc.) (GGML_HEXAGON_ARCH)")
+    parser.add_argument("--hex-libhtp-dir", default=os.environ.get("GGML_HEXAGON_LIBHTP_DIR"), help="Directory containing libggml-htp-v<arch>.so (GGML_HEXAGON_LIBHTP_DIR)")
     parser.add_argument("--hex-optrace", help="Trace buffer size in number of records (GGML_HEXAGON_OPTRACE)")
 
     # OpenCL specific parameters
@@ -102,11 +255,12 @@ def main():
 
     target_type = None
     target_val = None
+    target_transport = None
     target_prefix = None
     if args.target:
-        target_type, target_val = parse_target(args.target)
+        target_type, target_val, target_transport = parse_target(args.target)
         if not target_type:
-            logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
+            logger.error(f"Error: Invalid target format '{args.target}'. Must be android[:serial]/adb[:serial], ubuntu:adb[:serial], linux:[user@]host/lnx:[user@]host/ubuntu:[user@]host, or windows/wos.")
             sys.exit(1)
         target_prefix = args.target.split(":", 1)[0]
 
@@ -142,34 +296,57 @@ def main():
     def set_env(env_name, opt_val):
         if opt_val is not None:
             env_vars[env_name] = str(opt_val)
-        elif env_name in os.environ:
-            env_vars[env_name] = os.environ[env_name]
 
     # Resolve and filter devices (HTP vs OpenCL)
-    devices_val = args.devices if args.devices is not None else "HTP0"
+    exec_name = os.path.basename(cmd_args[0]) if cmd_args else ""
+    if exec_name.endswith(".exe"):
+        exec_name = exec_name[:-4]
+
+    device_in_cmd = None
+    for i, arg in enumerate(cmd_args):
+        if arg == "--device" and i + 1 < len(cmd_args):
+            device_in_cmd = cmd_args[i + 1]
+            break
+        elif arg.startswith("--device="):
+            device_in_cmd = arg.split("=", 1)[1]
+            break
+        elif exec_name in ("test-backend-ops", "test-llama-archs") and arg in ("-b", "--backend") and i + 1 < len(cmd_args):
+            device_in_cmd = cmd_args[i + 1]
+            break
+
+    if args.devices is not None:
+        devices_val = args.devices
+    elif device_in_cmd is not None:
+        devices_val = device_in_cmd
+    else:
+        devices_val = "HTP0"
+
     if devices_val.isdigit():
         hex_devices = devices_val
         cl_device = ""
     else:
-        parts = [p.strip() for p in devices_val.split(",")]
+        parts = split_device_list(devices_val)
         # Any device containing "htp" is Hexagon, rest is OpenCL
         hex_parts = [p for p in parts if "htp" in p.lower()]
-        cl_parts = [p for p in parts if "htp" not in p.lower()]
+        cl_parts = [
+            p for p in parts
+            if "htp" not in p.lower()
+            and p.lower() not in ("none", "cpu")
+            and not p.lower().startswith("gpuopencl")
+        ]
         hex_devices = ",".join(hex_parts)
         cl_device = ",".join(cl_parts)
 
     # Set Hexagon devices
     if hex_devices:
         env_vars["GGML_HEXAGON_DEVICES"] = hex_devices
-    elif "GGML_HEXAGON_DEVICES" in os.environ:
-        env_vars["GGML_HEXAGON_DEVICES"] = os.environ["GGML_HEXAGON_DEVICES"]
+
+    normalize_cmd_device_args(cmd_args)
 
     # Set OpenCL device (unless overridden by --cl-device)
     final_cl_device = args.cl_device if args.cl_device is not None else cl_device
     if final_cl_device:
         env_vars["GGML_OPENCL_DEVICE"] = final_cl_device
-    elif "GGML_OPENCL_DEVICE" in os.environ:
-        env_vars["GGML_OPENCL_DEVICE"] = os.environ["GGML_OPENCL_DEVICE"]
 
     # Map shared & backend-specific parameters with correct overrides
 
@@ -186,25 +363,33 @@ def main():
 
     if args.cl_fa_tune or args.profile is not None:
         env_vars["GGML_OPENCL_FA_TUNE"] = "1"
-    elif "GGML_OPENCL_FA_TUNE" in os.environ:
-        env_vars["GGML_OPENCL_FA_TUNE"] = os.environ["GGML_OPENCL_FA_TUNE"]
 
     # Other Hexagon environment variables
     set_env("GGML_HEXAGON_NHVX", args.hex_nhvx)
     set_env("GGML_HEXAGON_NHMX", args.hex_nhmx)
+    set_env("GGML_HEXAGON_POWER_MODE", args.hex_power_mode)
     set_env("GGML_HEXAGON_HOSTBUF", args.hex_hostbuf)
+    set_env("GGML_HEXAGON_DMA64", args.hex_dma64)
     set_env("GGML_HEXAGON_OPBATCH", args.hex_opbatch)
     set_env("GGML_HEXAGON_OPQUEUE", args.hex_opqueue)
     set_env("GGML_HEXAGON_OPPOLL", args.hex_oppoll)
     set_env("GGML_HEXAGON_OPFILTER", args.hex_opfilter)
     set_env("GGML_HEXAGON_OPFUSION", args.hex_opfusion)
+    set_env("GGML_HEXAGON_OPLOWER", args.hex_oplower)
+    set_env("GGML_HEXAGON_RT_REPACK", args.hex_rt_repack)
     set_env("GGML_HEXAGON_VMEM", args.hex_vmem)
     set_env("GGML_HEXAGON_MBUF", args.hex_mbuf)
     set_env("GGML_HEXAGON_MM_SELECT", args.hex_mm_select)
     set_env("GGML_HEXAGON_FA_SELECT", args.hex_fa_select)
+    set_env("GGML_HEXAGON_FA_SPLIT", args.hex_fa_split)
+    set_env("GGML_HEXAGON_LI_SELECT", args.hex_li_select)
+    set_env("GGML_HEXAGON_GDN_SELECT", args.hex_gdn_select)
+    set_env("GGML_HEXAGON_SSM_SELECT", args.hex_ssm_select)
     set_env("GGML_HEXAGON_AR_SELECT", args.hex_ar_select)
+    set_env("GGML_HEXAGON_AR_SCATTER", args.hex_ar_scatter)
     set_env("GGML_HEXAGON_ETM", args.hex_etm)
     set_env("GGML_HEXAGON_ARCH", args.hex_arch)
+    set_env("GGML_HEXAGON_LIBHTP_DIR", args.hex_libhtp_dir)
     set_env("GGML_HEXAGON_OPTRACE", args.hex_optrace)
     set_env("MTMD_BACKEND_DEVICE", args.mtmd_device)
 
@@ -215,25 +400,19 @@ def main():
 
     if args.cl_disable_fusion:
         env_vars["GGML_OPENCL_DISABLE_FUSION"] = "1"
-    elif "GGML_OPENCL_DISABLE_FUSION" in os.environ:
-        env_vars["GGML_OPENCL_DISABLE_FUSION"] = os.environ["GGML_OPENCL_DISABLE_FUSION"]
 
     if args.cl_adreno_xmem:
         env_vars["GGML_OPENCL_ADRENO_XMEM_GEMM"] = "1"
-    elif "GGML_OPENCL_ADRENO_XMEM_GEMM" in os.environ:
-        env_vars["GGML_OPENCL_ADRENO_XMEM_GEMM"] = os.environ["GGML_OPENCL_ADRENO_XMEM_GEMM"]
 
     if args.cl_adreno_large_buffer:
         env_vars["GGML_OPENCL_ADRENO_USE_LARGE_BUFFER"] = "1"
-    elif "GGML_OPENCL_ADRENO_USE_LARGE_BUFFER" in os.environ:
-        env_vars["GGML_OPENCL_ADRENO_USE_LARGE_BUFFER"] = os.environ["GGML_OPENCL_ADRENO_USE_LARGE_BUFFER"]
 
     if args.sched_debug:
         env_vars["GGML_SCHED_DEBUG"] = "2"
 
     # Resolve executable path
     executable = cmd_args[0]
-    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "test-backend-ops"]
+    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "llama-perplexity", "test-backend-ops", "test-llama-archs"]
     if executable in known_binaries:
         if target_type in ("android", "linux"):
             resolved_exec = f"./bin/{executable}"
@@ -250,33 +429,26 @@ def main():
         basename = basename[:-4]
 
     device_val = None
-    if basename == "test-backend-ops":
-        for i in range(len(cmd_args)):
-            if cmd_args[i] in ("-p", "--params") and i + 1 < len(cmd_args):
-                val = cmd_args[i + 1]
-                new_val = ""
-                for j, char in enumerate(val):
-                    if char in ('[', ']'):
-                        if j > 0 and val[j - 1] == '\\':
-                            new_val += char
+    if basename in ("test-backend-ops", "test-llama-archs"):
+        if basename == "test-backend-ops":
+            for i in range(len(cmd_args)):
+                if cmd_args[i] in ("-p", "--params") and i + 1 < len(cmd_args):
+                    val = cmd_args[i + 1]
+                    new_val = ""
+                    for j, char in enumerate(val):
+                        if char in ('[', ']'):
+                            if j > 0 and val[j - 1] == '\\':
+                                new_val += char
+                            else:
+                                new_val += '\\' + char
                         else:
-                            new_val += '\\' + char
-                    else:
-                        new_val += char
-                cmd_args[i + 1] = new_val
+                            new_val += char
+                    cmd_args[i + 1] = new_val
 
-        has_b = any(arg == "-b" for arg in cmd_args)
+        has_b = any(arg in ("-b", "--backend") for arg in cmd_args)
         if not has_b:
             if args.devices:
-                if args.devices.isdigit():
-                    n = int(args.devices)
-                    device_val = ",".join(f"HTP{i}" for i in range(n))
-                else:
-                    device_val = args.devices
-            elif "D" in os.environ:
-                device_val = os.environ["D"]
-            elif "DEVICE" in os.environ:
-                device_val = os.environ["DEVICE"]
+                device_val = device_arg_from_devices(args.devices)
             else:
                 device_val = "HTP0"
             if device_val:
@@ -285,17 +457,10 @@ def main():
         has_device = any(arg.startswith("--device") for arg in cmd_args)
         if not has_device:
             if args.devices:
-                if args.devices.isdigit():
-                    n = int(args.devices)
-                    device_val = ",".join(f"HTP{i}" for i in range(n))
-                else:
-                    device_val = args.devices
-            elif "D" in os.environ:
-                device_val = os.environ["D"]
-            elif "DEVICE" in os.environ:
-                device_val = os.environ["DEVICE"]
+                device_val = device_arg_from_devices(args.devices)
             else:
                 device_val = "HTP0"
+
             if device_val:
                 cmd_args += ["--device", device_val]
 
@@ -308,38 +473,52 @@ def main():
         or args.hex_profile is not None
         or args.hex_optrace is not None
     )
-    if verbose_trigger and basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "llama-mtmd-cli"):
-        if "-v" not in cmd_args and "--verbose" not in cmd_args:
-            cmd_args.append("-v")
+    if verbose_trigger:
+        if basename == "test-llama-archs":
+            if "-v" not in cmd_args:
+                cmd_args += ["-v", "5"]
+        elif basename in ("llama-cli", "llama-completion", "llama-bench", "llama-server", "llama-mtmd-cli"):
+            if "-v" not in cmd_args and "--verbose" not in cmd_args:
+                cmd_args.append("-v")
 
     # Inject defaults for llama-cli, llama-completion, and llama-server if not overridden by the user
     if basename in ("llama-cli", "llama-completion", "llama-server"):
         if "-ngl" not in cmd_args and "--n-gpu-layers" not in cmd_args:
             cmd_args += ["-ngl", "99"]
-        if "--ubatch-size" not in cmd_args and "-ub" not in cmd_args:
-            cmd_args += ["--ubatch-size", "1024"]
         if "-fa" not in cmd_args and "--flash-attn" not in cmd_args:
             cmd_args += ["-fa", "on"]
+
+    # Use ubatch-size 1024 for hexagon backend (HTP devices)
+    if hex_devices and basename in ("llama-cli", "llama-completion", "llama-server", "llama-bench"):
+        if "--ubatch-size" not in cmd_args and "-ub" not in cmd_args:
+            cmd_args += ["--ubatch-size", "1024"]
+    elif basename in ("llama-cli", "llama-completion", "llama-server"):
+        if "--ubatch-size" not in cmd_args and "-ub" not in cmd_args:
+            cmd_args += ["--ubatch-size", "1024"]
 
     if basename in ("llama-cli", "llama-completion", "llama-server", "llama-bench"):
         if "-t" not in cmd_args and "--threads" not in cmd_args:
             cmd_args += ["-t", "6"]
+        if getattr(args, "no_embd_offload", False):
+            if not any("token_embd" in arg or "output.weight" in arg for arg in cmd_args):
+                cmd_args += ["-ot", r"^(token_embd|output)\.weight$=CPU"]
 
     # Resolve target directory on device
     target_dir = args.target_dir
     if not target_dir:
-        target_dir = "/data/local/tmp/llama.cpp" if target_type == "android" else "~/llama.cpp"
+        target_dir = default_target_dir(target_type, target_transport, args.home_dir)
 
-    if target_type == "android":
-        # Run via ADB
+    if target_transport == "adb":
         adb_base = ["adb"]
         if target_val: # serial
             adb_base += ["-s", target_val]
 
-        env_parts = [
-            "LD_LIBRARY_PATH=./lib",
-            "ADSP_LIBRARY_PATH=./lib"
-        ]
+        if target_type == "linux":
+            adb_root(adb_base)
+
+        env_parts = library_env_parts("./lib")
+        if target_type == "linux":
+            env_parts.insert(0, f"HOME={args.home_dir or '/home'}")
         for k, v in env_vars.items():
             env_parts.append(f"{k}={v}")
         env_str = " ".join(env_parts)
@@ -359,10 +538,7 @@ def main():
             sys.exit(1)
 
         # Linux remote run via SSH
-        env_parts = [
-            "LD_LIBRARY_PATH=./lib",
-            "ADSP_LIBRARY_PATH=./lib"
-        ]
+        env_parts = library_env_parts("./lib")
         for k, v in env_vars.items():
             env_parts.append(f"{k}={v}")
         env_str = " ".join(env_parts)
@@ -383,12 +559,13 @@ def main():
         # Run locally
         local_env = os.environ.copy()
         lib_dir = os.path.normpath(os.path.join(package_path, "lib"))
-        local_env["ADSP_LIBRARY_PATH"] = lib_dir
         if platform.system() == "Windows":
             local_env["PATH"] = lib_dir + os.path.pathsep + local_env.get("PATH", "")
         else:
             local_env["LD_LIBRARY_PATH"] = lib_dir + os.path.pathsep + local_env.get("LD_LIBRARY_PATH", "")
 
+        for k in MANAGED_ENV_NAMES:
+            local_env.pop(k, None)
         for k, v in env_vars.items():
             local_env[k] = v
 

@@ -11,7 +11,7 @@ server: ServerProcess
 def get_test_image_base64() -> str:
     """Get a test image in base64 format"""
     # Use the same test image as test_vision_api.py
-    IMG_URL = "https://huggingface.co/ggml-org/tinygemma3-GGUF/resolve/main/test/11_truck.png"
+    IMG_URL = "https://huggingface.co/ggml-org-dev/tinygemma3-GGUF/resolve/main/test/11_truck.png"
     response = requests.get(IMG_URL)
     response.raise_for_status()
     return base64.b64encode(response.content).decode("utf-8")
@@ -21,7 +21,6 @@ def create_server():
     global server
     server = ServerPreset.tinyllama2()
     server.model_alias = "tinyllama-2-anthropic"
-    server.server_port = 8082
     server.n_slots = 1
     server.n_ctx = 8192
     server.n_batch = 2048
@@ -34,7 +33,6 @@ def vision_server():
     server = ServerPreset.tinygemma3()
     server.offline = False  # Allow downloading the model
     server.model_alias = "tinygemma3-anthropic"
-    server.server_port = 8083  # Different port to avoid conflicts
     server.n_slots = 1
     return server
 
@@ -500,6 +498,54 @@ def test_anthropic_tool_result_error():
     assert res.body["type"] == "message"
 
 
+def test_anthropic_tool_reference():
+    """Anthropic defer_loading and tool_reference convert to their OpenAI forms (behaviour: test_tool_call.py)"""
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/LFM3.jinja'
+    server.start()
+
+    search = {"name": "tool_search", "description": "Search for available tools by keyword",
+              "parameters": {"type": "object", "properties": {"query": {"type": "string"}}}}
+    purchase = {"name": "markItemPurchased", "description": "Mark an item as purchased",
+                "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}}
+
+    anthropic = server.make_request("POST", "/v1/messages/count_tokens", data={
+        "model": "test",
+        "tools": [
+            {"name": t["name"], "description": t["description"], "input_schema": t["parameters"], **extra}
+            for t, extra in ((search, {}), (purchase, {"defer_loading": True}))
+        ],
+        "messages": [
+            {"role": "user", "content": "Mark item abc as purchased"},
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "call_1", "name": "tool_search", "input": {"query": "purchase"}},
+            ]},
+            {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "call_1",
+                 "content": [{"type": "tool_reference", "tool_name": "markItemPurchased"}]},
+            ]},
+        ],
+    })
+    oai = server.make_request("POST", "/chat/completions/input_tokens", data={
+        "tools": [
+            {"type": "function", "function": search},
+            {"type": "function", "function": {**purchase, "defer_loading": True}},
+        ],
+        "messages": [
+            {"role": "user", "content": "Mark item abc as purchased"},
+            {"role": "assistant", "content": None, "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "tool_search", "arguments": "{\"query\": \"purchase\"}"}},
+            ]},
+            {"role": "tool", "tool_call_id": "call_1",
+             "content": [{"type": "tool_reference", "name": "markItemPurchased"}]},
+        ],
+    })
+    assert anthropic.status_code == 200, anthropic.body
+    assert oai.status_code == 200, oai.body
+    assert anthropic.body["input_tokens"] == oai.body["input_tokens"]
+
+
 def test_anthropic_tool_streaming():
     """Test streaming with tool use"""
     server.jinja = True
@@ -805,6 +851,32 @@ def test_anthropic_thinking():
     assert res.body["type"] == "message"
 
 
+def test_anthropic_output_config_effort():
+    """output_config.effort must reach the chat template, same as chat_template_kwargs.reasoning_effort"""
+    global server
+    server.jinja = True
+    server.chat_template_file = '../../../models/templates/openai-gpt-oss-120b.jinja'
+    server.start()
+    effort = "low"
+
+    def count_tokens(extra):
+        res = server.make_request("POST", "/v1/messages/count_tokens", data={
+            "model": "test",
+            "messages": [{"role": "user", "content": "Hello"}],
+            **extra,
+        })
+        assert res.status_code == 200, res.body
+        return res.body["input_tokens"]
+
+    n_default = count_tokens({})
+    n_kwargs = count_tokens({"chat_template_kwargs": {"reasoning_effort": effort}})
+    n_output_config = count_tokens({"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}})
+
+    # the template renders "Reasoning: medium" by default, so the effort must change the prompt
+    assert n_kwargs != n_default
+    assert n_output_config == n_kwargs
+
+
 def test_anthropic_metadata():
     """Test metadata parameter"""
     server.start()
@@ -1015,7 +1087,6 @@ def test_anthropic_thinking_with_reasoning_model(stream):
     server.jinja = True
     server.n_ctx = 8192
     server.n_predict = 1024
-    server.server_port = 8084
     server.start(timeout_seconds=600)  # large model needs time to download
 
     if stream:

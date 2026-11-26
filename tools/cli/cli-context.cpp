@@ -255,7 +255,7 @@ bool cli_context::list_and_ask_models() {
         ui::user_turn user_turn;
         selection = user_turn.read_input(false, "Select model by number: ");
         if (selection.empty()) {
-            continue;
+            return false;
         }
         try {
             size_t idx = std::stoul(selection);
@@ -362,7 +362,7 @@ bool cli_context::generate_completion(generated_content & content_out, cli_timin
 
     ui::assistant_turn a;
 
-    std::string err = client.post_sse("/v1/chat/completions", body.dump(), should_stop, [&](const std::string & payload) {
+    std::string err = client.post_sse("/v1/chat/completions", body.dump_safe(), should_stop, [&](const std::string & payload) {
         json chunk = json::parse_no_throw(payload);
         if (chunk.is_discarded()) {
             return;
@@ -502,8 +502,13 @@ int cli_context::run() {
             break;
         }
 
+        // a submitted line always ends with a newline, an empty read is EOF
+        if (buffer.empty()) {
+            break;
+        }
+
         // remove trailing newline
-        if (!buffer.empty() && buffer.back() == '\n') {
+        if (buffer.back() == '\n') {
             buffer.pop_back();
         }
 

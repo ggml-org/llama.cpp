@@ -8,6 +8,10 @@ on:
   schedule:
     - cron: '0 0 * * 0'
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -35,7 +39,7 @@ jobs:
         uses: actions/checkout@v6
 
       #- name: ccache
-      #  uses: ggml-org/ccache-action@v1.2.16
+      #  uses: ggml-org/ccache-action@v1.2.24
       #  with:
       #    key: msys-windows-2025-x64
       #    variant: ccache

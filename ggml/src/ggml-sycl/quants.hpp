@@ -14,6 +14,7 @@
 #ifndef GGML_SYCL_QUANTS_HPP
 #define GGML_SYCL_QUANTS_HPP
 
+#include <cstddef>
 #include <utility>
 
 #include "ggml-common.h"
@@ -178,6 +179,117 @@ template <> struct block_q_t<GGML_TYPE_Q6_K> {
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
 };
 
+template <> struct block_q_t<GGML_TYPE_IQ3_XXS> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_K;
+        static constexpr uint32_t qi       = QI3_XXS / 2;
+        static constexpr uint32_t qr       = QR3_XXS;
+        static constexpr uint32_t vdr_mmvq = 1;
+    };
+
+    // Reordered layout: [96-byte qs records for all blocks][2-byte d records for all blocks].
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (3 * QK_K / 8), 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        const int nblocks = nrows * (ncols / QK_K);
+        return { nblocks * (3 * QK_K / 8) + block_index * sizeof(ggml_half), 0 };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
+template <> struct block_q_t<GGML_TYPE_IQ3_S> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_K;
+        static constexpr uint32_t qi       = QI3_S / 2;
+        static constexpr uint32_t qr       = QR3_S;
+        static constexpr uint32_t vdr_mmvq = 1;
+    };
+
+    // Reordered layout: [qs][qh][signs][{d, scales} per block]. Keeping the small
+    // metadata together leaves the generic reordered dot interface at two offset pairs.
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int nblocks) {
+        return { block_index * (QK_K / 4),
+                 nblocks * (QK_K / 4) + block_index * (QK_K / 32) };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        const int nblocks = nrows * (ncols / QK_K);
+        const int signs_base = nblocks * (QK_K / 4 + QK_K / 32);
+        const int metadata_base = signs_base + nblocks * (QK_K / 8);
+        return { signs_base + block_index * (QK_K / 8),
+                 metadata_base + block_index * (sizeof(ggml_half) + IQ3S_N_SCALE) };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
+template <> struct block_q_t<GGML_TYPE_IQ4_NL> {
+    struct traits {
+        static constexpr uint32_t qk       = QK4_NL;
+        static constexpr uint32_t qi       = QI4_NL;
+        static constexpr uint32_t qr       = QR4_NL;
+        static constexpr uint32_t vdr_mmvq = 4;
+    };
+
+    // Reordered layout: [qs (QK4_NL/2 per block)][d]
+    static constexpr int record_size = offsetof(block_iq4_nl, qs);
+
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (QK4_NL / 2), 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        return { (ncols / QR4_NL * nrows) + block_index * sizeof(ggml_half), 0 };
+    }
+
+    static float group_scale(const uint8_t * record, const int /* group */) {
+        return *reinterpret_cast<const ggml_half *>(record);
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
+template <> struct block_q_t<GGML_TYPE_IQ4_XS> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_K;
+        static constexpr uint32_t qi       = QI4_XS;
+        static constexpr uint32_t qr       = QR4_XS;
+        static constexpr uint32_t vdr_mmvq = 4;
+    };
+
+    // Reordered layout: [qs (QK_K/2 per block)][{d, scales_h, scales_l} per block, as in block_iq4_xs]
+    static constexpr int record_size = offsetof(block_iq4_xs, qs);
+
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (QK_K / 2), 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        const int nblocks = nrows * (ncols / QK_K);
+        return { nblocks * (QK_K / 2) + block_index * (int) offsetof(block_iq4_xs, qs), 0 };
+    }
+
+    static float group_scale(const uint8_t * record, const int group) {
+        const uint16_t scales_h = *reinterpret_cast<const uint16_t *>(record + offsetof(block_iq4_xs, scales_h));
+        const uint8_t  scales_l = record[offsetof(block_iq4_xs, scales_l) + group / 2];
+        const int      ls       = ((scales_l >> (4 * (group % 2))) & 0xf) | (((scales_h >> (2 * group)) & 3) << 4);
+        return (float) *reinterpret_cast<const ggml_half *>(record + offsetof(block_iq4_xs, d)) * (ls - 32);
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }
+};
+
+// IQ4_NL blocks and IQ4_XS sub-blocks are 32-value groups of 16 qs bytes, so in both layouts the qs of
+// group g start at 16 * g; tail is the first byte after all qs, where the per-block records start
+template <ggml_type type> inline float iq4_group_scale(const uint8_t * tail, const int64_t g) {
+    using block_t = block_q_t<type>;
+    constexpr int64_t groups = block_t::traits::qk / QK4_NL;
+    return block_t::group_scale(tail + g / groups * block_t::record_size, (int) (g % groups));
+}
+
 template <> struct block_q_t<GGML_TYPE_Q8_0> {
     struct traits {
         static constexpr uint32_t qk       = QK8_0;      // 32
@@ -194,6 +306,27 @@ template <> struct block_q_t<GGML_TYPE_Q8_0> {
 
     static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
         return { (ncols * nrows) + block_index * sizeof(ggml_half), 0 };
+    }
+
+    static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }  // 1
+};
+
+template <> struct block_q_t<GGML_TYPE_MXFP4> {
+    struct traits {
+        static constexpr uint32_t qk       = QK_MXFP4;  // 32
+        static constexpr uint32_t qi       = QI_MXFP4;  // 4
+        static constexpr uint32_t qr       = QR_MXFP4;  // 2
+        static constexpr uint32_t vdr_mmvq = 2;
+    };
+
+    // MXFP4 reorder layout: [qs0|qs1|...|qsN][e0|e1|...|eN]
+    // The 17-byte AoS block leaves qs unaligned; split out, every 16-byte nibble block is aligned.
+    static constexpr std::pair<int, int> get_block_offset(const int block_index, const int /* nblocks */) {
+        return { block_index * (QK_MXFP4 / 2), 0 };
+    }
+
+    static constexpr std::pair<int, int> get_d_offset(int nrows, int ncols, const int block_index) {
+        return { (ncols / 2 * nrows) + block_index, 0 };
     }
 
     static constexpr int block_to_q8_1_ratio() { return traits::qk / QK8_1; }  // 1

@@ -112,10 +112,10 @@ void llama_model_wavtokenizer_dec::load_arch_tensors(llama_model_loader &) {
 }
 
 std::unique_ptr<llm_graph_context> llama_model_wavtokenizer_dec::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
-llama_model_wavtokenizer_dec::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_wavtokenizer_dec::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
@@ -259,6 +259,4 @@ llama_model_wavtokenizer_dec::graph::graph(const llama_model & model, const llm_
 
     cb(cur, "result_embd", -1);
     res->t_embd = cur;
-
-    ggml_build_forward_expand(gf, cur);
 }

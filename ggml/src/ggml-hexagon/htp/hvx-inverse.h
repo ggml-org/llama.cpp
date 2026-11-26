@@ -70,12 +70,9 @@ static inline HVX_Vector hvx_vec_inverse_f16(HVX_Vector vals) {
     // Get mantissa for 16-bit representation
     HVX_Vector mant_recip = Q6_V_vand_VV(Q6_Vh_vasr_VhR(Q6_Vh_vasl_VhVh(rm, vcl0), 5), Q6_Vh_vsplat_R(0x03FF));
 
-    //Compute Reciprocal Exponent
-    HVX_Vector exp_recip =
-        Q6_Vh_vsub_VhVh(Q6_Vh_vsub_VhVh(Q6_Vh_vsplat_R(254), exp_u16), Q6_Vh_vsub_VhVh(vcl0, Q6_Vh_vsplat_R(1)));
-    //Convert it for 16-bit representation
-    exp_recip = Q6_Vh_vadd_VhVh_sat(Q6_Vh_vsub_VhVh(exp_recip, Q6_Vh_vsplat_R(127)), Q6_Vh_vsplat_R(15));
-    exp_recip = Q6_Vh_vasl_VhR(exp_recip, 10);
+    // Compute reciprocal exponent for 16-bit representation: (254 - exp_u16) - (vcl0 - 1) - 127 + 15
+    HVX_Vector exp_recip = Q6_Vh_vsub_VhVh(Q6_Vh_vsub_VhVh(Q6_Vh_vsplat_R(143), exp_u16), vcl0);
+    exp_recip            = Q6_Vh_vasl_VhR(exp_recip, 10);
 
     //Merge exponent and mantissa for reciprocal
     HVX_Vector recip = Q6_V_vor_VV(exp_recip, mant_recip);
@@ -84,6 +81,21 @@ static inline HVX_Vector hvx_vec_inverse_f16(HVX_Vector vals) {
     // add sign back
     recip            = Q6_V_vandor_VQR(recip, is_neg, 0x80008000);
     return recip;
+}
+
+// Reciprocal of positive normal fp16 in [1.0f, 16384.0f] (e.g. 1 + exp(-|x|) in sigmoid).
+static inline HVX_Vector hvx_vec_inverse_pos_f16(HVX_Vector avals) {
+    HVX_Vector mant_u16 = Q6_Vh_vasl_VhR(avals, 6);
+    HVX_Vector exp_u16  = Q6_Vuh_vlsr_VuhR(avals, 10);
+
+    HVX_Vector rm   = hvx_vec_recip_xp1_O3_unsigned(mant_u16);
+    HVX_Vector vcl0 = Q6_Vuh_vcl0_Vuh(rm);
+
+    HVX_Vector mant_recip = Q6_V_vand_VV(Q6_Vh_vasr_VhR(Q6_Vh_vasl_VhVh(rm, vcl0), 5), Q6_Vh_vsplat_R(0x03FF));
+    HVX_Vector exp_recip  = Q6_Vh_vsub_VhVh(Q6_Vh_vsub_VhVh(Q6_Vh_vsplat_R(31), exp_u16), vcl0);
+    exp_recip             = Q6_Vh_vasl_VhR(exp_recip, 10);
+
+    return Q6_V_vor_VV(exp_recip, mant_recip);
 }
 
 static inline HVX_Vector hvx_vec_inverse_f32(HVX_Vector v_sf) {
@@ -169,36 +181,36 @@ static inline HVX_Vector hvx_vec_inverse_f16_guard(HVX_Vector v_sf, HVX_Vector n
     } while(0)
 
 // Generic macro to define alignment permutations for an op
-#define DEFINE_HVX_INV_OP_VARIANTS(OP_NAME, OP_LOOP_BODY) \
+#define DEFINE_HVX_INV_OP_VARIANTS(OP_NAME, OP_LOOP_BODY)                                           \
 static inline void OP_NAME##_aa(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0); \
-    assert((uintptr_t) src % 128 == 0); \
-    OP_LOOP_BODY(HVX_Vector, HVX_Vector, hvx_vec_store_a); \
-} \
+    assert((uintptr_t) dst % 128 == 0);                                                             \
+    assert((uintptr_t) src % 128 == 0);                                                             \
+    OP_LOOP_BODY(HVX_Vector, HVX_Vector, hvx_vec_store_a);                                          \
+}                                                                                                   \
 static inline void OP_NAME##_au(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) { \
-    assert((uintptr_t) dst % 128 == 0); \
-    OP_LOOP_BODY(HVX_Vector, HVX_UVector, hvx_vec_store_a); \
-} \
+    assert((uintptr_t) dst % 128 == 0);                                                             \
+    OP_LOOP_BODY(HVX_Vector, HVX_UVector, hvx_vec_store_a);                                         \
+}                                                                                                   \
 static inline void OP_NAME##_ua(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) { \
-    assert((uintptr_t) src % 128 == 0); \
-    OP_LOOP_BODY(HVX_UVector, HVX_Vector, hvx_vec_store_u); \
-} \
+    assert((uintptr_t) src % 128 == 0);                                                             \
+    OP_LOOP_BODY(HVX_UVector, HVX_Vector, hvx_vec_store_u);                                         \
+}                                                                                                   \
 static inline void OP_NAME##_uu(uint8_t * restrict dst, const uint8_t * restrict src, uint32_t n) { \
-    OP_LOOP_BODY(HVX_UVector, HVX_UVector, hvx_vec_store_u); \
-} \
+    OP_LOOP_BODY(HVX_UVector, HVX_UVector, hvx_vec_store_u);                                        \
+}                                                                                                   \
 
 // Dispatcher logic
-#define HVX_INV_DISPATCHER(OP_NAME) \
+#define HVX_INV_DISPATCHER(OP_NAME)                                                                          \
 static inline void OP_NAME(uint8_t * restrict dst, const uint8_t * restrict src, const uint32_t num_elems) { \
-    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src, 128)) { \
-        OP_NAME##_aa(dst, src, num_elems); \
-    } else if (hex_is_aligned((void *) dst, 128)) { \
-        OP_NAME##_au(dst, src, num_elems); \
-    } else if (hex_is_aligned((void *) src, 128)) { \
-        OP_NAME##_ua(dst, src, num_elems); \
-    } else { \
-        OP_NAME##_uu(dst, src, num_elems); \
-    } \
+    if (hex_is_aligned((void *) dst, 128) && hex_is_aligned((void *) src, 128)) {                            \
+        OP_NAME##_aa(dst, src, num_elems);                                                                   \
+    } else if (hex_is_aligned((void *) dst, 128)) {                                                          \
+        OP_NAME##_au(dst, src, num_elems);                                                                   \
+    } else if (hex_is_aligned((void *) src, 128)) {                                                          \
+        OP_NAME##_ua(dst, src, num_elems);                                                                   \
+    } else {                                                                                                 \
+        OP_NAME##_uu(dst, src, num_elems);                                                                   \
+    }                                                                                                        \
 }
 
 DEFINE_HVX_INV_OP_VARIANTS(hvx_inverse_f32, hvx_inverse_f32_loop_body)

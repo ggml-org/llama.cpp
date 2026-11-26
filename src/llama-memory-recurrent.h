@@ -18,12 +18,14 @@ class llama_memory_recurrent : public llama_memory_i {
 public:
     llama_memory_recurrent(
             const llama_model & model,
+                         bool   no_alloc,
                     ggml_type   type_r,
                     ggml_type   type_s,
                          bool   offload,
                      uint32_t   mem_size,
                      uint32_t   n_seq_max,
                      uint32_t   n_rs_seq,
+                         bool   rs_replay,
         const layer_filter_cb & filter);
 
     ~llama_memory_recurrent() = default;
@@ -76,6 +78,9 @@ public:
     // per-seq rollback index
     std::vector<uint32_t> rs_idx;
 
+    // deferred commit: keep one state plane plus the inputs of the last ubatch, replay the accepted part in the next ubatch
+    bool rs_replay = false;
+
     void set_rs_idx(llama_seq_id seq_id, uint32_t idx);
 
     // computed before each graph build
@@ -90,6 +95,14 @@ public:
         int32_t   src  = -1; // used to know where states should be copied from
         int32_t   src0 = -1; // like src, but only used when setting the inputs (allowing to copy once)
         int32_t   tail = -1;
+
+        // largest rollback whose snapshot the last ubatch guarantees: a ubatch of n <= n_rs_seq + 1 tokens
+        // writes snapshots 0..n-1, a longer one only guarantees the final state (ggml_ssm_scan)
+        uint32_t rs_max = 0;
+
+        // rs_replay: valid tokens in the pending rows, and the pending tokens the current ubatch replays
+        uint32_t rs_pend = 0;
+        uint32_t rs_rep  = 0;
 
         std::set<llama_seq_id> seq_id;
 
@@ -113,6 +126,10 @@ public:
     std::vector<ggml_tensor *> s_l;
     // a second conv history that must stay replicated across devices, so it cannot share the r row
     std::vector<ggml_tensor *> p_l;
+    // rs_replay pending gdn inputs: k, v, and the gates then the betas
+    std::vector<ggml_tensor *> spk_l;
+    std::vector<ggml_tensor *> spv_l;
+    std::vector<ggml_tensor *> spgb_l;
 
 private:
     //const llama_model & model;
@@ -120,8 +137,11 @@ private:
 
     const uint32_t n_seq_max = 1;
 
-    // ggml contexts for the KV cache along with the allocated backend buffers:
-    std::vector<std::pair<ggml_context_ptr, ggml_backend_buffer_ptr>> ctxs_bufs;
+    // ggml contexts for the RS cache along with the allocated backend buffers:
+    llama_memory_bufs ctxs_bufs;
+
+    // true if no layers - can happen if the layer filter removes all layers
+    bool is_empty() const;
 
     size_t total_size() const;
 
@@ -134,6 +154,8 @@ private:
 
     bool state_read_meta(llama_io_read_i & io, uint32_t cell_count, llama_seq_id dest_seq_id = -1);
     bool state_read_data(llama_io_read_i & io, uint32_t cell_count);
+
+    void state_clear(llama_seq_id seq_id, uint32_t cell_head, uint32_t cell_count);
 };
 
 class llama_memory_recurrent_context : public llama_memory_context_i {
@@ -174,8 +196,14 @@ public:
     ggml_tensor * get_r_l(int32_t il) const;
     ggml_tensor * get_s_l(int32_t il) const;
     ggml_tensor * get_p_l(int32_t il) const;
+    ggml_tensor * get_spk_l (int32_t il) const;
+    ggml_tensor * get_spv_l (int32_t il) const;
+    ggml_tensor * get_spgb_l(int32_t il) const;
 
     int32_t s_copy(int i) const;
+
+    bool     get_rs_replay() const;
+    uint32_t get_rs_rep(int i) const; // pending tokens replayed by ubatch seq i
 
 private:
     const llama_memory_status status;

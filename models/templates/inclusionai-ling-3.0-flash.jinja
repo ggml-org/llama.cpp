@@ -1,0 +1,130 @@
+{#- Bailing V3 chat template -#}
+{#- Supports: thinking option, tool calling -#}
+
+{#- ==================== thinking option normalization ==================== -#}
+{%- if enable_thinking is defined %}
+    {%- if enable_thinking %}
+        {%- set thinking_option = 'on' %}
+    {%- else %}
+        {%- set thinking_option = 'off' %}
+    {%- endif %}
+{%- elif thinking_option is not defined %}
+    {%- set thinking_option = 'on' %}
+{%- endif %}
+
+{#- ==================== preserved thinking  ==================== -#}
+{% set preserved_thinking = true %}
+
+{#- ==================== system message ==================== -#}
+{{- '<role>SYSTEM</role>' }}
+{%- if tools %}
+    {%- if messages[0].role == 'system' %}
+        {{- messages[0].content + '\n' }}
+    {%- endif %}
+    {{- "# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>" }}
+    {%- for tool in tools %}
+        {{- "\n" }}
+        {{- tool | tojson }}
+    {%- endfor %}
+    {{- "\n</tools>\n\nIf none of the functions can be used, point it out. If the given question lacks the parameters required by the function, also point it out.\nIf you need to use a function, for each function call, output the function name and arguments within the following XML format:\n<tool_call>{function-name}\n<arg_key>{arg-key-1}</arg_key>\n<arg_value>{arg-value-1}</arg_value>\n<arg_key>{arg-key-2}</arg_key>\n<arg_value>{arg-value-2}</arg_value>\n...\n</tool_call>\n" }}
+    {%- if messages[0].role == 'system' and messages[0].content is string and ('detailed thinking on' in messages[0].content or 'detailed thinking off' in messages[0].content) %}
+        {{- '<|role_end|>' }}
+    {%- else %}
+        {{- 'detailed thinking ' + thinking_option + '<|role_end|>' }}
+    {%- endif %}
+{%- else %}
+    {%- if messages[0].role == 'system' %}
+        {%- if 'detailed thinking on' in messages[0].content or 'detailed thinking off' in messages[0].content %}
+            {{- messages[0].content + '<|role_end|>' }}
+        {%- else %}
+            {{- messages[0].content + '\n' }}
+            {{- 'detailed thinking ' + thinking_option + '<|role_end|>' }}
+        {%- endif %}
+    {% else %}
+        {{- 'detailed thinking ' + thinking_option + '<|role_end|>' }}
+    {%- endif %}
+{%- endif %}
+{%- set ns = namespace(multi_step_tool=true, last_query_index=messages|length - 1) %}
+{%- for message in messages[::-1] %}
+    {%- set index = (messages|length - 1) - loop.index0 %}
+    {%- if ns.multi_step_tool and message.role == "user" and message.content is string and not(message.content.startswith('<tool_response>') and message.content.endswith('</tool_response>')) %}
+        {%- set ns.multi_step_tool = false %}
+        {%- set ns.last_query_index = index %}
+    {%- endif %}
+{%- endfor %}
+{%- for message in messages %}
+    {%- if message.content is string %}
+        {%- set content = message.content %}
+    {%- else %}
+        {%- set content = '' %}
+    {%- endif %}
+    {%- if message.role == "user" %}
+        {{- '<role>HUMAN</role>' + message.content + '<|role_end|>' }}
+    {%- elif message.role == "system" and not loop.first %}
+        {{- '<role>SYSTEM</role>' + message.content + '<|role_end|>' }}
+    {%- elif message.role == "assistant" %}
+        {%- set reasoning_content = '' %}
+        {%- if message.reasoning_content is string and message.reasoning_content != '' %}
+            {%- set reasoning_content = message.reasoning_content %}
+        {%- else %}
+            {%- if '</think>' in content %}
+                {%- set reasoning_content = content.split('</think>')[0].rstrip('\n').split('<think>')[-1].lstrip('\n') %}
+                {%- set content = content.split('</think>')[-1].lstrip('\n') %}
+            {%- endif %}
+        {%- endif %}
+        {%- if preserved_thinking or loop.index0 > ns.last_query_index %}
+            {%- if reasoning_content != '' %}
+                {{- '<role>ASSISTANT</role>' + '\n<think>' + reasoning_content.strip('\n') + '</think>' + content.lstrip('\n') }}
+            {%- else %}
+                {{- '<role>ASSISTANT</role>\n<think></think>' + content }}
+            {%- endif %}
+        {%- else %}
+            {{- '<role>ASSISTANT</role>\n<think></think>' + content }}
+        {%- endif %}
+        {%- if message.tool_calls %}
+            {%- for tool_call in message.tool_calls %}
+                {%- if (loop.first and content) or (not loop.first) %}
+                    {{- '\n' }}
+                {%- endif %}
+                {%- set tc = tool_call %}
+                {%- if tool_call.function %}
+                    {%- set tc = tool_call.function %}
+                {%- endif %}
+                {{- '<tool_call>' + tc.name }}
+                {% set _args = tc.arguments %}
+                {%- for k, v in _args.items() %}
+                    {{- '<arg_key>' + k + '</arg_key>' }}
+                    {{- '\n<arg_value>' }}
+                    {%- if v is string %}
+                        {{- v }}
+                    {%- else %}
+                        {{- v | tojson(ensure_ascii=False) }}
+                    {%- endif %}
+                    {{- '</arg_value>' }}
+                {%- endfor %}
+                {{- '\n</tool_call>' }}
+            {%- endfor %}
+        {%- endif %}
+        {{- '<|role_end|>' }}
+    {%- elif message.role == "tool" %}
+        {%- if loop.first or (messages[loop.index0 - 1].role != "tool") %}
+            {{- '<role>OBSERVATION</role>' }}
+        {%- endif %}
+        {{- '\n<tool_response>\n' }}
+        {{- content }}
+        {{- '\n</tool_response>' }}
+        {%- if loop.last or (messages[loop.index0 + 1].role != "tool") %}
+            {{- '<|role_end|>' }}
+        {%- endif %}
+    {%- endif %}
+{%- endfor %}
+
+{#- ==================== generation prompt ==================== -#}
+{%- if add_generation_prompt %}
+    {{- '<role>ASSISTANT</role>' }}
+    {%- if thinking_option == 'on' %}
+        {{- '\n<think>' }}
+    {%- elif thinking_option == 'off' %}
+        {{- '\n<think></think>' }}
+    {%- endif %}
+{%- endif %}

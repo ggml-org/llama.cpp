@@ -14,5 +14,5 @@ void llama_model_clip::load_arch_tensors(llama_model_loader &) {
 
 [[noreturn]]
 std::unique_ptr<llm_graph_context> llama_model_clip::build_arch_graph(const llm_graph_params &) const {
-    GGML_ABORT("CLIP has no inference graph via llama_model dispatch; runtime lives in tools/mtmd/clip.cpp");
+    GGML_ABORT("CLIP has no inference graph via llama_model dispatch; runtime lives in tools/mtmd");
 }

@@ -9,13 +9,13 @@
 //
 // there is no codebook anywhere, "codes" in the mtmd API are continuous features here
 
-ggml_tensor * clip_graph_pockettts_gen::modulate(ggml_tensor * x, ggml_tensor * shift, ggml_tensor * scale) const {
+ggml_tensor * mtmd_graph_pockettts_gen::modulate(ggml_tensor * x, ggml_tensor * shift, ggml_tensor * scale) const {
     ggml_tensor * cur = ggml_mul(ctx0, x, ggml_scale_bias(ctx0, scale, 1.0f, 1.0f));
     return ggml_add(ctx0, cur, shift);
 }
 
 // see TimestepEmbedder in the reference
-ggml_tensor * clip_graph_pockettts_gen::time_embed(const clip_flow_net::time_embd & te, float t) const {
+ggml_tensor * mtmd_graph_pockettts_gen::time_embed(const mtmd_flow_net::time_embd & te, float t) const {
     // t is a graph-build constant, so the cos/sin table can be folded into a scaled copy
     ggml_tensor * args = ggml_scale(ctx0, te.freqs, t);
     ggml_tensor * emb  = ggml_concat(ctx0, ggml_cos(ctx0, args), ggml_sin(ctx0, args), 0);
@@ -42,7 +42,7 @@ ggml_tensor * clip_graph_pockettts_gen::time_embed(const clip_flow_net::time_emb
 }
 
 // one velocity evaluation: v(cond, s, t, x)
-ggml_tensor * clip_graph_pockettts_gen::flow_forward(ggml_tensor * cond, ggml_tensor * x, float s, float t) const {
+ggml_tensor * mtmd_graph_pockettts_gen::flow_forward(ggml_tensor * cond, ggml_tensor * x, float s, float t) const {
     const auto & flow = model.flow;
 
     ggml_tensor * cur = build_mm(flow.input_proj_w, x);
@@ -99,7 +99,7 @@ ggml_tensor * clip_graph_pockettts_gen::flow_forward(ggml_tensor * cond, ggml_te
 
 // state carried between GEN_WAV calls: rope offset, per-layer KV window, conv left context
 // and the transposed-conv overlap tails
-std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hparams, const clip_model & model) {
+std::vector<c2w_state_slot> list_pockettts_state_slots(const mtmd_hparams & hparams, const mtmd_model & model) {
     std::vector<c2w_state_slot> slots;
     if (model.gen_upsample_w == nullptr) {
         return slots; // not a pocket-tts decoder
@@ -112,7 +112,7 @@ std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hpar
     GGML_ASSERT((int) hparams.seanet_ratios.size() >= hparams.seanet_n_stage);
     GGML_ASSERT(hparams.mimi_tfm_context > 1 && hparams.mimi_downsample > 0);
 
-    slots.push_back({"tfm_pos", 1, 1});
+    slots.push_back({"pos", 1, 1});
 
     const int64_t n_embd_a = model.gen_tfm_layers[0].q_w->ne[1];
     const int64_t prefix   = hparams.mimi_tfm_context - 1;
@@ -136,8 +136,8 @@ std::vector<c2w_state_slot> list_pockettts_state_slots(const clip_hparams & hpar
     return slots;
 }
 
-ggml_cgraph * clip_graph_pockettts_gen::build() {
-    if (gen_process == CLIP_GEN_PROCESS_GEN_CODE) {
+ggml_cgraph * mtmd_graph_pockettts_gen::build() {
+    if (gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_CODE) {
         // the backbone hidden state arrives as the single batch entry
         ggml_tensor * h_state = build_inp_raw(1);
         h_state = ggml_reshape_2d(ctx0, h_state, n_mmproj_embd, 1);
@@ -188,97 +188,12 @@ ggml_cgraph * clip_graph_pockettts_gen::build() {
     cur = build_mm(model.gen_quant_out_w, cur);
     cb(cur, "quant_out", -1);
 
-    clip_graph_pockettts_seanet seanet(*this);
-    for (const auto & slot : list_pockettts_state_slots(hparams, model)) {
-        ggml_tensor * t = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, slot.ne0, slot.ne1);
-        ggml_set_name(t, ("state_in_" + slot.name).c_str());
-        ggml_set_input(t);
-        seanet.state_in[slot.name] = t;
-    }
+    mtmd_graph_pockettts_seanet seanet(*this);
+    seanet.state_inputs(list_pockettts_state_slots(hparams, model));
 
-    // model frame rate -> encoder frame rate, depthwise transposed conv
-    cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
-    cur = seanet.conv_transpose1d(cur, model.gen_upsample_w, nullptr, hparams.mimi_downsample, "up");
-    cb(cur, "mimi_upsample", -1);
+    cur = seanet.mimi_decode(cur, n_head, eps);
 
-    cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
-
-    // positions continue across calls, the counter lives in the state
-    const int64_t n_pos  = cur->ne[1];
-    const int64_t prefix = hparams.mimi_tfm_context - 1;
-    const int64_t n_kv   = prefix + n_pos;
-
-    ggml_tensor * base    = ggml_reshape_1d(ctx0, seanet.state_in.at("tfm_pos"), 1);
-    ggml_tensor * inp_pos = ggml_cast(ctx0, ggml_add(ctx0, ggml_arange(ctx0, 0.0f, (float) n_pos, 1.0f), base),
-                                      GGML_TYPE_I32);
-    seanet.state_out.push_back({"tfm_pos", ggml_scale_bias(ctx0, seanet.state_in.at("tfm_pos"), 1.0f, (float) n_pos)});
-
-    // banded causal mask over [cached prefix | this chunk]
-    // the last factor masks out cache rows that hold no real frame yet
-    ggml_tensor * pos_k = ggml_reshape_2d(ctx0, ggml_arange(ctx0, 0.0f, (float) n_kv, 1.0f), n_kv, 1);
-    ggml_tensor * pos_q = ggml_reshape_2d(ctx0, ggml_arange(ctx0, (float) prefix, (float) (prefix + n_pos), 1.0f), 1, n_pos);
-    ggml_tensor * diff  = ggml_sub(ctx0, ggml_repeat_4d(ctx0, pos_q, n_kv, n_pos, 1, 1), pos_k);
-
-    ggml_tensor * keep = ggml_mul(ctx0,
-        ggml_step(ctx0, ggml_scale_bias(ctx0, diff, 1.0f, 0.5f)),                                     // delta >= 0
-        ggml_step(ctx0, ggml_scale_bias(ctx0, diff, -1.0f, (float) hparams.mimi_tfm_context - 0.5f))); // delta < context
-    keep = ggml_mul(ctx0, keep,
-        ggml_step(ctx0, ggml_scale_bias(ctx0, ggml_add(ctx0, pos_k, base), 1.0f, 0.5f - (float) prefix)));
-    ggml_tensor * kq_mask = ggml_reshape_4d(ctx0, ggml_log(ctx0, keep), n_kv, n_pos, 1, 1);
-
-    for (int il = 0; il < n_layer; il++) {
-        const auto & layer = model.gen_tfm_layers[il];
-        ggml_tensor * inp = cur;
-
-        cur = build_norm(cur, layer.ln_1_w, layer.ln_1_b, NORM_TYPE_NORMAL, eps, il);
-
-        ggml_tensor * Qcur = build_mm(layer.q_w, cur);
-        ggml_tensor * Kcur = build_mm(layer.k_w, cur);
-        ggml_tensor * Vcur = build_mm(layer.v_w, cur);
-
-        Qcur = ggml_reshape_3d(ctx0, Qcur, d_head, n_head, n_pos);
-        Kcur = ggml_reshape_3d(ctx0, Kcur, d_head, n_head, n_pos);
-
-        Qcur = ggml_rope_ext(ctx0, Qcur, inp_pos, nullptr, d_head, GGML_ROPE_TYPE_NORMAL, 0,
-                             hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-        Kcur = ggml_rope_ext(ctx0, Kcur, inp_pos, nullptr, d_head, GGML_ROPE_TYPE_NORMAL, 0,
-                             hparams.rope_theta, 1.0f, 0.0f, 1.0f, 0.0f, 0.0f);
-
-        // prepend the cached window, then keep this chunk's tail for the next call
-        const std::string k_name = "tfm_k_" + std::to_string(il);
-        const std::string v_name = "tfm_v_" + std::to_string(il);
-        ggml_tensor * k_full = ggml_concat(ctx0, seanet.state_in.at(k_name),
-                                           ggml_reshape_2d(ctx0, Kcur, d_head * n_head, n_pos), 1);
-        ggml_tensor * v_full = ggml_concat(ctx0, seanet.state_in.at(v_name), Vcur, 1);
-        seanet.state_out.push_back({k_name, ggml_cont(ctx0, ggml_view_2d(ctx0, k_full, k_full->ne[0], prefix,
-                                                                         k_full->nb[1], (size_t) n_pos * k_full->nb[1]))});
-        seanet.state_out.push_back({v_name, ggml_cont(ctx0, ggml_view_2d(ctx0, v_full, v_full->ne[0], prefix,
-                                                                         v_full->nb[1], (size_t) n_pos * v_full->nb[1]))});
-
-        ggml_tensor * q_cur = ggml_reshape_4d(ctx0, Qcur,   d_head, n_head, n_pos, 1);
-        ggml_tensor * k_cur = ggml_reshape_4d(ctx0, k_full, d_head, n_head, n_kv,  1);
-        ggml_tensor * v_cur = ggml_reshape_4d(ctx0, v_full, d_head, n_head, n_kv,  1);
-
-        cur = build_attn(layer.o_w, nullptr, q_cur, k_cur, v_cur, kq_mask, kq_scale, il);
-        cur = ggml_mul(ctx0, cur, layer.ls_1_w);
-        cur = ggml_add(ctx0, cur, inp);
-
-        inp = cur;
-        cur = build_norm(cur, layer.ln_2_w, layer.ln_2_b, NORM_TYPE_NORMAL, eps, il);
-        cur = build_ffn(cur, layer.ff_up_w, nullptr, nullptr, nullptr, layer.ff_down_w, nullptr, FFN_GELU, il);
-        cur = ggml_mul(ctx0, cur, layer.ls_2_w);
-        cur = ggml_add(ctx0, cur, inp);
-    }
-    cb(cur, "mimi_dec_tfm", -1);
-
-    cur = ggml_cont(ctx0, ggml_transpose(ctx0, cur));
-    cur = seanet.decode(cur);
-
-    for (const auto & s : seanet.state_out) {
-        ggml_set_name(s.second, ("state_out_" + s.first).c_str());
-        ggml_set_output(s.second);
-        ggml_build_forward_expand(gf, s.second);
-    }
+    seanet.state_outputs(gf);
 
     // [n_samples, 1] -> [n_samples], clamped like the reference output
     cur = ggml_reshape_1d(ctx0, cur, cur->ne[0]);

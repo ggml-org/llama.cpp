@@ -24,6 +24,10 @@ on:
       'ggml/src/ggml-vulkan/**'
     ]
 
+cache-mode: none
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref && github.ref || github.run_id }}
   cancel-in-progress: true
@@ -31,13 +35,15 @@ concurrency:
 env:
   GGML_NLOOP: 3
   GGML_N_THREADS: 1
+  GGML_SCHED_DEBUG_REALLOC: 1
   LLAMA_ARG_LOG_COLORS: 1
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
 
 jobs:
-  ubuntu-arm64:
-    runs-on: ubuntu-24.04-arm
+  ubuntu:
+    runs-on: [self-hosted, Linux, gb10]
+    container: "ubuntu:26.04"
 
     steps:
       - name: Clone
@@ -47,18 +53,23 @@ jobs:
       - name: Dependencies
         id: depends
         run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-14 g++-14 build-essential glslc libvulkan-dev spirv-headers libssl-dev ninja-build
-          echo "CC=gcc-14" >> "$GITHUB_ENV"
-          echo "CXX=g++-14" >> "$GITHUB_ENV"
+          apt update
+          apt install -y build-essential jq cmake python3 python3-venv python3-pip glslc libvulkan-dev spirv-headers libssl-dev ninja-build
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: vulkan-ubuntu-24.04-arm
-          variant: ccache
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: vulkan-ubuntu-26.04-gb10
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Configure
         id: cmake_configure
@@ -71,20 +82,22 @@ jobs:
       - name: Build
         id: cmake_build
         run: |
-          time cmake --build build -j $(nproc)
+          cmake --build build -j $(nproc)
 
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
         env:
-          GH_TOKEN: ${{ github.token }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
         with:
-          key: vulkan-ubuntu-24.04-arm
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+          key: vulkan-ubuntu-26.04-gb10
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
 
   ubuntu-llvmpipe:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - name: Clone
@@ -112,11 +125,19 @@ jobs:
           strip: 1
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: vulkan-ubuntu-24.04-llvmpipe
-          evict-old-files: 1d
-          save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+          restore: false
+          save: false
+
+      - name: ccache-buckets-restore
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CI }}
+        with:
+          key: vulkan-ubuntu-26.04-llvmpipe
+          folder: llama.cpp
+          hf_bucket: ggml-org/cache
 
       - name: Build
         id: cmake_build
@@ -127,6 +148,18 @@ jobs:
             -DGGML_VULKAN=ON
           cmake --build build --config Release -j $(nproc)
 
+      - name: ccache-buckets-save
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        uses: ./.github/actions/ccache-buckets
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        with:
+          key: vulkan-ubuntu-26.04-llvmpipe
+          folder: llama.cpp
+          evict-old-files: 1d
+          hf_bucket: ggml-org/cache
+          save: true
+
       - name: Test
         id: cmake_test
         run: |
@@ -134,22 +167,23 @@ jobs:
           export GGML_VK_VISIBLE_DEVICES=0
           export GGML_VK_DISABLE_F16=1
           export GGML_VK_DISABLE_COOPMAT=1
-          # This is using llvmpipe and runs slower than other backends
-          # test-backend-ops is too slow on llvmpipe, skip it
-          ctest -L main -E test-backend-ops --verbose --timeout 900
-
-      - name: ccache-clear
-        uses: ./.github/actions/ccache-clear
-        env:
-          GH_TOKEN: ${{ github.token }}
-        with:
-          key: vulkan-ubuntu-24.04-llvmpipe
-          older: 5m
-          min: 1
-          dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}
+          # TODO: too slow on llvmpipe
+          ctest -L main -E "test-llama-context" --verbose --timeout 900
 
   windows:
+    name: windows / ${{ matrix.arch }}
     runs-on: windows-2025
+
+    cache-mode: write
+    permissions:
+      actions: write
+      contents: read
+
+    strategy:
+      matrix:
+        include:
+          - arch: 'x64'
+          - arch: 'arm64'
 
     env:
       VULKAN_VERSION: 1.4.357.0
@@ -160,9 +194,9 @@ jobs:
         uses: actions/checkout@v6
 
       - name: ccache
-        uses: ggml-org/ccache-action@v1.2.21
+        uses: ggml-org/ccache-action@v1.2.24
         with:
-          key: cpu-windows-2025-x64-vulkan
+          key: cpu-windows-2025-${{ matrix.arch }}-vulkan
           variant: ccache
           evict-old-files: 1d
           save: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
@@ -171,7 +205,7 @@ jobs:
         id: get_vulkan
         run: |
           curl.exe -o $env:RUNNER_TEMP/VulkanSDK-Installer.exe -L "https://sdk.lunarg.com/sdk/download/${env:VULKAN_VERSION}/windows/vulkansdk-windows-X64-${env:VULKAN_VERSION}.exe"
-          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install
+          & "$env:RUNNER_TEMP\VulkanSDK-Installer.exe" --accept-licenses --default-answer --confirm-command install ${{ matrix.arch == 'arm64' && 'com.lunarg.vulkan.arm64' || '' }}
           Add-Content $env:GITHUB_ENV "VULKAN_SDK=C:\VulkanSDK\${env:VULKAN_VERSION}"
           Add-Content $env:GITHUB_PATH "C:\VulkanSDK\${env:VULKAN_VERSION}\bin"
 
@@ -180,22 +214,28 @@ jobs:
         run: |
           choco install ninja
 
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=22.1.8
+          echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+
       - name: Build
         id: cmake_build
         run: |
           cmake -S . -B build -G "Ninja Multi-Config" `
-            -D CMAKE_TOOLCHAIN_FILE=cmake/x64-windows-llvm.cmake `
+            -D CMAKE_TOOLCHAIN_FILE=cmake/${{ matrix.arch }}-windows-llvm.cmake `
             -DCMAKE_BUILD_TYPE=Release `
             -DGGML_NATIVE=OFF `
             -DLLAMA_BUILD_SERVER=ON `
             -DGGML_RPC=ON `
             -DGGML_BACKEND_DL=ON `
-            -DGGML_CPU_ALL_VARIANTS=ON `
+            -DGGML_CPU_ALL_VARIANTS=${{ matrix.arch == 'x64' && 'ON' || 'OFF' }} `
             -DGGML_VULKAN=ON `
             -DLLAMA_BUILD_BORINGSSL=ON
           cmake --build build --config Release -j ${env:NUMBER_OF_PROCESSORS}
 
       - name: Test
+        if: ${{ matrix.arch == 'x64' }}
         id: cmake_test
         run: |
           cd build
@@ -206,7 +246,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         with:
-          key: cpu-windows-2025-x64-vulkan
+          key: cpu-windows-2025-${{ matrix.arch }}-vulkan
           older: 5m
           min: 1
           dry-run: ${{ github.event_name != 'push' || github.ref != 'refs/heads/master' }}

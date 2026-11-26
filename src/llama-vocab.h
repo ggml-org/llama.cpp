@@ -3,6 +3,7 @@
 #include "llama.h"
 
 #include <string>
+#include <string_view>
 #include <vector>
 #include <memory>
 
@@ -65,6 +66,25 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_GRANITE_EMB_MULTI = 54,
     LLAMA_VOCAB_PRE_TYPE_MELLUM2           = 55,
     LLAMA_VOCAB_PRE_TYPE_LAGUNA            = 56,
+    LLAMA_VOCAB_PRE_TYPE_HY_V4             = 57,
+    LLAMA_VOCAB_PRE_TYPE_SPARK2_5          = 58,
+    LLAMA_VOCAB_PRE_TYPE_UFAKZEKA          = 59,
+    LLAMA_VOCAB_PRE_TYPE_MMBERT            = 60,
+    LLAMA_VOCAB_PRE_TYPE_K2_HORIZON        = 61,
+    LLAMA_VOCAB_PRE_TYPE_FLINT             = 62,
+    LLAMA_VOCAB_PRE_TYPE_DOMYN_SMALL       = 63,
+    LLAMA_VOCAB_PRE_TYPE_NEMOTRON_3_5_EMBD = 64,
+    LLAMA_VOCAB_PRE_TYPE_SOPRANO           = 65,
+    LLAMA_VOCAB_PRE_TYPE_TEKKEN_NUM3       = 66,
+    LLAMA_VOCAB_PRE_TYPE_ZONOS3            = 67,
+    LLAMA_VOCAB_PRE_TYPE_RAON              = 68,
+};
+
+// HF Metaspace pre-tokenizer prepend_scheme
+enum llama_metaspace_prepend_scheme {
+    LLAMA_METASPACE_PREPEND_SCHEME_NEVER  = 0,
+    LLAMA_METASPACE_PREPEND_SCHEME_FIRST  = 1,
+    LLAMA_METASPACE_PREPEND_SCHEME_ALWAYS = 2,
 };
 
 struct LLM_KV;
@@ -78,6 +98,7 @@ struct llama_vocab {
     };
 
     struct normalizer_options {
+        bool nfc           = false;
         bool lowercase     = true;
         bool strip_accents = true;
         // TODO: clean_text, handle_chinese_chars
@@ -143,18 +164,20 @@ struct llama_vocab {
     bool get_add_bos                   () const;
     bool get_add_eos                   () const;
     bool get_add_sep                   () const;
+    bool get_dna_auto_tags             () const;
     bool get_ignore_merges             () const;
     bool get_clean_spaces              () const;
     bool get_remove_extra_whitespaces  () const;
     bool get_escape_whitespaces        () const;
     bool get_treat_whitespace_as_suffix() const;
+    enum llama_metaspace_prepend_scheme get_metaspace_prepend_scheme() const;
     const normalizer_options & get_normalizer_opts() const;
 
     const std::vector<llama_token> & get_suppress_tokens() const;
 
     int max_token_len() const;
 
-    int find_bpe_rank(const std::string & token_left, const std::string & token_right) const;
+    int find_bpe_rank(std::string_view token_left, std::string_view token_right) const;
     std::vector<std::string> get_bpe_merges() const;
 
     std::vector<char> get_precompiled_charsmap() const;

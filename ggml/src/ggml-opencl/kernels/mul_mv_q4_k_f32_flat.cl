@@ -40,7 +40,7 @@ typedef struct {
 #undef N_SIMDWIDTH
 
 #ifdef INTEL_GPU
-#define N_DST 4 // number of rows each SIMD group works on
+#define N_DST 16 // number of rows each SIMD group works on (Intel: 8->16, 2x further activation reuse; 32 spills registers)
 #define N_SIMDGROUP 1 // number of SIMD groups in a thread group
 #define N_SIMDWIDTH 16 // SIMD group size
 #elif defined (ADRENO_GPU)
@@ -145,7 +145,7 @@ kernel void kernel_mul_mv_q4_K_f32_flat(
         global half   * d  = blk_d + ib;
         global half   * dm = blk_dm + ib;
 
-        for (int row = 0; row < N_DST; row++) {
+        for (int row = 0; row < N_DST && first_row + row < ne01; row++) {
             sc16[0] = sc[0] & kmask1;
             sc16[1] = sc[2] & kmask1;
             sc16[2] = ((sc[4] >> 0) & kmask2) | ((sc[0] & kmask3) >> 2);

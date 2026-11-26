@@ -38,7 +38,7 @@ typedef struct {
 #undef N_SIMDWIDTH
 
 #ifdef INTEL_GPU
-#define N_DST       4
+#define N_DST       8 // Intel: 4->8 for 2x activation reuse (see mul_mv_q4_k_f32_flat.cl)
 #define N_SIMDGROUP 1
 #define N_SIMDWIDTH 16
 #elif defined(ADRENO_GPU)

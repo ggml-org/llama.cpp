@@ -1340,7 +1340,7 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
 #define  MMQ_X_Q4_0_RDNA1  64
 #define  MMQ_Y_Q4_0_RDNA1  64
 #define NWARPS_Q4_0_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q4_0_AMPERE 4
 #define  MMQ_Y_Q4_0_AMPERE 32
 #define NWARPS_Q4_0_AMPERE 4
@@ -1384,7 +1384,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q4_1_RDNA1  64
 #define  MMQ_Y_Q4_1_RDNA1  64
 #define NWARPS_Q4_1_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q4_1_AMPERE 4
 #define  MMQ_Y_Q4_1_AMPERE 32
 #define NWARPS_Q4_1_AMPERE 4
@@ -1427,7 +1427,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q5_0_RDNA1  64
 #define  MMQ_Y_Q5_0_RDNA1  64
 #define NWARPS_Q5_0_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q5_0_AMPERE 4
 #define  MMQ_Y_Q5_0_AMPERE 32
 #define NWARPS_Q5_0_AMPERE 4
@@ -1470,7 +1470,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q5_1_RDNA1  64
 #define  MMQ_Y_Q5_1_RDNA1  64
 #define NWARPS_Q5_1_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q5_1_AMPERE 4
 #define  MMQ_Y_Q5_1_AMPERE 32
 #define NWARPS_Q5_1_AMPERE 4
@@ -1513,7 +1513,7 @@ mul_mat_q5_1(
 #define  MMQ_X_Q8_0_RDNA1  64
 #define  MMQ_Y_Q8_0_RDNA1  64
 #define NWARPS_Q8_0_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q8_0_AMPERE 4
 #define  MMQ_Y_Q8_0_AMPERE 32
 #define NWARPS_Q8_0_AMPERE 4
@@ -1556,7 +1556,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q2_K_RDNA1  128
 #define  MMQ_Y_Q2_K_RDNA1  32
 #define NWARPS_Q2_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q2_K_AMPERE 4
 #define  MMQ_Y_Q2_K_AMPERE 32
 #define NWARPS_Q2_K_AMPERE 4
@@ -1600,7 +1600,7 @@ mul_mat_q2_K(
 #define  MMQ_X_Q3_K_RDNA1  32
 #define  MMQ_Y_Q3_K_RDNA1  128
 #define NWARPS_Q3_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q3_K_AMPERE 4
 #define  MMQ_Y_Q3_K_AMPERE 32
 #define NWARPS_Q3_K_AMPERE 4
@@ -1645,7 +1645,7 @@ mul_mat_q3_K(
 #define  MMQ_X_Q4_K_RDNA1  32
 #define  MMQ_Y_Q4_K_RDNA1  64
 #define NWARPS_Q4_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q4_K_AMPERE 4
 #define  MMQ_Y_Q4_K_AMPERE 32
 #define NWARPS_Q4_K_AMPERE 4
@@ -1689,7 +1689,7 @@ template <bool need_check> static void
 #define  MMQ_X_Q5_K_RDNA1  32
 #define  MMQ_Y_Q5_K_RDNA1  64
 #define NWARPS_Q5_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q5_K_AMPERE 4
 #define  MMQ_Y_Q5_K_AMPERE 32
 #define NWARPS_Q5_K_AMPERE 4
@@ -1733,7 +1733,7 @@ mul_mat_q5_K(
 #define  MMQ_X_Q6_K_RDNA1  32
 #define  MMQ_Y_Q6_K_RDNA1  64
 #define NWARPS_Q6_K_RDNA1  8
-#if defined(SYCL_USE_XMX)
+#if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
 #define  MMQ_X_Q6_K_AMPERE 4
 #define  MMQ_Y_Q6_K_AMPERE 32
 #define NWARPS_Q6_K_AMPERE 4
@@ -1807,76 +1807,44 @@ static void ggml_mul_mat_q4_0_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:20: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_qs_q4_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<float, 1> tile_x_d_q4_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI4_0) + mmq_y / QI4_0),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_qs_q4_0_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
+            sycl::local_accessor<float, 1> tile_x_d_q4_0_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI4_0) + mmq_y / QI4_0),
+                cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q4_0<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_qs_q4_0_acc_ct1),
-                            get_pointer(tile_x_d_q4_0_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q4_0<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_qs_q4_0_acc_ct1),
+                        get_pointer(tile_x_d_q4_0_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:21: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_qs_q4_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<float, 1> tile_x_d_q4_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI4_0) + mmq_y / QI4_0),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q4_0<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_qs_q4_0_acc_ct1),
-                            get_pointer(tile_x_d_q4_0_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 }
 catch (sycl::exception const &exc) {
@@ -1922,76 +1890,44 @@ static void ggml_mul_mat_q4_1_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:22: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_qs_q4_1_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + +mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_1_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI4_1) + mmq_y / QI4_1),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_qs_q4_1_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE) + +mmq_y), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_1_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI4_1) + mmq_y / QI4_1),
+                cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q4_1<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_qs_q4_1_acc_ct1),
-                            get_pointer(tile_x_dm_q4_1_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q4_1<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_qs_q4_1_acc_ct1),
+                        get_pointer(tile_x_dm_q4_1_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:23: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_qs_q4_1_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + +mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_1_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI4_1) + mmq_y / QI4_1),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q4_1<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_qs_q4_1_acc_ct1),
-                            get_pointer(tile_x_dm_q4_1_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 }
 catch (sycl::exception const &exc) {
@@ -2037,76 +1973,44 @@ static void ggml_mul_mat_q5_0_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:24: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q5_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<float, 1> tile_x_d_q5_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI5_0) + mmq_y / QI5_0),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_ql_q5_0_acc_ct1(
+                sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
+            sycl::local_accessor<float, 1> tile_x_d_q5_0_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI5_0) + mmq_y / QI5_0),
+                cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q5_0<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q5_0_acc_ct1),
-                            get_pointer(tile_x_d_q5_0_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q5_0<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_ql_q5_0_acc_ct1),
+                        get_pointer(tile_x_d_q5_0_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:25: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q5_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<float, 1> tile_x_d_q5_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI5_0) + mmq_y / QI5_0),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q5_0<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q5_0_acc_ct1),
-                            get_pointer(tile_x_d_q5_0_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 }
 catch (sycl::exception const &exc) {
@@ -2152,76 +2056,44 @@ static void ggml_mul_mat_q5_1_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:26: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q5_1_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_1_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI5_1) + mmq_y / QI5_1),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_ql_q5_1_acc_ct1(
+                sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_1_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI5_1) + mmq_y / QI5_1),
+                cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q5_1<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q5_1_acc_ct1),
-                            get_pointer(tile_x_dm_q5_1_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q5_1<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_ql_q5_1_acc_ct1),
+                        get_pointer(tile_x_dm_q5_1_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:27: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q5_1_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_1_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI5_1) + mmq_y / QI5_1),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q5_1<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q5_1_acc_ct1),
-                            get_pointer(tile_x_dm_q5_1_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 }
 catch (sycl::exception const &exc) {
@@ -2267,76 +2139,44 @@ static void ggml_mul_mat_q8_0_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:28: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_qs_q8_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<float, 1> tile_x_d_q8_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI8_0) + mmq_y / QI8_0),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_qs_q8_0_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
+            sycl::local_accessor<float, 1> tile_x_d_q8_0_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI8_0) + mmq_y / QI8_0),
+                cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q8_0<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_qs_q8_0_acc_ct1),
-                            get_pointer(tile_x_d_q8_0_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q8_0<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_qs_q8_0_acc_ct1),
+                        get_pointer(tile_x_d_q8_0_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:29: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_qs_q8_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<float, 1> tile_x_d_q8_0_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI8_0) + mmq_y / QI8_0),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q8_0<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_qs_q8_0_acc_ct1),
-                            get_pointer(tile_x_d_q8_0_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 }
 catch (sycl::exception const &exc) {
@@ -2382,82 +2222,47 @@ static void ggml_mul_mat_q2_K_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:30: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q2_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q2_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI2_K) + mmq_y / QI2_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_q2_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 4) + mmq_y / 4), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_ql_q2_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_x_dm_q2_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI2_K) + mmq_y / QI2_K),
+                cgh);
+            sycl::local_accessor<int, 1> tile_x_sc_q2_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / 4) + mmq_y / 4), cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q2_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q2_K_acc_ct1),
-                            get_pointer(tile_x_dm_q2_K_acc_ct1),
-                            get_pointer(tile_x_sc_q2_K_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q2_K<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_ql_q2_K_acc_ct1),
+                        get_pointer(tile_x_dm_q2_K_acc_ct1),
+                        get_pointer(tile_x_sc_q2_K_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:31: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q2_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q2_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI2_K) + mmq_y / QI2_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_q2_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 4) + mmq_y / 4), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q2_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q2_K_acc_ct1),
-                            get_pointer(tile_x_dm_q2_K_acc_ct1),
-                            get_pointer(tile_x_sc_q2_K_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 }
 catch (sycl::exception const &exc) {
@@ -2505,88 +2310,50 @@ static void ggml_mul_mat_q3_K_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:32: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q3_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q3_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI3_K) + mmq_y / QI3_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_qh_q3_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 2) + mmq_y / 2), cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_q3_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 4) + mmq_y / 4), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_ql_q3_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_x_dm_q3_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI3_K) + mmq_y / QI3_K),
+                cgh);
+            sycl::local_accessor<int, 1> tile_x_qh_q3_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / 2) + mmq_y / 2), cgh);
+            sycl::local_accessor<int, 1> tile_x_sc_q3_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / 4) + mmq_y / 4), cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q3_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q3_K_acc_ct1),
-                            get_pointer(tile_x_dm_q3_K_acc_ct1),
-                            get_pointer(tile_x_qh_q3_K_acc_ct1),
-                            get_pointer(tile_x_sc_q3_K_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q3_K<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_ql_q3_K_acc_ct1),
+                        get_pointer(tile_x_dm_q3_K_acc_ct1),
+                        get_pointer(tile_x_qh_q3_K_acc_ct1),
+                        get_pointer(tile_x_sc_q3_K_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:33: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q3_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q3_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI3_K) + mmq_y / QI3_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_qh_q3_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 2) + mmq_y / 2), cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_q3_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 4) + mmq_y / 4), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q3_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q3_K_acc_ct1),
-                            get_pointer(tile_x_dm_q3_K_acc_ct1),
-                            get_pointer(tile_x_qh_q3_K_acc_ct1),
-                            get_pointer(tile_x_sc_q3_K_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 #endif
 }
@@ -2633,82 +2400,47 @@ static void ggml_mul_mat_q4_K_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:34: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q4_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI4_K) + mmq_y / QI4_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_q4_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 8) + mmq_y / 8), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_ql_q4_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI4_K) + mmq_y / QI4_K),
+                cgh);
+            sycl::local_accessor<int, 1> tile_x_sc_q4_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / 8) + mmq_y / 8), cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q4_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q4_K_acc_ct1),
-                            get_pointer(tile_x_dm_q4_K_acc_ct1),
-                            get_pointer(tile_x_sc_q4_K_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q4_K<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_ql_q4_K_acc_ct1),
+                        get_pointer(tile_x_dm_q4_K_acc_ct1),
+                        get_pointer(tile_x_sc_q4_K_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:35: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q4_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q4_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI4_K) + mmq_y / QI4_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_q4_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 8) + mmq_y / 8), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q4_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q4_K_acc_ct1),
-                            get_pointer(tile_x_dm_q4_K_acc_ct1),
-                            get_pointer(tile_x_sc_q4_K_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 }
 catch (sycl::exception const &exc) {
@@ -2754,82 +2486,47 @@ static void ggml_mul_mat_q5_K_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:36: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q5_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI5_K) + mmq_y / QI5_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_q5_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 8) + mmq_y / 8), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_ql_q5_K_acc_ct1(
+                sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI5_K) + mmq_y / QI5_K),
+                cgh);
+            sycl::local_accessor<int, 1> tile_x_sc_q5_K_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / 8) + mmq_y / 8), cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q5_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q5_K_acc_ct1),
-                            get_pointer(tile_x_dm_q5_K_acc_ct1),
-                            get_pointer(tile_x_sc_q5_K_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q5_K<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_ql_q5_K_acc_ct1),
+                        get_pointer(tile_x_dm_q5_K_acc_ct1),
+                        get_pointer(tile_x_sc_q5_K_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:37: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_q5_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_q5_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI5_K) + mmq_y / QI5_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_q5_K_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 8) + mmq_y / 8), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q5_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_q5_K_acc_ct1),
-                            get_pointer(tile_x_dm_q5_K_acc_ct1),
-                            get_pointer(tile_x_sc_q5_K_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 }
 catch (sycl::exception const &exc) {
@@ -2875,82 +2572,47 @@ static void ggml_mul_mat_q6_K_q8_1_sycl(const void *vx, const void *vy,
     const sycl::range<3> block_nums(1, block_num_y, block_num_x);
     const sycl::range<3> block_dims(1, nwarps, WARP_SIZE);
 
-    if (nrows_x % mmq_y == 0) {
-        const bool need_check = false;
+    const auto launch = [&](auto need_check) {
         /*
         DPCT1049:38: The work-group size passed to the SYCL kernel may exceed
         the limit. To get the device limit, query
         info::device::max_work_group_size. Adjust the work-group size if needed.
         */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
+        dpct::has_capability_or_fail(stream->get_device(),
+                                     {sycl::aspect::fp16});
 
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI6_K) + mmq_y / QI6_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 8) + mmq_y / 8), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
+        stream->submit([&](sycl::handler &cgh) {
+            sycl::local_accessor<int, 1> tile_x_ql_acc_ct1(
+                sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_x_dm_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / QI6_K) + mmq_y / QI6_K),
+                cgh);
+            sycl::local_accessor<int, 1> tile_x_sc_acc_ct1(
+                sycl::range<1>(mmq_y * (WARP_SIZE / 8) + mmq_y / 8), cgh);
+            sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE), cgh);
+            sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
+                sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
 
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q6_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_acc_ct1),
-                            get_pointer(tile_x_dm_acc_ct1),
-                            get_pointer(tile_x_sc_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+            cgh.parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item_ct1) {
+                    mul_mat_q6_K<decltype(need_check)::value>(
+                        vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
+                        nrows_dst, item_ct1,
+                        get_pointer(tile_x_ql_acc_ct1),
+                        get_pointer(tile_x_dm_acc_ct1),
+                        get_pointer(tile_x_sc_acc_ct1),
+                        get_pointer(tile_y_qs_acc_ct1),
+                        get_pointer(tile_y_ds_acc_ct1));
+                });
+        });
+    };
+
+    if (nrows_x % mmq_y == 0) {
+        launch(std::false_type{});
     } else {
-        const bool need_check = true;
-        /*
-        DPCT1049:39: The work-group size passed to the SYCL kernel may exceed
-        the limit. To get the device limit, query
-        info::device::max_work_group_size. Adjust the work-group size if needed.
-        */
-        {
-            dpct::has_capability_or_fail(stream->get_device(),
-                                         {sycl::aspect::fp16});
-
-            stream->submit([&](sycl::handler &cgh) {
-                sycl::local_accessor<int, 1> tile_x_ql_acc_ct1(
-                    sycl::range<1>(mmq_y * (2 * WARP_SIZE) + mmq_y), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_x_dm_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / QI6_K) + mmq_y / QI6_K),
-                    cgh);
-                sycl::local_accessor<int, 1> tile_x_sc_acc_ct1(
-                    sycl::range<1>(mmq_y * (WARP_SIZE / 8) + mmq_y / 8), cgh);
-                sycl::local_accessor<int, 1> tile_y_qs_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE), cgh);
-                sycl::local_accessor<sycl::half2, 1> tile_y_ds_acc_ct1(
-                    sycl::range<1>(mmq_x * WARP_SIZE / QI8_1), cgh);
-
-                cgh.parallel_for(
-                    sycl::nd_range<3>(block_nums * block_dims, block_dims),
-                    [=](sycl::nd_item<3> item_ct1) {
-                        mul_mat_q6_K<need_check>(
-                            vx, vy, dst, ncols_x, nrows_x, ncols_y, nrows_y,
-                            nrows_dst, item_ct1,
-                            get_pointer(tile_x_ql_acc_ct1),
-                            get_pointer(tile_x_dm_acc_ct1),
-                            get_pointer(tile_x_sc_acc_ct1),
-                            get_pointer(tile_y_qs_acc_ct1),
-                            get_pointer(tile_y_ds_acc_ct1));
-                    });
-            });
-        }
+        launch(std::true_type{});
     }
 }
 catch (sycl::exception const &exc) {

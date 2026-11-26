@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -13,7 +14,7 @@ from .qwen import Qwen3Model, Qwen3MoeModel
 from .qwenvl import Qwen25AudioModel
 
 
-@ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration")
+@ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "OpenJevModel")
 @ModelBase.example("Qwen/Qwen3-VL-4B-Instruct", "Qwen/Qwen3-VL-30B-A3B-Instruct", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-35B-A3B")
 class Qwen3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
@@ -144,6 +145,16 @@ class Qwen3VLVisionModel(MmprojModel):
         yield from MmprojModel.modify_tensors(self, data_torch, name, bid)
 
 
+@ModelBase.register("MiniCPMOCRForSequenceClassification")
+class MiniCPMOCRSeqClsVisionModel(Qwen3VLVisionModel):
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        # trained with the image budget of its processor, wider than the mtmd default of Qwen-VL
+        size = self.preprocessor_config["size"]
+        self.gguf_writer.add_vision_min_pixels(int(size["shortest_edge"]))
+        self.gguf_writer.add_vision_max_pixels(int(size["longest_edge"]))
+
+
 @ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
 @ModelBase.example("Qwen/Qwen3-Omni-30B-A3B-Instruct")
 class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
@@ -198,7 +209,7 @@ class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
             if not self.has_vision_encoder:
                 raise ValueError(f"Model does not have vision encoder, but found tensor {name}")
             # need to transform vision tensor naming, so that modify_tensors() logic can be used correctly
-            name = name.replace("thinker.visual.", "model.visual.")
+            name = name.replace("thinker.visual.", "visual.")
             if ".merger_list." in name:
                 name = name.replace(".merger_list.", ".deepstack_merger_list.")
                 name = name.replace(".ln_q", ".norm")
@@ -228,10 +239,12 @@ class Qwen3ASRMmprojModel(Qwen3OmniMmprojModel):
 @ModelBase.register("Glm4vForConditionalGeneration", "Glm4vMoeForConditionalGeneration", "GlmOcrForConditionalGeneration")
 @ModelBase.example("zai-org/GLM-4.1V-9B-Thinking", "zai-org/GLM-4.5V")
 class Glm4VVisionModel(Qwen3VLVisionModel):
+    projector_type = gguf.VisionProjectorType.GLM4V
+
     def set_gguf_parameters(self):
         MmprojModel.set_gguf_parameters(self) # skip Qwen3VLVisionModel parameters
         assert self.hparams_vision is not None
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.GLM4V)
+        self.gguf_writer.add_clip_projector_type(self.projector_type)
 
         hidden_act = str(self.hparams_vision.get("hidden_act", "")).lower()
         if hidden_act == "gelu":
@@ -247,6 +260,32 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
             yield from ModelBase.modify_tensors(self, data_torch, name, bid)
             return
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("Glm5NextForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-5.3-Flash")
+class Glm5NextVisionModel(Glm4VVisionModel):
+    # GLM-5.3-Flash vision tower. glm4v layout with per-head qk-norm, no post-conv norm and no learned position embeddings.
+    # Images are placed on a ceil aligned canvas with padding.
+
+    projector_type = gguf.VisionProjectorType.GLM5V
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        self.gguf_writer.add_vision_spatial_merge_size(int(self.hparams_vision.get("spatial_merge_size", 2)))
+        if (limit := self.hparams_vision.get("swiglu_limit")) is not None:
+            self.gguf_writer.add_vision_swiglu_clamp(float(limit))
+
+        # image token budget from the processor, stored as single-frame pixel counts
+        pc = self.preprocessor_config
+        patch = int(pc.get("patch_size", 14))
+        merge = int(pc.get("merge_size", 2))
+        pixels_per_token = (patch * merge) ** 2
+        if (min_tok := pc.get("min_image_tokens")) is not None:
+            self.gguf_writer.add_vision_min_pixels(int(min_tok) * pixels_per_token)
+        if (max_tok := pc.get("max_image_tokens")) is not None:
+            self.gguf_writer.add_vision_max_pixels(int(max_tok) * pixels_per_token)
 
 
 @ModelBase.register("Qwen3VLForConditionalGeneration")
@@ -355,8 +394,10 @@ class Qwen3ASRTextModel(Qwen3VLTextModel):
 
     def set_vocab(self):
         super().set_vocab()
-        # fix chat template, use correct chatml format
-        self.gguf_writer.add_chat_template("{% for message in messages %}{{'<|im_start|>' + message['role'] + '\\n' + message['content'] + '<|im_end|>' + '\\n'}}{% endfor %}{% if add_generation_prompt %}{{ '<|im_start|>assistant\\n' }}{% endif %}")
+        # the model outputs "language <lang><asr_text><transcript>", the template renders the language prefix as reasoning_content
+        # so that the chat parser can separate it from the transcript
+        template_path = Path(__file__).parent.parent / "models" / "templates" / "Qwen3-ASR.jinja"
+        self.gguf_writer.add_chat_template(template_path.read_text(encoding="utf-8"))
         # correct BOS/EOS tokens
         with open(self.dir_model / "tokenizer_config.json", "r", encoding="utf-8") as f:
             tokenizer_config = json.load(f)

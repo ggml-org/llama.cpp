@@ -50,6 +50,37 @@ export RISCV_ROOT_PATH_IME1={your RISC-V compiler path}
 ${QEMU_ROOT_PATH}/bin/qemu-riscv64 -L ${RISCV_ROOT_PATH_IME1}/sysroot -cpu max,vlen=256,elen=64,vext_spec=v1.0 ${PWD}/build/bin/llama-cli -m ${PWD}/models/Qwen2.5-0.5B-Instruct-Q4_0.gguf -t 1
 ~~~
 
+## Run On Device
+On a SpacemiT board the backend reads `marchid` from `/proc/cpuinfo` and selects cores with the variables below. `SPACEMIT_CORE_ARCH` is read only when `/proc/cpuinfo` has no SpacemiT core, which is the QEMU case above. A `0x` prefix on the arch id is optional.
+
+| Variable | Default | Value |
+| --- | --- | --- |
+| `SPACEMIT_PERFER_CORE_ARCH` | cores with arch id high bits `0xA` (`arch >> 12 == 0xA`) | `503c` X60, `5064` X100, `50c8` X200, `a03c` A60, `a064` A100, `a0c8` A200 |
+| `SPACEMIT_PERFER_CORE_ID` | every core selected above | comma-separated `processor` ids from `/proc/cpuinfo` |
+| `SPACEMIT_CORE_ARCH` | parse `/proc/cpuinfo` | same hex arch id as `SPACEMIT_PERFER_CORE_ARCH` |
+| `SPACEMIT_MEM_BACKEND` | `HPAGE` | `NONE`, `POSIX`, `HPAGE`, `HPAGE1GB` |
+| `SPACEMIT_DISABLE_TCM` | use TCM when the device provides it | any value other than `0` disables TCM |
+
+X100 (`5064`) and A60 (`a03c`) enable IME1. A100 (`a064`) enables IME2. X60, X200 and A200 do not enable IME1 or IME2.
+
+To make any child processes get sent to the A100 cores, you need to write the PID of the current process to `/proc/set_ai_thread`. In many shell programs, such as bash or zsh, this can be done with `echo $$ > /proc/set_ai_thread`.
+~~~
+echo $$ > /proc/set_ai_thread
+~~~
+
+Set them in the environment of the process you start. For example, to run on A100 cores 8-15:
+~~~
+echo $$ > /proc/set_ai_thread
+export SPACEMIT_PERFER_CORE_ARCH=a064
+export SPACEMIT_PERFER_CORE_ID=8,9,10,11,12,13,14,15
+
+${PWD}/build/bin/llama-cli -m ${PWD}/models/Qwen2.5-0.5B-Instruct-Q4_0.gguf -t 8
+~~~
+
+The same variables can be written in front of the command: `SPACEMIT_PERFER_CORE_ARCH=a064 SPACEMIT_PERFER_CORE_ID=8,9,10,11,12,13,14,15 ${PWD}/build/bin/llama-cli ...`. They are read when the process starts.
+
+Each id in `SPACEMIT_PERFER_CORE_ID` must be in range and must have the arch given by `SPACEMIT_PERFER_CORE_ARCH`, otherwise the process aborts. An unknown `SPACEMIT_MEM_BACKEND` aborts with the four names above.
+
 ## Quantization Support For Matrix
 
 | Quantization Type | X60 | A100 |
@@ -63,7 +94,7 @@ ${QEMU_ROOT_PATH}/bin/qemu-riscv64 -L ${RISCV_ROOT_PATH_IME1}/sysroot -cpu max,v
 | Q5_1 |  | :heavy_check_mark: |
 | Q5_K |  | :heavy_check_mark: |
 | Q6_K |  | :heavy_check_mark: |
-| Q8_0 |  | :heavy_check_mark: |
+| Q8_0 | :heavy_check_mark: | :heavy_check_mark: |
 
 
 ## Performance
