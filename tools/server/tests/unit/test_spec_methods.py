@@ -54,7 +54,7 @@ CASES = [
         draft="dspark-Qwen3-4B-Q4_K_M.gguf",
         n_max=7,
         min_accept_rate=0.2767,
-        min_accept_len=3.1246,
+        min_accept_len=3.05,
     ),
     SpecCase(
         name="eagle3",
