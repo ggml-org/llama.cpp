@@ -44,6 +44,10 @@ const LOGO_CARD_S = 1.6;
 const LOGO_FADE_S = 0.5;
 /** Camera positions averaged into one frame while the camera moves. */
 const BLUR_SAMPLES = 12;
+/** The share of a frame's time those positions span: a film camera's 180 degree shutter. */
+const SHUTTER = 0.5;
+const SHADOW_Y_U = 0.5;
+const SHADOW_BLUR_U = 1.6;
 const JPEG_QUALITY = 95;
 /** The stage page, the brand's files and the recorded frames are served from here. */
 const STAGE_ORIGIN = 'http://demo.invalid';
@@ -220,9 +224,7 @@ function stageHtml(layout: Layout, dark: boolean): string {
 	if (!(ground in GROUNDS)) throw new Error(`demo: no ground "${ground}" in the brand`);
 
 	const phone = size.height > size.width;
-	const corners = phone
-		? `border-radius: calc(var(--u) * ${PHONE_RADIUS_U}); corner-shape: squircle;`
-		: `border-radius: calc(var(--u) * ${WINDOW_RADIUS_U});`;
+	const radius = (phone ? PHONE_RADIUS_U : WINDOW_RADIUS_U) * u;
 	const mark = GROUNDS[ground as keyof typeof GROUNDS] ? 'dark' : 'light';
 
 	return `<!doctype html>
@@ -231,9 +233,8 @@ function stageHtml(layout: Layout, dark: boolean): string {
 		<link rel="stylesheet" href="/brand/css/communications.css" />
 		<style>
 			body { position: relative; overflow: hidden; margin: 0; width: ${size.width}px; height: ${size.height}px; --u: ${u}px; }
-			#scene, #logo, #layers > div { position: absolute; inset: 0; transform-origin: 0 0; }
-			#layers canvas { position: absolute; left: ${left}px; top: ${top}px; width: ${width}px; height: ${height}px; ${corners}
-				box-shadow: 0 calc(var(--u) * 0.5) calc(var(--u) * 1.6) rgb(0 0 0 / 0.18); }
+			#scene, #logo { position: absolute; inset: 0; }
+			#layers canvas { position: absolute; ${phone ? 'corner-shape: squircle;' : ''} }
 			#caption { position: absolute; left: 50%; bottom: calc(var(--u) * ${MARGIN_U}); display: flex; align-items: center;
 				box-sizing: border-box; height: calc(var(--u) * ${CAPTION_HEIGHT_U}); padding: 0 calc(var(--u) * ${CAPTION_PAD_U});
 				max-width: ${maxWidth}px; overflow: hidden; border-radius: 999px; background: var(--p-solid);
@@ -243,7 +244,10 @@ function stageHtml(layout: Layout, dark: boolean): string {
 		</style>
 		<body class="ground ground-${ground}">
 			<div id="scene">
-				<div id="layers">${'<div><canvas></canvas></div>'.repeat(BLUR_SAMPLES)}</div>
+				<div id="layers" data-left="${left}" data-top="${top}" data-width="${width}" data-height="${height}"
+					data-radius="${radius}" data-shadow-y="${SHADOW_Y_U * u}" data-shadow-blur="${SHADOW_BLUR_U * u}">
+					${'<canvas></canvas>'.repeat(BLUR_SAMPLES)}
+				</div>
 				<div id="caption" data-font="${CAPTION_FONT_U * u}" data-min-font="${CAPTION_MIN_FONT_U * u}"
 					data-rise="${CAPTION_RISE_U * u}"></div>
 			</div>
@@ -267,14 +271,24 @@ async function drawFrame(shot: Shot): Promise<void> {
 	}
 
 	const image = stage.demoImage!;
+	const box = { ...document.getElementById('layers')!.dataset } as Record<string, string>;
+	const [left, top, width, height, radius, shadowY, shadowBlur] = [
+		'left',
+		'top',
+		'width',
+		'height',
+		'radius',
+		'shadowY',
+		'shadowBlur'
+	].map((key) => Number(box[key]));
 
 	// one copy of the window per camera position, each at 1/n over the ones before, which leaves
-	// their mean: the motion blur. A still frame shows one copy
-	document.querySelectorAll<HTMLElement>('#layers > div').forEach((layer, i) => {
+	// their mean: the motion blur. A still frame shows one copy. Each is laid out where the camera
+	// puts it rather than scaled with a transform, as Chromium cuts a scaled shadow into tiles
+	document.querySelectorAll<HTMLCanvasElement>('#layers canvas').forEach((canvas, i) => {
 		const camera = shot.cameras[i];
-		const canvas = layer.querySelector('canvas')!;
 
-		layer.style.display = camera ? '' : 'none';
+		canvas.style.display = camera ? '' : 'none';
 
 		if (!camera) return;
 
@@ -287,8 +301,17 @@ async function drawFrame(shot: Shot): Promise<void> {
 			canvas.dataset.frame = shot.frame;
 		}
 
-		layer.style.opacity = String(1 / (i + 1));
-		layer.style.transform = `translate(${camera.x}px, ${camera.y}px) scale(${camera.scale})`;
+		const { scale } = camera;
+
+		Object.assign(canvas.style, {
+			borderRadius: `${radius * scale}px`,
+			boxShadow: `0 ${shadowY * scale}px ${shadowBlur * scale}px rgb(0 0 0 / 0.18)`,
+			height: `${height * scale}px`,
+			left: `${camera.x + left * scale}px`,
+			opacity: String(1 / (i + 1)),
+			top: `${camera.y + top * scale}px`,
+			width: `${width * scale}px`
+		});
 	});
 
 	if (shot.caption && caption.textContent !== shot.caption.text) {
@@ -400,7 +423,9 @@ export async function renderPolished(
 
 		const shot: Shot = {
 			cameras: moved(cameraAt(time), cameraAt(time + 1 / FPS))
-				? Array.from({ length: BLUR_SAMPLES }, (_, s) => cameraAt(time + s / BLUR_SAMPLES / FPS))
+				? Array.from({ length: BLUR_SAMPLES }, (_, s) =>
+						cameraAt(time + (s / BLUR_SAMPLES) * (SHUTTER / FPS))
+					)
 				: [cameraAt(time)],
 			caption: captionAt(time),
 			frame: `${STAGE_ORIGIN}/frames/${source}`,
