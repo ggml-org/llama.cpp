@@ -13972,6 +13972,11 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_concat(GGML_TYPE_Q8_0, {8192, 2, 1, 1}, dim == 0 ? 4096 : 1, dim, 0));
     }
 
+    // non-contiguous with ne[2] or ne[3] > 65535 (CUDA grid y/z limit)
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {4, 2, 70000, 1}, 4, 0, 1));
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F32, {4, 2, 40000, 1}, 30000, 2, 1));
+    test_cases.emplace_back(new test_concat(GGML_TYPE_F16, {4, 2, 1, 70000}, 4, 0, 1));
+
     for (ggml_type type : { GGML_TYPE_F32, GGML_TYPE_F16 }) {
         test_cases.emplace_back(new test_concat(type, {64, 4, 512, 1}, 512, 2, 0));
         test_cases.emplace_back(new test_concat(type, {66, 4, 512, 1}, 512, 2, 0));
