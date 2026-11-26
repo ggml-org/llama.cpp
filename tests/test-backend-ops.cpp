@@ -2176,7 +2176,7 @@ struct test_unary : public test_case {
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const bool grad_supported = op == GGML_UNARY_OP_ABS || op == GGML_UNARY_OP_SGN || op == GGML_UNARY_OP_NEG ||
             op == GGML_UNARY_OP_STEP || op == GGML_UNARY_OP_RELU || op == GGML_UNARY_OP_SILU ||
-            op == GGML_UNARY_OP_EXPM1 || op == GGML_UNARY_OP_SOFTPLUS || op == GGML_UNARY_OP_SIGMOID;
+            op == GGML_UNARY_OP_EXPM1 || op == GGML_UNARY_OP_SOFTPLUS || op == GGML_UNARY_OP_SIGMOID || op == GGML_UNARY_OP_TANH;
 
         ggml_tensor * a;
         if (v & 1) {
@@ -2218,8 +2218,8 @@ struct test_unary : public test_case {
             max =  10.f;
         }
 
-        // saturated sigmoid inputs give zero analytic and numeric gradients, which the grad check cannot compare
-        if (mode == MODE_GRAD && op == GGML_UNARY_OP_SIGMOID) {
+        // saturated inputs give zero analytic and numeric gradients, which the grad check cannot compare
+        if (mode == MODE_GRAD && (op == GGML_UNARY_OP_SIGMOID || op == GGML_UNARY_OP_TANH)) {
             min = -2.f;
             max =  2.f;
         }
@@ -2231,16 +2231,19 @@ struct test_unary : public test_case {
     }
 
     float grad_eps() override {
+        if (op == GGML_UNARY_OP_TANH) {
+            return 0.15f;
+        }
         return op == GGML_UNARY_OP_SIGMOID ? 0.25f : 15.0f;
     }
 
     bool grad_precise() override {
-        return op == GGML_UNARY_OP_SIGMOID;
+        return op == GGML_UNARY_OP_SIGMOID || op == GGML_UNARY_OP_TANH;
     }
 
-    // f32 rounding of a large summed loss exceeds the tolerance, so only the small sigmoid case is grad checked
+    // f32 rounding of a large summed loss exceeds the tolerance, so only the small cases are grad checked
     int64_t grad_nmax() override {
-        return op == GGML_UNARY_OP_SIGMOID ? 64 : test_case::grad_nmax();
+        return (op == GGML_UNARY_OP_SIGMOID || op == GGML_UNARY_OP_TANH) ? 64 : test_case::grad_nmax();
     }
 
     std::vector<float> grad_expect() override {
@@ -11172,6 +11175,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
     test_cases.emplace_back(new test_unary(GGML_UNARY_OP_SIGMOID, GGML_TYPE_F32, { 16, 4, 1, 1 }));
+    test_cases.emplace_back(new test_unary(GGML_UNARY_OP_TANH, GGML_TYPE_F32, { 16, 4, 1, 1 }));
 
     // fused relu + sqr (squared ReLU)
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32}) {
