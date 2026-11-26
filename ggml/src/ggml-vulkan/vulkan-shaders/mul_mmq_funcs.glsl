@@ -57,7 +57,7 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
         q_sum += mmq_dot(cache_a[ib_a].qs[iqs], cache_b.qs[iqs]);
     }
 
-    return ACC_TYPE(float(cache_a[ib_a].dm) * (float(q_sum) * float(cache_b.ds.x) - float(cache_b.ds.y)));
+    return ACC_TYPE(float(cache_a[ib_a].dm) * (float(q_sum) * float(cache_b.ds.x) - (float(cache_b.ds.x) * float(cache_b.ds.y))));
 }
 #endif
 
@@ -120,9 +120,9 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
     }
 
 #ifdef DATA_A_Q4_0
-    return ACC_TYPE(float(cache_a[ib_a].dm) * (float(q_sum) * float(cache_b.ds.x) - 8.0 * float(cache_b.ds.y)));
+    return ACC_TYPE(float(cache_a[ib_a].dm) * (float(q_sum) * float(cache_b.ds.x) - 8.0 * (float(cache_b.ds.x) * float(cache_b.ds.y))));
 #else // DATA_A_Q4_1
-    return ACC_TYPE(float(q_sum) * float(cache_a[ib_a].dm.x) * float(cache_b.ds.x) + float(cache_a[ib_a].dm.y) * float(cache_b.ds.y));
+    return ACC_TYPE(float(q_sum) * float(cache_a[ib_a].dm.x) * float(cache_b.ds.x) + float(cache_a[ib_a].dm.y) * (float(cache_b.ds.x) * float(cache_b.ds.y)));
 #endif
 }
 #endif
@@ -194,9 +194,9 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
     }
 
 #ifdef DATA_A_Q5_0
-    return ACC_TYPE(float(cache_a[ib_a].dm) * (float(q_sum) * float(cache_b.ds.x) - 16.0 * float(cache_b.ds.y)));
+    return ACC_TYPE(float(cache_a[ib_a].dm) * (float(q_sum) * float(cache_b.ds.x) - 16.0 * (float(cache_b.ds.x) * float(cache_b.ds.y))));
 #else // DATA_A_Q5_1
-    return ACC_TYPE(float(q_sum) * float(cache_a[ib_a].dm.x) * float(cache_b.ds.x) + float(cache_a[ib_a].dm.y) * float(cache_b.ds.y));
+    return ACC_TYPE(float(q_sum) * float(cache_a[ib_a].dm.x) * float(cache_b.ds.x) + float(cache_a[ib_a].dm.y) * (float(cache_b.ds.x) * float(cache_b.ds.y)));
 #endif
 }
 #endif
@@ -551,7 +551,7 @@ ACC_TYPE mmq_dot_product(const uint ib_a) {
         q_sum += mmq_dot(qs_a, cache_b.qs[iqs]);
     }
 
-    return ACC_TYPE(float(cache_b.ds.x) * float(cache_a[ib_a].dm.x) * float(q_sum) - float(cache_a[ib_a].dm.y) * float(cache_b.ds.y));
+    return ACC_TYPE(float(cache_b.ds.x) * float(cache_a[ib_a].dm.x) * float(q_sum) - float(cache_a[ib_a].dm.y) * (float(cache_b.ds.x) * float(cache_b.ds.y)));
 }
 #endif
 

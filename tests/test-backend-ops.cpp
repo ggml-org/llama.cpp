@@ -6812,6 +6812,56 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool skip = 
 }
 
 // GGML_OP_MUL_MAT_ID
+// GGML_OP_MUL_MAT with activations whose 32-element block sums exceed the f16 range (65504),
+// as the "massive activations" of some LLMs do. Backends that keep the block sum of the quantized
+// activations in f16 must not turn such blocks into inf/NaN.
+struct test_mul_mat_large_b : public test_case {
+    const ggml_type type_a;
+    const int64_t m;
+    const int64_t n;
+    const int64_t k;
+
+    std::string vars() override {
+        return VARS_TO_STR4(type_a, m, n, k);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    test_mul_mat_large_b(ggml_type type_a = GGML_TYPE_Q4_K, int64_t m = 128, int64_t n = 64, int64_t k = 256)
+        : type_a(type_a), m(m), n(n), k(k) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * a = ggml_new_tensor_2d(ctx, type_a, k, m);
+        ggml_set_name(a, "a");
+        ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(b, "b");
+        ggml_tensor * out = ggml_mul_mat(ctx, a, b);
+        ggml_set_name(out, "out");
+        return out;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            if (strcmp(t->name, "b") != 0) {
+                init_tensor_uniform(t);
+                continue;
+            }
+            std::vector<float> data(ggml_nelements(t));
+            std::default_random_engine rng(42);
+            std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+            for (int64_t j = 0; j < n; ++j) {
+                for (int64_t i = 0; i < k; ++i) {
+                    // the first 32-block of every row sums to 32 * 4096 = 131072
+                    data[j*k + i] = i < 32 ? 4096.0f : dist(rng);
+                }
+            }
+            ggml_backend_tensor_set(t, data.data(), 0, data.size() * sizeof(float));
+        }
+    }
+};
+
 struct test_mul_mat_id : public test_case {
     const ggml_type type_a;
     const ggml_type type_b;
@@ -13604,6 +13654,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ3_S, GGML_TYPE_F32, 63,  5, 4608, {3, 2}, {2, 2}));
     // partial column group, broadcast, padded rows, src1 in [0, 1], src0 in a weights buffer
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 1000,  5, 4608, {1, 1}, {1, 1}));
+    // Q4_1/Q5_1 are left out: the CPU reference keeps the q8_1 block sum in f16 as well
+    for (ggml_type type_a : {GGML_TYPE_Q4_0, GGML_TYPE_Q5_0, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K}) {
+        for (int64_t n : {1, 4, 64, 129}) {
+            test_cases.emplace_back(new test_mul_mat_large_b(type_a, 128, n, 256));
+        }
+    }
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32,   64, 13, 4608, {3, 2}, {2, 2}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 1000, 13, 4608, {1, 1}, {1, 1}, {0, 1, 2, 3}, 5120));
     test_cases.emplace_back(new test_mul_mat_pos(GGML_TYPE_Q4_K, GGML_TYPE_F32, 1000, 13, 4608, {1, 1}, {1, 1}));

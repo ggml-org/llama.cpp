@@ -91,7 +91,9 @@ void quantize(const uint wgid) {
     barrier();
 #endif
 
-    // Calculate the sum for each block
+    // Calculate the sum of the quantized values for each block. It is stored as is, not scaled by d:
+    // it is an integer of magnitude <= 32 * 127, so f16 holds it, whereas d * sum is the block sum of the
+    // activations and overflows f16 to inf once it exceeds 65504. Consumers multiply by d in f32.
     const float thread_sum = vals.x + vals.y + vals.z + vals.w;
 #ifndef USE_SUBGROUPS
     shmem[tid] = thread_sum;
@@ -111,9 +113,9 @@ void quantize(const uint wgid) {
 #endif
 
 #ifndef QBLOCK_X4
-        data_b[ib].ds = f16vec2(vec2(d, sum * d));
+        data_b[ib].ds = f16vec2(vec2(d, sum));
 #else
-        data_b[ibx4_outer].ds[ibx4_inner] = f16vec2(vec2(d, sum * d));
+        data_b[ibx4_outer].ds[ibx4_inner] = f16vec2(vec2(d, sum));
 #endif
     }
 }
