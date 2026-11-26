@@ -1460,8 +1460,8 @@ void launch_fattn(
     // Optional optimization where the mask is scanned to determine whether part of the calculation can be skipped.
     // Only worth the overhead if there is at lease one FATTN_KQ_STRIDE x FATTN_KQ_STRIDE square to be skipped or
     //     multiple sequences of possibly different lengths, or kv_rows lists that end with padding.
-    // The scan reads ncols1 mask rows per tile, including the last tile. Indexed bias masks have no query padding.
-    const bool scan_mask = !use_sparse && mask && mask->ne[2] == 1 && mask->ne[1]/ncols1 >= ntiles_x &&
+    // The scan reads ncols1 mask rows per tile, including the last tile.
+    const bool scan_mask = !has_bias && !use_sparse && mask && mask->ne[2] == 1 && mask->ne[1]/ncols1 >= ntiles_x &&
         n_kv_cols % FATTN_KQ_STRIDE == 0 && (Q->ne[1] >= 1024 || Q->ne[3] > 1 || kv_rows);
     if (scan_mask) {
         const int64_t s31 = mask->nb[1] / sizeof(half2);

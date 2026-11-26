@@ -1680,9 +1680,6 @@ bool rpc_server::get_alloc_size(const rpc_msg_get_alloc_size_req & request, rpc_
             }
         }
     }
-    if (tensor->op == GGML_OP_FLASH_ATTN_EXT && !ggml_validate_flash_attn_ext_indexed_bias(tensor)) {
-        return false;
-    }
 
     LOG_DBG2("[%s] device: %u, tensor: %s, buffer: %p, data: %p\n", __func__, dev_id, rpc_log_format_tensor(tensor).c_str(),
              (void*)tensor->buffer, tensor->data);
@@ -2166,10 +2163,6 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
             return false;
         }
         ggml_tensor * node = created[it->second];
-        if (node->op == GGML_OP_FLASH_ATTN_EXT && !ggml_validate_flash_attn_ext_indexed_bias(node)) {
-            LOG_ERROR("[%s] graph node %u has invalid indexed bias tensors\n", __func__, i);
-            return false;
-        }
         if (!rpc_check_node(node)) {
             LOG_ERROR("[%s] graph node %u (%s) or one of its sources is not allocated on this server\n", __func__, i, node->name);
             return false;
