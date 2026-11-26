@@ -163,6 +163,32 @@ jobs:
             .venv-hf/bin/hf buckets cp hip-baseline-metrics.tar.gz "hf://buckets/ggml-org/cache/llama.cpp/hip-quality-check-yaml-device-rocm-7.2.1-gfx908-${{ github.sha }}.tar.gz" || echo "Failed to save HIP metrics baseline"
           fi
 
+      - name: Remove old HIP metrics baselines
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
+        shell: bash
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN_CACHE_OUTPUT }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            exit 0
+          fi
+
+          if ! cache_files=$(.venv-hf/bin/hf buckets list "hf://buckets/ggml-org/cache/llama.cpp" --json | jq -r '
+            .[]
+            | select(.type == "file")
+            | select(.path | startswith("llama.cpp/hip-quality-check-yaml-device-rocm-") and endswith(".tar.gz"))
+            | select(try ((.uploaded_at | .[:19]+"Z" | fromdateiso8601) < (now - 30 * 24 * 60 * 60)) catch false)
+            | .path
+          '); then
+            echo "Failed to list HIP metrics baselines"
+            exit 0
+          fi
+
+          while IFS= read -r cache_path; do
+            [ -n "$cache_path" ] || continue
+            .venv-hf/bin/hf buckets rm "hf://buckets/ggml-org/cache/$cache_path" -y || echo "Failed to remove $cache_path"
+          done <<< "$cache_files"
+
       # Restore the device optimization records for the exact baseline commit.
       - name: Restore master metrics baseline
         if: ${{ github.event_name == 'pull_request' }}
