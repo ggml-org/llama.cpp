@@ -244,6 +244,7 @@ jobs:
 
       - name: Publish kernel metrics summary
         if: ${{ github.event_name == 'pull_request' }}
+        shell: bash
         env:
           ARTIFACT_URL: ${{ steps.metrics_report.outputs.artifact-url }}
         run: |
@@ -255,7 +256,7 @@ jobs:
               printf '\nThe full report exceeds the GitHub job summary size limit.\n'
             fi
             printf '\n[Download the full kernel metrics report](%s)\n' "$ARTIFACT_URL"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Fail on blocking regressions
         if: ${{ github.event_name == 'pull_request' && steps.occupancy_check.outputs.check_failed == 'true' }}
