@@ -103,7 +103,7 @@ export const HF_SHARED_DRAFT_TOKEN = 'shared';
  * Extracts the leading precision digits from a quant token, e.g.
  * `Q4_K_XL` -> 4, `IQ2_XXS` -> 2, `TQ1_0` -> 1, `BF16` -> 16.
  */
-export const HF_QUANT_PRECISION_REGEX = /^(?:I?Q|TQ|BF|F|MXFP)?(\d+)/i;
+export const HF_QUANT_PRECISION_REGEX = /^(?:I?Q|TQ|BF|F|MXFP|NVFP)?(\d+)/i;
 
 // Model card tags
 

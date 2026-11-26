@@ -13,9 +13,11 @@
 		details: HfModelDetailInfo;
 		gguf?: HfModelGguf;
 		licenseTag: string | null;
+		/** Leaner pane for a narrow host such as Search: no Hugging Face link, no description. */
+		compact?: boolean;
 	}
 
-	let { details, gguf, licenseTag, modelId }: Props = $props();
+	let { compact = false, details, gguf, licenseTag, modelId }: Props = $props();
 
 	// Catalog family description when curated, else the HF card description.
 	let description = $derived(
@@ -25,7 +27,7 @@
 	let chatTemplateOpen = $state(false);
 </script>
 
-{#if description}
+{#if description && !compact}
 	<p class="text-body-sm text-muted-foreground">{description}</p>
 {/if}
 
