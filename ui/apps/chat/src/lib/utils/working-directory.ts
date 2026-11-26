@@ -9,6 +9,7 @@
 import { lastPathSegment } from './path-display';
 import {
 	GLOB,
+	HIDDEN_NAME_PREFIX,
 	HOME_TILDE,
 	HOME_TILDE_PREFIX,
 	LEADING_SLASHES_REGEX,
@@ -202,9 +203,22 @@ function rankScore(path: string, query: string): number {
 	return RANK_OTHER;
 }
 
+/** True when the path is, or sits inside, a hidden folder (`.config/llama`). */
+export function isHiddenPath(path: string): boolean {
+	return path.split(PATH_SEPARATOR).some((segment) => segment.startsWith(HIDDEN_NAME_PREFIX));
+}
+
+/**
+ * Regular entries come before hidden ones, unless the query itself asks for a
+ * hidden name (`.config`). Within each group the best name match wins.
+ */
 export function rankEntries(entries: GlobEntry[], query: string): GlobEntry[] {
+	const hiddenRank = (path: string) =>
+		!query.startsWith(HIDDEN_NAME_PREFIX) && isHiddenPath(path) ? 1 : 0;
+
 	return [...entries].sort(
 		(a, b) =>
+			hiddenRank(a.path) - hiddenRank(b.path) ||
 			rankScore(a.path, query) - rankScore(b.path, query) ||
 			a.path.length - b.path.length ||
 			a.path.localeCompare(b.path)

@@ -5,6 +5,7 @@ import {
 	buildGlobSearchArgs,
 	fuzzyDistance,
 	highlightMatch,
+	isHiddenPath,
 	joinPath,
 	rankEntries,
 	splitPathQuery,
@@ -240,5 +241,30 @@ describe('fuzzyDistance', () => {
 
 	it('grows with every further edit', () => {
 		expect(fuzzyDistance('documents', 'llama')).toBeGreaterThan(SEARCH.FUZZY_MAX_EDITS);
+	});
+});
+
+describe('rankEntries with hidden folders', () => {
+	const entries = [
+		{ path: '.config/llama', type: 'dir' },
+		{ path: '.llama-app', type: 'dir' },
+		{ path: 'git/llama.cpp', type: 'dir' }
+	];
+
+	it('ranks regular folders above hidden ones, even an exact hidden match', () => {
+		expect(rankEntries(entries, 'llama').map((e) => e.path)).toEqual([
+			'git/llama.cpp',
+			'.config/llama',
+			'.llama-app'
+		]);
+	});
+
+	it('ranks by name alone when the query asks for a hidden name', () => {
+		expect(rankEntries(entries, '.llama')[0].path).toBe('.llama-app');
+	});
+
+	it('tells a hidden path by any of its segments', () => {
+		expect(isHiddenPath('git/.cache/x')).toBe(true);
+		expect(isHiddenPath('git/llama.cpp')).toBe(false);
 	});
 });

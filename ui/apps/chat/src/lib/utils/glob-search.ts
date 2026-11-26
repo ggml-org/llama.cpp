@@ -9,12 +9,19 @@ import {
 	buildFuzzyGlobs,
 	buildGlobSearchArgs,
 	fuzzyDistance,
+	isHiddenPath,
 	joinPath,
 	rankEntries,
 	splitPathQuery,
 	toHomeRelativeQuery
 } from './working-directory';
-import { GLOB, HOME_TILDE, PATH_SEPARATOR, SEARCH } from '#lib/constants/index.ts';
+import {
+	GLOB,
+	HIDDEN_NAME_PREFIX,
+	HOME_TILDE,
+	PATH_SEPARATOR,
+	SEARCH
+} from '#lib/constants/index.ts';
 import { BuiltInTool, GlobSearchType } from '#lib/enums/index.ts';
 import { ToolsService } from '#lib/services/tools.service.ts';
 import type {
@@ -134,9 +141,13 @@ async function withExactDirChildren(
 
 	if (childRes.error) return result;
 
+	// alphabetical, with hidden entries after the regular ones
 	const children = childRes.entries
 		.map((e) => toEntryResult(e, childRes.base))
-		.sort((a, b) => a.path.localeCompare(b.path));
+		.sort(
+			(a, b) =>
+				Number(isHiddenPath(a.name)) - Number(isHiddenPath(b.name)) || a.path.localeCompare(b.path)
+		);
 
 	return { ...result, entries: [...result.entries, ...children], exactDir };
 }
@@ -205,19 +216,6 @@ export async function runFolderSearch(
 	}
 
 	const args = buildGlobSearchArgs(query, scope, SEARCH.SHALLOW_DEPTH);
-	const collect = (ranked: GlobEntry[], base: string) => {
-		const result = { args, base, entries: ranked.map((e) => toEntryResult(e, base)) };
-
-		return withExactDirChildren(
-			result,
-			ranked,
-			query,
-			type,
-			SEARCH.LIMIT,
-			SEARCH.PATH_NAV_MAX_DEPTH,
-			signal
-		);
-	};
 	const deepSearch = runGlobSearch(
 		{ ...args, maxDepth: SEARCH.MAX_DEPTH },
 		type,
@@ -229,6 +227,20 @@ export async function runFolderSearch(
 	if (shallow.error) return { args, base: shallow.base, entries: [], error: shallow.error };
 
 	const near = rankEntries(shallow.entries, query);
+	// only a near folder is entered on an exact name: a deeper namesake is just a result
+	const collect = (ranked: GlobEntry[], base: string) => {
+		const result = { args, base, entries: ranked.map((e) => toEntryResult(e, base)) };
+
+		return withExactDirChildren(
+			result,
+			near,
+			query,
+			type,
+			SEARCH.LIMIT,
+			SEARCH.PATH_NAV_MAX_DEPTH,
+			signal
+		);
+	};
 
 	if (near.length > 0) onPartial?.(await collect(near, shallow.base));
 
@@ -244,5 +256,13 @@ export async function runFolderSearch(
 		return runFuzzyFolderSearch(args, [SEARCH.SHALLOW_DEPTH, SEARCH.FUZZY_MAX_DEPTH], signal);
 	}
 
-	return collect([...near, ...far], shallow.base);
+	// hidden folders go last, below even the deeper regular ones
+	const isRegular = (entry: GlobEntry) =>
+		query.startsWith(HIDDEN_NAME_PREFIX) || !isHiddenPath(entry.path);
+	const found = [...near, ...far];
+
+	return collect(
+		[...found.filter(isRegular), ...found.filter((entry) => !isRegular(entry))],
+		shallow.base
+	);
 }

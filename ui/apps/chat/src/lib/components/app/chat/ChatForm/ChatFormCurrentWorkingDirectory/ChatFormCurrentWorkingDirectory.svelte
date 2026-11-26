@@ -8,7 +8,7 @@
 	import {
 		CHAT_FORM_CHIP_SPLIT,
 		CHAT_FORM_CHIP_TRANSITION_MS,
-		CHAT_FORM_PICKER_WIDTH_CLASS,
+		CHAT_FORM_PATH_PICKER_WIDTH_CLASS,
 		DEFAULT_MOBILE_BREAKPOINT,
 		HOME_TILDE,
 		SEARCH,
@@ -518,7 +518,7 @@
 		     pull it into the list as the + menu closes -->
 		<Popover.Content
 			align="start"
-			class={[CHAT_FORM_PICKER_WIDTH_CLASS, 'rounded-xl p-0']}
+			class={[CHAT_FORM_PATH_PICKER_WIDTH_CLASS, 'rounded-xl p-0']}
 			{customAnchor}
 			onCloseAutoFocus={(event) => event.preventDefault()}
 			onInteractOutside={handleInteractOutside}

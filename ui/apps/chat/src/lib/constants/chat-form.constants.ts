@@ -7,11 +7,16 @@ export const CWD_COMMAND_NAME = 'cwd';
 /** What the input starts with while a working directory is typed. */
 export const CWD_COMMAND_PREFIX = `${PROMPT_TRIGGER_PREFIX}${CWD_COMMAND_NAME} `;
 /**
- * The chat form's pickers fit their suggestions: as wide as the longest one, between a
- * floor that keeps short lists readable and a cap no wider than the form.
+ * The command picker fits its suggestions: as wide as the longest one, between a floor
+ * that keeps short lists readable and a cap no wider than the form.
  */
 export const CHAT_FORM_PICKER_WIDTH_CLASS =
 	'w-max min-w-64 max-w-[min(36rem,var(--bits-popover-anchor-width))]';
+/**
+ * The pickers that list paths (`@` mentions, `/cwd`) keep one width, so the list does not
+ * resize as the results change with every keystroke.
+ */
+export const CHAT_FORM_PATH_PICKER_WIDTH_CLASS = 'w-[min(36rem,var(--bits-popover-anchor-width))]';
 /** Ends the `/cwd` line: the message goes on below it. */
 export const CWD_COMMAND_LINE_BREAK = '\n';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';

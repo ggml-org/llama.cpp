@@ -9,6 +9,9 @@
 /** Label shown for the working-directory picker / `/cwd` slash command. */
 export const SET_WORKING_DIRECTORY_LABEL = 'Set working directory';
 
+/** Prefix of a hidden file or folder name (`.git`, `.config`). */
+export const HIDDEN_NAME_PREFIX = '.';
+
 export const GLOB = {
 	/** `C:`, the drive part of a Windows absolute path. */
 	DRIVE_PREFIX_REGEX: /^[A-Za-z]:/,

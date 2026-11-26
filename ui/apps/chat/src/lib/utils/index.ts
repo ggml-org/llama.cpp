@@ -240,6 +240,7 @@ export {
 	fuzzyDistance,
 	buildGlobSearchArgs,
 	rankEntries,
+	isHiddenPath,
 	joinPath,
 	highlightMatch,
 	type PathQuery

@@ -5,7 +5,7 @@
 	import { ChatFormPickerList, ChatFormPickerListItem } from '#lib/components/app/chat/index.ts';
 	import HighlightedMatch from '#lib/components/app/forms/HighlightedMatch.svelte';
 	import {
-		CHAT_FORM_PICKER_WIDTH_CLASS,
+		CHAT_FORM_PATH_PICKER_WIDTH_CLASS,
 		FILE_GLOB_SEARCH_PICKERS,
 		HOME_TILDE,
 		SEARCH
@@ -221,7 +221,7 @@
 
 	<Popover.Content
 		align="start"
-		class={[CHAT_FORM_PICKER_WIDTH_CLASS, 'rounded-xl p-0', className]}
+		class={[CHAT_FORM_PATH_PICKER_WIDTH_CLASS, 'rounded-xl p-0', className]}
 		{customAnchor}
 		onCloseAutoFocus={(event) => event.preventDefault()}
 		onOpenAutoFocus={(event) => event.preventDefault()}
