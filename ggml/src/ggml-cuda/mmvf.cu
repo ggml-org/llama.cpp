@@ -13,16 +13,6 @@ static __device__ __forceinline__ float2 mmvf_load_fp8x2(const ggml_fp8_e4m3_t *
 #endif
 }
 
-// pair i of src1 values, from an F32 or a BF16 src1
-template <typename T_y>
-static __device__ __forceinline__ float2 mmvf_load_y2(const T_y * y, const int i) {
-    if constexpr (std::is_same_v<T_y, nv_bfloat16>) {
-        return ggml_cuda_cast<float2>(reinterpret_cast<const nv_bfloat162 *>(y)[i]);
-    } else {
-        return reinterpret_cast<const float2 *>(y)[i];
-    }
-}
-
 template <typename T, typename type_acc, int ncols_dst, int block_size, bool has_fusion = false, bool is_multi_token_id = false,
     typename T_y = float>
 static __global__ void mul_mat_vec_f(
@@ -33,6 +23,7 @@ static __global__ void mul_mat_vec_f(
         const int ids_stride) {
     static_assert(std::is_same_v<T_y, float> || (std::is_same_v<T_y, nv_bfloat16> &&
         (std::is_same_v<T, nv_bfloat16> || std::is_same_v<T, ggml_fp8_e4m3_t>)), "a BF16 src1 needs BF16 or FP8 weights");
+    using T_y2 = std::conditional_t<std::is_same_v<T_y, nv_bfloat16>, nv_bfloat162, float2>; // a pair of src1 values
 
     const T       * GGML_CUDA_RESTRICT x   = x_ptr;
     const T_y     * GGML_CUDA_RESTRICT y   = y_ptr;
@@ -271,6 +262,7 @@ static __global__ void mul_mat_vec_f(
 #endif // FP16_AVAILABLE
         }
     } else if constexpr (std::is_same_v<T, nv_bfloat16>) {
+        const T_y2 * y2 = (const T_y2 *) y;
 //TODO: add support for ggml_cuda_mad for hip_bfloat162
 #if defined(GGML_USE_HIP)
         const int * x2 = (const int *) x;
@@ -290,7 +282,7 @@ static __global__ void mul_mat_vec_f(
             }
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                const float2 tmpy = mmvf_load_y2(y, j*stride_col_y2 + col2);
+                const float2 tmpy = ggml_cuda_cast<float2>(y2[j*stride_col_y2 + col2]);
                 const float tmpx0 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx)[0]);
                 const float tmpx1 = ggml_cuda_cast<float>(reinterpret_cast<const nv_bfloat16 *>(&tmpx)[1]);
                 ggml_cuda_mad(sumf[j], tmpx0, tmpy.x);
@@ -324,7 +316,7 @@ static __global__ void mul_mat_vec_f(
             }
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                const float2 tmpy = mmvf_load_y2(y, j*stride_col_y2 + col2);
+                const float2 tmpy = ggml_cuda_cast<float2>(y2[j*stride_col_y2 + col2]);
                 ggml_cuda_mad(sumf[j], tmpx.x, tmpy.x);
                 ggml_cuda_mad(sumf[j], tmpx.y, tmpy.y);
 
@@ -338,6 +330,7 @@ static __global__ void mul_mat_vec_f(
         }
 #endif
     } else if constexpr (std::is_same_v<T, ggml_fp8_e4m3_t>) {
+        const T_y2 * y2 = (const T_y2 *) y;
         for (int col2 = tid; col2 < ncols2; col2 += block_size) {
             const float2 tmpx = mmvf_load_fp8x2(x, col2);
             float2 tmpx_gate = {};
@@ -348,7 +341,7 @@ static __global__ void mul_mat_vec_f(
             }
 #pragma unroll
             for (int j = 0; j < ncols_dst; ++j) {
-                const float2 tmpy = mmvf_load_y2(y, j*stride_col_y2 + col2);
+                const float2 tmpy = ggml_cuda_cast<float2>(y2[j*stride_col_y2 + col2]);
                 ggml_cuda_mad(sumf[j], tmpx, tmpy);
 
                 if constexpr (has_fusion) {
@@ -893,7 +886,7 @@ void ggml_cuda_op_mul_mat_vec_f(
 }
 
 bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, ggml_type type_src1, int cc, int warp_size, int64_t ne11, bool mul_mat_id) {
-    const ggml_type type = src0->type;
+    const ggml_type type_src0 = src0->type;
     const int64_t * src0_ne = src0->ne;
     const size_t * src0_nb = src0->nb;
 
@@ -901,7 +894,7 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, ggml_type type_src1, in
         return false;
     }
 
-    const size_t ts = ggml_type_size(type);
+    const size_t ts = ggml_type_size(type_src0);
     if (src0_nb[0] != ts) {
         return false;
     }
@@ -911,14 +904,14 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, ggml_type type_src1, in
     }
 
     // MMVF reads a BF16 src1 only for BF16 and FP8 weights
-    if (type_src1 == GGML_TYPE_BF16 && type != GGML_TYPE_BF16 && type != GGML_TYPE_F8_E4M3) {
+    if (type_src1 == GGML_TYPE_BF16 && type_src0 != GGML_TYPE_BF16 && type_src0 != GGML_TYPE_F8_E4M3) {
         return false;
     }
 
     if (mul_mat_id) {
         // FP8 experts on all GPUs, F32/F16/BF16 experts on AMD, and BF16 experts with a BF16 src1, which MMF can not read
         // (with an F32 src1 NVIDIA takes MMF where it supports the experts, otherwise the sorted fallback)
-        switch (type) {
+        switch (type_src0) {
             case GGML_TYPE_F32:
             case GGML_TYPE_F16:
             case GGML_TYPE_BF16:
@@ -930,7 +923,7 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, ggml_type type_src1, in
         }
     }
 
-    switch (type) {
+    switch (type_src0) {
         case GGML_TYPE_F32:
             if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
                 if (ampere_mma_available(cc)) {
@@ -951,7 +944,7 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, ggml_type type_src1, in
             if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
                 const bool src0_small = (src0_ne[1] <= 512 || src0_ne[2]*src0_ne[3] == 1);
                 // MMF needs full row tiles, for other row counts MMVF still beats cuBLAS at small batch size
-                if (src0_small && !ggml_cuda_should_use_mmf(type, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
+                if (src0_small && !ggml_cuda_should_use_mmf(type_src0, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
                 if (ampere_mma_available(cc)) {
@@ -965,7 +958,7 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, ggml_type type_src1, in
                 }
                 return ne11 <= MMVF_MAX_BATCH_SIZE;
             } else if (GGML_CUDA_CC_IS_AMD(cc)) {
-                if (GGML_CUDA_CC_IS_RDNA(cc) && !ggml_cuda_should_use_mmf(type, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
+                if (GGML_CUDA_CC_IS_RDNA(cc) && !ggml_cuda_should_use_mmf(type_src0, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
                 if (fp16_mma_hardware_available(cc)) {
@@ -984,7 +977,7 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, ggml_type type_src1, in
             if (GGML_CUDA_CC_IS_NVIDIA(cc)) {
                 const bool src0_small = (src0_ne[1] <= 512 || src0_ne[2]*src0_ne[3] == 1);
                 // MMF needs full row tiles, for other row counts MMVF still beats cuBLAS at small batch size
-                if (src0_small && !ggml_cuda_should_use_mmf(type, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
+                if (src0_small && !ggml_cuda_should_use_mmf(type_src0, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
                 // MMF tiles 32 rows per block, so a matrix of few rows leaves most SMs idle while MMVF runs a block
@@ -1010,7 +1003,7 @@ bool ggml_cuda_should_use_mmvf(const ggml_tensor * src0, ggml_type type_src1, in
                 }
                 return ne11 <= MMVF_MAX_BATCH_SIZE;
             } else if (GGML_CUDA_CC_IS_AMD(cc)) {
-                if (GGML_CUDA_CC_IS_RDNA(cc) && !ggml_cuda_should_use_mmf(type, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
+                if (GGML_CUDA_CC_IS_RDNA(cc) && !ggml_cuda_should_use_mmf(type_src0, cc, warp_size, src0_ne, src0_nb, ne11, /*mul_mat_id =*/ false)) {
                     return ne11 <= MMVF_MAX_BATCH_SIZE;
                 }
                 if (bf16_mma_hardware_available(cc)) {
