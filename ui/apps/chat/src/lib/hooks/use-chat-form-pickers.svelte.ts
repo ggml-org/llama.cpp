@@ -10,6 +10,7 @@ import {
 	getChatCommands,
 	insertCwdCommand,
 	isCommandDismissed,
+	isMentionDismissed,
 	locateCwdCommand,
 	type MentionDismissSnapshot,
 	removeCommandToken,
@@ -254,10 +255,7 @@ export function useChatFormPickers(opts: UseChatFormPickersOptions) {
 
 		if (token) {
 			// Dismissed token stays literal: don't reopen until it changes.
-			const isDismissedSticky =
-				mentionDismissedSnapshot !== null &&
-				mentionDismissedSnapshot.start === token.start &&
-				mentionDismissedSnapshot.query === token.query;
+			const isDismissedSticky = isMentionDismissed(mentionDismissedSnapshot, token);
 
 			if (!isDismissedSticky) {
 				// Only search once a char follows `@`; a bare `@` is a no-op

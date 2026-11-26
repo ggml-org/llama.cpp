@@ -256,6 +256,7 @@ export { runFolderSearch, runGlobSearch, runGlobSearchWithChildren } from './glo
 // Mention-token detection (for the `@`-triggered file/folder mention picker)
 export {
 	findMentionToken,
+	isMentionDismissed,
 	takeMentionDismissSnapshot,
 	type MentionDismissSnapshot
 } from './mention-token';
