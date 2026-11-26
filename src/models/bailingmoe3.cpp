@@ -189,7 +189,8 @@ ggml_tensor * llama_model_bailingmoe3::graph::build_causal_conv1d(
 
     ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
     ggml_tensor * out = ggml_ssm_conv(ctx0, conv_x, conv_weight);
-    out = ggml_silu(ctx0, ggml_reshape_2d(ctx0, out, d_inner, n_tokens));
+    out = ggml_silu(ctx0, out);
+    out = ggml_reshape_2d(ctx0, out, d_inner, n_tokens);
     return ggml_reshape_4d(ctx0, out, head_dim, n_head, n_seq_tokens, n_seqs);
 }
 
@@ -264,15 +265,15 @@ llama_model_bailingmoe3::graph::graph(const llm_graph_params & params) :
             ggml_tensor * state = build_rs(inp_rs, states_all, hparams.n_embd_s(), n_seqs);
             state = ggml_reshape_4d(ctx0, state, head_dim, head_dim, n_head, n_seqs);
 
-            ggml_tensor * out = ggml_cont(ctx0, build_recurrent_attn(
-                    inp_rs, states_all, q, k, v, gate, beta, state, il));
+            ggml_tensor * out = build_recurrent_attn(
+                    inp_rs, states_all, q, k, v, gate, beta, state, il);
 
             ggml_tensor * out_gate = ggml_mul_mat(ctx0, layer.ssm_g_a, cur);
             out_gate = ggml_reshape_3d(ctx0, out_gate, head_dim, n_head, n_tokens);
             out = ggml_reshape_3d(ctx0, out, head_dim, n_head, n_tokens);
             out = build_norm(out, layer.ssm_o_norm, nullptr, LLM_NORM_RMS, il);
             out = ggml_mul(ctx0, out, ggml_sigmoid(ctx0, out_gate));
-            cur = ggml_mul_mat(ctx0, layer.wo, ggml_cont_2d(ctx0, out, d_inner, n_tokens));
+            cur = ggml_mul_mat(ctx0, layer.wo, ggml_reshape_2d(ctx0, out, d_inner, n_tokens));
             cb(cur, "kda_out", il);
         } else {
             ggml_tensor * attn_input = cur;
@@ -322,7 +323,7 @@ llama_model_bailingmoe3::graph::graph(const llm_graph_params & params) :
             attn_gate = ggml_sigmoid(ctx0, ggml_reshape_3d(ctx0, attn_gate, 1, n_head, n_tokens));
             cur = ggml_reshape_3d(ctx0, cur, v_head_dim, n_head, n_tokens);
             cur = ggml_mul(ctx0, cur, attn_gate);
-            cur = ggml_mul_mat(ctx0, layer.wo, ggml_cont_2d(ctx0, cur, v_head_dim * n_head, n_tokens));
+            cur = ggml_mul_mat(ctx0, layer.wo, ggml_reshape_2d(ctx0, cur, v_head_dim * n_head, n_tokens));
             cb(cur, "mla_out", il);
         }
 
