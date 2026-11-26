@@ -65,11 +65,14 @@ static inline void hex_l2fetch_block(const void * addr, size_t size) {
 
 static inline void hex_l2flush(void * addr, size_t size) {
     if (size == 0) return;
-    const uint32_t s = ((uint32_t) addr) & ~(HEX_L2_LINE_SIZE - 1);
-    const uint32_t e = (((uint32_t) addr) + size + HEX_L2_LINE_SIZE - 1) & ~(HEX_L2_LINE_SIZE - 1);
-    for (uint32_t i = s; i < e; i += HEX_L2_LINE_SIZE) {
+    // Step by 64B (L1D line size on v73+ and L2 line size on v73) so no L1D lines are skipped.
+    const uint32_t line = 64;
+    const uint32_t s = ((uint32_t) addr) & ~(line - 1);
+    const uint32_t e = (((uint32_t) addr) + size + line - 1) & ~(line - 1);
+    for (uint32_t i = s; i < e; i += line) {
         Q6_dccleaninva_A((void *) i);
     }
+    asm volatile(" syncht\n" : : : "memory");
 }
 
 static inline void hex_pause() {
