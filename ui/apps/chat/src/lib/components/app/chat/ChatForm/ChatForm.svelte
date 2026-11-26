@@ -976,7 +976,11 @@
 		></div>
 	{/if}
 
-	<div class="flex flex-wrap items-center gap-x-1 self-start">
+	<!-- The chips sit under the card. On a new chat, where the page centres the form, they
+	     hang below it and take no room: the card stays where it is as they come and go -->
+	<div
+		class="flex flex-wrap items-center gap-x-1 self-start md:group-data-[chat-form-lifted]/chat-form-host:absolute md:group-data-[chat-form-lifted]/chat-form-host:top-full"
+	>
 		{#if showWorkingDirectory}
 			<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
 			<ChatFormCurrentWorkingDirectory
