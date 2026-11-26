@@ -1,7 +1,9 @@
 import { GLOB, SEARCH } from '#lib/constants/index.ts';
 import {
 	buildCaseInsensitiveGlob,
+	buildFuzzyGlobs,
 	buildGlobSearchArgs,
+	fuzzyDistance,
 	highlightMatch,
 	joinPath,
 	rankEntries,
@@ -209,5 +211,34 @@ describe('toHomeRelativeQuery', () => {
 		expect(args.include).toBe(buildCaseInsensitiveGlob('proj'));
 		expect(args.maxDepth).toBe(SEARCH.PATH_NAV_MAX_DEPTH);
 		expect(args.last).toBe('proj');
+	});
+});
+
+describe('buildFuzzyGlobs', () => {
+	it('swaps each pair of neighbouring characters for a wildcard', () => {
+		expect(buildFuzzyGlobs('lama')).toEqual(['*[mM][aA]*', '*[lL]*[aA]*', '*[lL][aA]*']);
+	});
+
+	it('skips queries too short or too long to match loosely', () => {
+		expect(buildFuzzyGlobs('abc')).toEqual([]);
+		expect(buildFuzzyGlobs('a'.repeat(SEARCH.FUZZY_MAX_QUERY_LENGTH + 1))).toEqual([]);
+	});
+});
+
+describe('fuzzyDistance', () => {
+	it('is zero when the text holds the query, in any case', () => {
+		expect(fuzzyDistance('Llama.cpp', 'llama')).toBe(0);
+	});
+
+	it('counts a wrong, missing, extra or swapped character as one edit', () => {
+		expect(fuzzyDistance('llama.cpp', 'llana')).toBe(1);
+		expect(fuzzyDistance('llama.cpp', 'lama.')).toBe(0);
+		expect(fuzzyDistance('llama.cpp', 'llma.')).toBe(1);
+		expect(fuzzyDistance('llama.cpp', 'llamma')).toBe(1);
+		expect(fuzzyDistance('llama.cpp', 'lalma')).toBe(1);
+	});
+
+	it('grows with every further edit', () => {
+		expect(fuzzyDistance('documents', 'llama')).toBeGreaterThan(SEARCH.FUZZY_MAX_EDITS);
 	});
 });

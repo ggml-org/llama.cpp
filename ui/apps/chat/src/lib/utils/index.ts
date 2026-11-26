@@ -236,6 +236,8 @@ export {
 	splitPathQuery,
 	toHomeRelativeQuery,
 	buildCaseInsensitiveGlob,
+	buildFuzzyGlobs,
+	fuzzyDistance,
 	buildGlobSearchArgs,
 	rankEntries,
 	joinPath,
@@ -246,7 +248,7 @@ export {
 export { resolveTabTarget, resolveTabView, type TabView } from './chat-tabs';
 
 // Shared `file_glob_search` runner with a short-lived result cache
-export { runGlobSearch, runGlobSearchWithChildren } from './glob-search';
+export { runFolderSearch, runGlobSearch, runGlobSearchWithChildren } from './glob-search';
 
 // Mention-token detection (for the `@`-triggered file/folder mention picker)
 export {

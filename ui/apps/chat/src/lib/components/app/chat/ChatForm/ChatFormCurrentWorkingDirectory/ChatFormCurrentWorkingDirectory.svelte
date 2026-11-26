@@ -14,17 +14,14 @@
 		SEARCH,
 		UI_DATA_ATTRS
 	} from '#lib/constants/index.ts';
-	import { BuiltInTool, GlobSearchType, KeyboardKey, ToolSource } from '#lib/enums/index.ts';
+	import { BuiltInTool, KeyboardKey, ToolSource } from '#lib/enums/index.ts';
 	import { useDebouncedSearch } from '#lib/hooks/use-debounced-search.svelte.ts';
 	import { usePickerNavigation } from '#lib/hooks/use-picker-navigation.svelte.ts';
 	import { useScrollActiveRow } from '#lib/hooks/use-scroll-active-row.svelte.ts';
 	import { ToolsService } from '#lib/services/tools.service.ts';
 	import { conversationsStore, deviceStore, toolsStore } from '#lib/stores/index.ts';
-	import {
-		abbreviateHome,
-		runGlobSearchWithChildren,
-		toHomeRelativeQuery
-	} from '#lib/utils/index.ts';
+	import type { GlobSearchChildResult } from '#lib/types/glob.js';
+	import { abbreviateHome, runFolderSearch, toHomeRelativeQuery } from '#lib/utils/index.ts';
 	import { page } from '$app/state';
 	import { cubicInOut } from 'svelte/easing';
 
@@ -165,32 +162,13 @@
 				return;
 			}
 
-			try {
-				// Generous limit: ranking is client-side, only the top
-				// MAX_RESULTS_SHOWN are shown.
-				// A plain query navigates home as if typed after `~/`; a query
-				// starting from a root or `~` navigates the absolute tree.
-				const res = await runGlobSearchWithChildren(
-					toHomeRelativeQuery(trimmed, homeBase),
-					homeBase ?? HOME_TILDE,
-					SEARCH.MAX_DEPTH,
-					SEARCH.LIMIT,
-					signal,
-					{ type: GlobSearchType.DIR }
-				);
-
+			// A stale search must not touch the list: the next one is already running.
+			const show = (res: GlobSearchChildResult) => {
 				if (!isCurrent()) return;
-
-				if (res.error) {
-					queryResults = [];
-					nav.reset(-1);
-					searchError = res.error;
-
-					return;
-				}
 
 				searchScope = res.exactDir ?? res.args.path;
 				queryResults = res.entries.map((e) => e.path).slice(0, SEARCH.MAX_RESULTS_SHOWN);
+				searchError = res.error ?? null;
 
 				if (queryResults.length > 0) {
 					nav.reset(0);
@@ -198,8 +176,10 @@
 				} else {
 					nav.reset(-1);
 				}
+			};
 
-				searchError = null;
+			try {
+				show(await runFolderSearch(trimmed, homeBase, signal, show));
 			} catch (err) {
 				if (!isCurrent() || signal.aborted) return;
 
