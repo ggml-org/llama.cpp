@@ -404,6 +404,7 @@ static ggml_cuda_device_info ggml_cuda_init() {
         info.default_tensor_split[id] = total_vram;
         total_vram += device_vram;
         info.devices[id].integrated = false; // Temporarily disabled due to issues with corrupted output (e.g. #15034)
+        info.devices[id].type       = prop.integrated ? GGML_BACKEND_DEVICE_TYPE_IGPU : GGML_BACKEND_DEVICE_TYPE_GPU;
         info.devices[id].nsm        = prop.multiProcessorCount;
         info.devices[id].smpb       = prop.sharedMemPerBlock;
         info.devices[id].warp_size  = prop.warpSize;
@@ -3988,12 +3989,8 @@ static void ggml_backend_cuda_device_get_memory(ggml_backend_dev_t dev, size_t *
 static enum ggml_backend_dev_type ggml_backend_cuda_device_get_type(ggml_backend_dev_t dev) {
     ggml_backend_cuda_device_context * ctx = (ggml_backend_cuda_device_context *) dev->context;
 
-    cudaDeviceProp prop;
-    CUDA_CHECK(cudaGetDeviceProperties(&prop, ggml_cuda_get_physical_device(ctx->device)));
-
-    return prop.integrated
-        ? GGML_BACKEND_DEVICE_TYPE_IGPU
-        : GGML_BACKEND_DEVICE_TYPE_GPU;
+    // cached at init: cudaGetDeviceProperties can take ~1 ms per call with the CUDA 12 runtime
+    return ggml_cuda_info().devices[ctx->device].type;
 }
 
 static void ggml_backend_cuda_device_get_props(ggml_backend_dev_t dev, ggml_backend_dev_props * props) {
