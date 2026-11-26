@@ -2,13 +2,14 @@
 #include "llama.h"
 #include "ggml.h"
 
+#include <cmath>
+#include <cstdio>
 #include <string>
 #include <vector>
-#include <math.h>
 
 namespace mean {
 
-static void run(
+static bool run(
         const std::vector<struct ggml_tensor *> & v_input, // shape of v_input[0]: [n_embd, n_samples]
         const std::vector<struct ggml_tensor *> & v_output) {
     printf("%s: Running mean...\n", __func__);
@@ -35,7 +36,11 @@ static void run(
             float f = ggml_get_f32_1d(ctrl_out, i);
             norm += f*f;
         }
-        norm = sqrt(norm);
+        norm = std::sqrt(norm);
+        if (!(norm > 0.0f && std::isfinite(norm))) {
+            fprintf(stderr, "%s: zero or non-finite mean norm for direction.%zu\n", __func__, il + 1);
+            return false;
+        }
         for (int i = 0; i < ggml_nelements(ctrl_out); i++) {
             float f = ggml_get_f32_1d(ctrl_out, i);
             ggml_set_f32_1d(ctrl_out, i, f / norm);
@@ -43,6 +48,7 @@ static void run(
 
         printf("%s: Done layer %d / %d\n", __func__, (int) il+1, (int) v_input.size());
     }
+    return true;
 }
 
 }

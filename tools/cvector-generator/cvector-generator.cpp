@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <climits>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -59,18 +60,16 @@ struct callback_data {
     ggml_context * ctx_ggml = nullptr;   // holds v_pos, v_neg, v_diff_filtered
 
     int n_layers = 0;
-    int n_tokens = 0;
+    int n_embd = 0;
+    int64_t n_tokens = 0;
     bool is_eval_pos = true;
 
-    // each element of the vector correspond to one layer
-    std::vector<struct ggml_tensor *> v_pos; // vector of matrices of size [n_embd, n_tokens]
-    std::vector<struct ggml_tensor *> v_neg; // vector of matrices of size [n_embd, n_tokens]
+    // Slot il - 1 stores the capture for block il.
+    std::vector<struct ggml_tensor *> v_pos;
+    std::vector<struct ggml_tensor *> v_neg;
     std::vector<struct ggml_tensor *> v_diff_filtered;   // vector of matrices of size [n_embd, n_nonzero_rows]. NOTE: n_nonzero_rows maybe different for each layer
 
-    // save a tensor into either v_pos or v_neg (decided by is_eval_pos)
-    void save_tensor_for_layer(struct ggml_tensor * t) {
-        GGML_ASSERT(t->type == GGML_TYPE_F32);
-
+    void save_tensor_for_layer(struct ggml_tensor * t, int il) {
         if (ctx_ggml == nullptr) {
             // alloc a new ctx_ggml if needed
             struct ggml_init_params params_ggml = {
@@ -81,37 +80,37 @@ struct callback_data {
             ctx_ggml = ggml_init(params_ggml);
         }
 
-        // copy tensor data
-        auto n_bytes = ggml_nbytes(t);
-        struct ggml_tensor * t_layer = ggml_new_tensor_2d(ctx_ggml, t->type, t->ne[0], t->ne[1]);
-        t_layer->data = malloc(n_bytes); // TODO @ngxson : get rid of this malloc somehow
-        ggml_backend_tensor_get(t, t_layer->data, 0, n_bytes);
-        ggml_set_name(t_layer, ggml_get_name(t));
-        //print_debug_tensor(t_layer);
-
-        if (is_eval_pos) {
-            v_pos.push_back(t_layer);
-        } else {
-            v_neg.push_back(t_layer);
+        auto & t_layer = (is_eval_pos ? v_pos : v_neg)[il - 1];
+        if (!t_layer) {
+            t_layer = ggml_new_tensor_2d(ctx_ggml, t->type, t->ne[0], t->ne[1]);
+            t_layer->data = malloc(ggml_nbytes(t_layer));
+            ggml_set_name(t_layer, ggml_get_name(t));
         }
+        // BitNet can name both sides of the steering add. The later node is the block output.
+        // Gemma 3n exposes [n_embd, n_tokens, n_altup]; copy only the first [n_embd, n_tokens] plane.
+        GGML_ASSERT(t_layer->ne[0] == t->ne[0] && t_layer->ne[1] == t->ne[1]);
+        ggml_backend_tensor_get(t, t_layer->data, 0, ggml_nbytes(t_layer));
     }
 
     // calculate diff (v_pos - v_neg) and place the result back to v_pos
     // all zero rows in the diff tensor will also be removed
-    // NOTE: final layer is ignored. we only have (n_layers - 1) to process
-    std::vector<struct ggml_tensor *> calc_diff() {
-        for (float il = 0; il < v_pos.size(); il++) {
-            float * a = (float *) v_pos[il]->data;
-            float * b = (float *) v_neg[il]->data;
-            size_t n_elem = ggml_nelements(v_pos[il]);
+    bool calc_diff() {
+        for (size_t i = 0; i < v_pos.size(); ++i) {
+            auto * pos = v_pos[i];
+            auto * neg = v_neg[i];
+            if (!pos || !neg || !ggml_are_same_shape(pos, neg)) {
+                fprintf(stderr, "%s: missing or mismatched l_out-%zu captures\n", __func__, i + 1);
+                return false;
+            }
+            float * a = (float *) pos->data;
+            const float * b = (const float *) neg->data;
+            const size_t n_elem = ggml_nelements(pos);
             for (size_t j = 0; j < n_elem; j++) {
                 a[j] -= b[j];
             }
-            //print_debug_tensor(v_pos[i]);
-            auto diff_filtered = filter_nonzero_rows(v_pos[il]);
-            v_diff_filtered.push_back(diff_filtered);
+            v_diff_filtered.push_back(filter_nonzero_rows(pos));
         }
-        return v_diff_filtered; // for convenient, we return the result std::vector
+        return true;
     }
 
     // delete zero rows from a given 2D tensor
@@ -121,7 +120,7 @@ struct callback_data {
             // check if given row containing all zero elements
             int n_cols = t->ne[0]; // hint: should be equal to n_embd
             for (int col = 0; col < n_cols; ++col) {
-                if (ggml_get_f32_nd(t, col, row, 0, 0) > eps) {
+                if (std::fabs(ggml_get_f32_nd(t, col, row, 0, 0)) > eps) {
                     return false;
                 }
             }
@@ -138,7 +137,9 @@ struct callback_data {
         int n_nonzero_rows = rows_to_copy.size();
         //printf("n_nonzero_rows: %d\n", n_nonzero_rows);
         int n_embd = a->ne[0];
-        GGML_ASSERT(n_nonzero_rows > 0);
+        if (n_nonzero_rows == 0) {
+            return nullptr;
+        }
 
         // diff_filtered: [n_embd, n_nonzero_rows]
         struct ggml_tensor * diff_filtered = ggml_new_tensor_2d(
@@ -162,11 +163,11 @@ struct callback_data {
 
     // we don't implement destructor, because we want to reuse callback_data. we just want to free the tensors
     void reset() {
-        for (auto ptr : v_pos) free(ptr->data);
-        for (auto ptr : v_neg) free(ptr->data);
-        for (auto ptr : v_diff_filtered) free(ptr->data);
-        v_pos.clear();
-        v_neg.clear();
+        for (auto ptr : v_pos)           if (ptr) free(ptr->data);
+        for (auto ptr : v_neg)           if (ptr) free(ptr->data);
+        for (auto ptr : v_diff_filtered) if (ptr) free(ptr->data);
+        std::fill(v_pos.begin(), v_pos.end(), nullptr);
+        std::fill(v_neg.begin(), v_neg.end(), nullptr);
         v_diff_filtered.clear();
         if (ctx_ggml) {
             ggml_free(ctx_ggml);
@@ -189,7 +190,7 @@ struct train_context {
     std::vector<std::string> negative_entries;
 
     // each element of the vector correspond to one layer
-    // NOTE: the last layer is discard. therefore, we will have (n_layers - 1) elements here
+    // Layer 0 has no control vector, so slot il - 1 stores the data for layer il.
     // NOTE (2): v_diff is transposed from v_diff_tmp
     std::vector<struct ggml_tensor *> v_diff;  // vector of matrices of size [m, n_embd] where m ~ n_tokens * n_completions (v_diff contains no zero-rows)
     std::vector<struct ggml_tensor *> v_final; // vector of vectors of size [n_embd] to be written to file
@@ -221,6 +222,9 @@ struct train_context {
         GGML_ASSERT((int) diff_filtered.size() == n_layers - 1);
         for (int il = 0; il < n_layers - 1; il++) {
             auto t = diff_filtered[il];
+            if (!t) {
+                continue;
+            }
             auto & diff_tmp = v_diff_tmp[il];
             size_t curr_size = diff_tmp.size();
             diff_tmp.resize(curr_size + ggml_nbytes(t));
@@ -230,13 +234,17 @@ struct train_context {
 
     // build the v_diff tensors from v_diff_tmp (v_diff need to be transposed)
     // TODO @ngxson : maybe add option NOT to transpose v_diff; will be useful for "mean" method
-    void build_v_diff(bool transpose) {
+    bool build_v_diff(bool transpose) {
         printf("build_v_diff\n");
         for (int il = 0; il < n_layers - 1; il++) {
             auto & diff_tmp = v_diff_tmp[il];
             int n_elem = diff_tmp.size() / sizeof(float);
             GGML_ASSERT(n_elem % n_embd == 0);
             int n_rows = n_elem / n_embd;
+            if (n_rows == 0) {
+                fprintf(stderr, "%s: no nonzero differences for layer %d\n", __func__, il + 1);
+                return false;
+            }
             struct ggml_tensor * diff = transpose
                 ? ggml_new_tensor_2d(ctx_ggml, GGML_TYPE_F32, n_rows, n_embd)
                 : ggml_new_tensor_2d(ctx_ggml, GGML_TYPE_F32, n_embd, n_rows);
@@ -260,6 +268,7 @@ struct train_context {
             // free memory of diff_tmp
             diff_tmp.resize(0);
         }
+        return true;
     }
 
     ~train_context() {
@@ -273,6 +282,8 @@ struct train_context {
 struct tokenized_prompt {
     std::vector<llama_token> tokens_pos;
     std::vector<llama_token> tokens_neg;
+    size_t n_tokens_pos;
+    size_t n_tokens_neg;
     size_t max_seq_len;
 
     tokenized_prompt(llama_context * ctx, std::string pos, std::string neg) {
@@ -281,15 +292,24 @@ struct tokenized_prompt {
         const bool add_bos = llama_vocab_get_add_bos(vocab);
         tokens_pos = common_tokenize(ctx, pos, add_bos, true);
         tokens_neg = common_tokenize(ctx, neg, add_bos, true);
-        max_seq_len = std::max(tokens_pos.size(), tokens_neg.size());
+        n_tokens_pos = tokens_pos.size();
+        n_tokens_neg = tokens_neg.size();
+        max_seq_len = std::max(n_tokens_pos, n_tokens_neg);
         padding_seq(ctx, tokens_pos, max_seq_len);
         padding_seq(ctx, tokens_neg, max_seq_len);
     }
 
     void padding_seq(llama_context * ctx, std::vector<llama_token> & tokens, size_t len) {
+        if (tokens.size() >= len) {
+            return;
+        }
         // TODO: customize padding token
         std::vector<llama_token> pad_tokens = common_tokenize(ctx, " ", false);
-        llama_token pad_tok = pad_tokens.back();
+        const llama_vocab * vocab = llama_model_get_vocab(llama_get_model(ctx));
+        llama_token pad_tok = !pad_tokens.empty() ? pad_tokens.back() : llama_vocab_pad(vocab);
+        if (pad_tok == LLAMA_TOKEN_NULL) {
+            pad_tok = llama_vocab_eos(vocab);
+        }
         while (tokens.size() < len) {
             tokens.push_back(pad_tok);
         }
@@ -328,25 +348,28 @@ static std::vector<std::string> ctrlvec_load_prompt_file(std::string path, bool 
 
 static bool cb_eval(struct ggml_tensor * t, bool ask, void * user_data) {
     auto * cb_data = (callback_data *) user_data;
-    static const char * l_out_name = "l_out";
-    const bool is_l_out = strncmp(t->name, l_out_name, strlen(l_out_name)) == 0;
-
+    int il;
+    char suffix;
+    const bool capture = std::sscanf(t->name, "l_out-%d%c", &il, &suffix) == 1 &&
+                         il > 0 && il < cb_data->n_layers &&
+                         t->type == GGML_TYPE_F32 && t->ne[3] == 1 && ggml_is_contiguous(t) &&
+                         t->ne[0] == cb_data->n_embd && (t->ne[1] == cb_data->n_tokens || t->ne[1] == 1);
     if (ask) {
-        return is_l_out;
+        return capture;
     }
-
-    if (!is_l_out || t->ne[1] != cb_data->n_tokens) {
-        return true;
+    if (capture) {
+        cb_data->save_tensor_for_layer(t, il);
     }
-
-    // save the tensor to current context
-    cb_data->save_tensor_for_layer(t);
     return true;
 }
 
-static bool get_hidden_layers(llama_context * ctx, std::vector<llama_token> & tokens) {
+static bool get_hidden_layers(llama_context * ctx, const std::vector<llama_token> & tokens, size_t n_real_tokens) {
     llama_memory_clear(llama_get_memory(ctx), true);
     common_batch batch = common_batch_get_one(ctx, tokens);
+    if (n_real_tokens > 0 && n_real_tokens < tokens.size()) {
+        batch.set_output((int32_t) tokens.size() - 1, false);
+        batch.set_output((int32_t) n_real_tokens - 1, true);
+    }
     if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
         fprintf(stderr, "%s : failed to eval\n", __func__);
         return false;
@@ -424,6 +447,9 @@ int main(int argc, char ** argv) {
 
     llama_print_build_info(llama_version());
     llama_backend_init();
+    struct backend_guard {
+        ~backend_guard() { llama_backend_free(); }
+    } llama_guard;
     llama_numa_init(params.numa);
 
     // load the model to get hparams
@@ -431,10 +457,22 @@ int main(int argc, char ** argv) {
 
     auto * model = llama_init->model();
     auto * ctx   = llama_init->context();
+    if (!model || !ctx) {
+        return 1;
+    }
 
     // int n_ctx = llama_n_ctx(ctx);
     int n_layers = llama_model_n_layer(model);
     int n_embd = llama_model_n_embd(model);
+    if (n_layers < 2) {
+        fprintf(stderr, "control vector generation requires at least two layers\n");
+        return 1;
+    }
+
+    cb_data.n_layers = n_layers;
+    cb_data.n_embd = n_embd;
+    cb_data.v_pos.resize(n_layers - 1);
+    cb_data.v_neg.resize(n_layers - 1);
 
     // get model hint param (a.k.a model arch name)
     char model_hint[128];
@@ -444,23 +482,32 @@ int main(int argc, char ** argv) {
     train_context ctx_train(n_embd, n_layers);
 
     // load and prepare entries for training
-    prepare_entries(params, ctx_train);
+    if (prepare_entries(params, ctx_train) != 0) {
+        return 1;
+    }
 
     // we have to pretokenize everything because otherwise we don't know how much overhead to allocate ctx_diffs_wrapped
     std::vector<tokenized_prompt> tokenized_prompts;
     size_t n_total_tokens = 0;
     for (size_t i = 0; i < ctx_train.positive_entries.size(); ++i) {
         tokenized_prompt t(ctx, ctx_train.positive_entries[i], ctx_train.negative_entries[i]);
+        if (t.n_tokens_pos == 0 || t.n_tokens_neg == 0) {
+            fprintf(stderr, "prompt pair %zu produced an empty token sequence\n", i + 1);
+            return 1;
+        }
         n_total_tokens += 2 * t.max_seq_len;
         tokenized_prompts.push_back(std::move(t));
     }
 
     std::cout << "n_total_tokens: " << n_total_tokens << std::endl;
 
-    for(size_t i = 0; i < ctx_train.positive_entries.size(); ++i) {
-        bool success = false;
-        tokenized_prompt t = tokenized_prompts[i];
-        cb_data.n_layers = n_layers;
+    for (size_t i = 0; i < ctx_train.positive_entries.size(); ++i) {
+        const auto & t = tokenized_prompts[i];
+        if (t.max_seq_len > llama_n_ubatch(ctx)) {
+            fprintf(stderr, "prompt pair %zu exceeds the effective microbatch size (%u), increase -ub/-b/-c\n",
+                    i + 1, llama_n_ubatch(ctx));
+            return 1;
+        }
         cb_data.n_tokens = t.max_seq_len;
 
         printf("Evaluating prompt[%d/%d]: \"%s\" - \"%s\" (%d tokens)\n",
@@ -470,18 +517,14 @@ int main(int argc, char ** argv) {
             (int) t.max_seq_len);
 
         cb_data.is_eval_pos = true;
-        success = get_hidden_layers(ctx, t.tokens_pos);
-        if (!success) break;
-
+        const bool pos_ok = get_hidden_layers(ctx, t.tokens_pos, t.n_tokens_pos);
         cb_data.is_eval_pos = false;
-        success = get_hidden_layers(ctx, t.tokens_neg);
-        if (!success) break;
+        if (!pos_ok || !get_hidden_layers(ctx, t.tokens_neg, t.n_tokens_neg) || !cb_data.calc_diff()) {
+            cb_data.reset();
+            return 1;
+        }
 
-        // calculate diff and remove all zero rows
-        auto v_diff_filtered = cb_data.calc_diff();
-
-        // save & concat the filtered v_diff to ctx_train
-        ctx_train.concat_diff_tmp(v_diff_filtered);
+        ctx_train.concat_diff_tmp(cb_data.v_diff_filtered);
 
         // reset for next iteration
         cb_data.reset();
@@ -489,11 +532,14 @@ int main(int argc, char ** argv) {
 
     // done with the model, we can now free it to make gain some memory
     printf("Done evaluate prompts, unload model...\n");
+    llama_init.reset();
 
     bool use_pca = params.cvector_dimre_method == DIMRE_METHOD_PCA;
 
     // prepare ctx_train for PCA
-    ctx_train.build_v_diff(use_pca);
+    if (!ctx_train.build_v_diff(use_pca)) {
+        return 1;
+    }
 
     if (use_pca) {
         // run PCA
@@ -504,13 +550,13 @@ int main(int argc, char ** argv) {
         PCA::run_pca(pca_params, ctx_train.v_diff, ctx_train.v_final);
     } else {
         // run mean
-        mean::run(ctx_train.v_diff, ctx_train.v_final);
+        if (!mean::run(ctx_train.v_diff, ctx_train.v_final)) {
+            return 1;
+        }
     }
 
     // write output vectors to gguf
     export_gguf(ctx_train.v_final, params.out_file, model_hint);
-
-    llama_backend_free();
 
     return 0;
 }

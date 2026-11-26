@@ -22,7 +22,7 @@ static void print_debug_tensor(struct ggml_tensor * t, bool with_data = true) {
     printf("%s: %s (%s): [%d, %d]\n", __func__, t->name, ggml_type_name(t->type), (int) t->ne[0], (int) t->ne[1]);
     if (!with_data) return;
     printf("%s: %s[0] = [", __func__, t->name);
-    for (size_t i = 0; i <= DEBUG_POS; i++) {
+    for (int i = 0; i <= DEBUG_POS && i < t->ne[0]; ++i) {
         printf(" %f,", ggml_get_f32_nd(t, i, 0, 0, 0));
     }
     printf(" ... ]\n");
