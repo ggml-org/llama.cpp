@@ -4,6 +4,9 @@ static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& 
     vk::PhysicalDeviceProperties props = device.getProperties();
 
     if (props.vendorID == VK_VENDOR_ID_AMD) {
+        if (props.apiVersion < VK_API_VERSION_1_3) {
+            return vk_device_architecture::AMD_GCN;
+        }
         const std::vector<vk::ExtensionProperties> ext_props = device.enumerateDeviceExtensionProperties();
 
         bool amd_shader_core_properties = false;
