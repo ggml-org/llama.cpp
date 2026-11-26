@@ -105,6 +105,7 @@ jobs:
 
       - name: Build HIP kernel resource metrics
         id: vgpr_check
+        shell: bash
         run: |
           cmake -B build -S . \
             -DCMAKE_HIP_COMPILER="$(hipconfig -l)/clang" \
@@ -114,11 +115,12 @@ jobs:
             -DCMAKE_HIP_FLAGS="-Xarch_device -fsave-optimization-record=yaml -Xarch_device -foptimization-record-passes=kernel-resource-usage" \
             -DCMAKE_BUILD_TYPE=Release
           cd build
-          CCACHE_DISABLE=1 make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
+          set -o pipefail
+          CCACHE_DISABLE=1 make -j $(nproc) ggml-hip 2>&1 | tee metrics.log | sed -e '/Rpass-analysis=kernel-resource-usage/d' -e '/remark:/d' -e '/^$/d'
           echo "Optimization record files:"
-          find . -type f -name '*.opt.yaml' | head -n 10
+          find . -type f -name '*.opt.yaml' | sed -n '1,10p'
           echo "GPU kernel remarks in YAML:"
-          grep -rl --include='*.opt.yaml' 'kernel-resource-usage' . | head -n 10 || true
+          grep -rl --include='*.opt.yaml' 'kernel-resource-usage' . | sed -n '1,10p' || true
           echo "First YAML record:"
           first_yaml=$(find ggml/src/ggml-hip -type f -name '*.opt.yaml' -print -quit)
           if [ -n "$first_yaml" ]; then head -n 35 "$first_yaml"; fi
@@ -169,6 +171,7 @@ jobs:
 
       - name: Build master metrics baseline
         if: ${{ github.event_name == 'pull_request' && steps.baseline_cache.outputs.cache-hit != 'true' }}
+        shell: bash
         run: |
           cd hip-baseline
           cmake -B build -S . \
@@ -179,7 +182,8 @@ jobs:
             -DCMAKE_HIP_FLAGS="-Xarch_device -fsave-optimization-record=yaml -Xarch_device -foptimization-record-passes=kernel-resource-usage" \
             -DCMAKE_BUILD_TYPE=Release
           cd build
-          CCACHE_DISABLE=1 make -j $(nproc) 2>&1 | tee metrics.log | grep -v 'Rpass-analysis=kernel-resource-usage\|remark:\|^$'
+          set -o pipefail
+          CCACHE_DISABLE=1 make -j $(nproc) ggml-hip 2>&1 | tee metrics.log | sed -e '/Rpass-analysis=kernel-resource-usage/d' -e '/remark:/d' -e '/^$/d'
           mkdir -p ../../hip-baseline-metrics
           find ggml/src/ggml-hip -type f -name '*.opt.yaml' -exec cp --parents {} ../../hip-baseline-metrics/ \;
 
