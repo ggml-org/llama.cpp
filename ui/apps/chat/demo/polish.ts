@@ -48,6 +48,11 @@ const BLUR_SAMPLES = 12;
 const SHUTTER = 0.5;
 const SHADOW_Y_U = 0.5;
 const SHADOW_BLUR_U = 1.6;
+/** The shadow stops growing with the zoom here, so a close-up keeps a soft edge, not a cloud. */
+const SHADOW_MAX_BLUR_PX = 120;
+const SHADOW_COLOR = 'rgb(0 0 0 / 0.18)';
+/** Points along each squircle corner. */
+const SQUIRCLE_STEPS = 24;
 const JPEG_QUALITY = 95;
 /** The stage page, the brand's files and the recorded frames are served from here. */
 const STAGE_ORIGIN = 'http://demo.invalid';
@@ -234,7 +239,7 @@ function stageHtml(layout: Layout, dark: boolean): string {
 		<style>
 			body { position: relative; overflow: hidden; margin: 0; width: ${size.width}px; height: ${size.height}px; --u: ${u}px; }
 			#scene, #logo { position: absolute; inset: 0; }
-			#layers canvas { position: absolute; ${phone ? 'corner-shape: squircle;' : ''} }
+			#window { position: absolute; inset: 0; }
 			#caption { position: absolute; left: 50%; bottom: calc(var(--u) * ${MARGIN_U}); display: flex; align-items: center;
 				box-sizing: border-box; height: calc(var(--u) * ${CAPTION_HEIGHT_U}); padding: 0 calc(var(--u) * ${CAPTION_PAD_U});
 				max-width: ${maxWidth}px; overflow: hidden; border-radius: 999px; background: var(--p-solid);
@@ -244,10 +249,11 @@ function stageHtml(layout: Layout, dark: boolean): string {
 		</style>
 		<body class="ground ground-${ground}">
 			<div id="scene">
-				<div id="layers" data-left="${left}" data-top="${top}" data-width="${width}" data-height="${height}"
-					data-radius="${radius}" data-shadow-y="${SHADOW_Y_U * u}" data-shadow-blur="${SHADOW_BLUR_U * u}">
-					${'<canvas></canvas>'.repeat(BLUR_SAMPLES)}
-				</div>
+				<canvas id="window" width="${size.width}" height="${size.height}" data-left="${left}" data-top="${top}"
+					data-width="${width}" data-height="${height}" data-radius="${radius}" data-squircle="${phone}"
+					data-shadow-y="${SHADOW_Y_U * u}" data-shadow-blur="${SHADOW_BLUR_U * u}"
+					data-shadow-max-blur="${SHADOW_MAX_BLUR_PX}" data-shadow-color="${SHADOW_COLOR}"
+					data-squircle-steps="${SQUIRCLE_STEPS}"></canvas>
 				<div id="caption" data-font="${CAPTION_FONT_U * u}" data-min-font="${CAPTION_MIN_FONT_U * u}"
 					data-rise="${CAPTION_RISE_U * u}"></div>
 			</div>
@@ -271,48 +277,90 @@ async function drawFrame(shot: Shot): Promise<void> {
 	}
 
 	const image = stage.demoImage!;
-	const box = { ...document.getElementById('layers')!.dataset } as Record<string, string>;
-	const [left, top, width, height, radius, shadowY, shadowBlur] = [
+	const canvas = document.querySelector<HTMLCanvasElement>('#window')!;
+	const box = { ...canvas.dataset } as Record<string, string>;
+	const [left, top, width, height, radius, shadowY, shadowBlur, shadowMaxBlur, steps] = [
 		'left',
 		'top',
 		'width',
 		'height',
 		'radius',
 		'shadowY',
-		'shadowBlur'
+		'shadowBlur',
+		'shadowMaxBlur',
+		'squircleSteps'
 	].map((key) => Number(box[key]));
+	const squircle = box.squircle === 'true';
+	// a phone's corners are squircles, |x|^4 + |y|^4 = r^4, as CSS draws corner-shape: squircle
+	const outline = (x: number, y: number, w: number, h: number, r: number) => {
+		const path = new Path2D();
 
-	// one copy of the window per camera position, each at 1/n over the ones before, which leaves
-	// their mean: the motion blur. A still frame shows one copy. Each is laid out where the camera
-	// puts it rather than scaled with a transform, as Chromium cuts a scaled shadow into tiles
-	document.querySelectorAll<HTMLCanvasElement>('#layers canvas').forEach((canvas, i) => {
-		const camera = shot.cameras[i];
+		if (!squircle) {
+			path.roundRect(x, y, w, h, r);
 
-		canvas.style.display = camera ? '' : 'none';
-
-		if (!camera) return;
-
-		// drawn at the size it was recorded at, so a zoom stays sharp
-		if (canvas.dataset.frame !== shot.frame) {
-			if (canvas.width !== image.width)
-				Object.assign(canvas, { height: image.height, width: image.width });
-
-			canvas.getContext('2d')!.drawImage(image, 0, 0);
-			canvas.dataset.frame = shot.frame;
+			return path;
 		}
 
-		const { scale } = camera;
+		const corners = [
+			[x + w - r, y + r, -Math.PI / 2],
+			[x + w - r, y + h - r, 0],
+			[x + r, y + h - r, Math.PI / 2],
+			[x + r, y + r, Math.PI]
+		];
 
-		Object.assign(canvas.style, {
-			borderRadius: `${radius * scale}px`,
-			boxShadow: `0 ${shadowY * scale}px ${shadowBlur * scale}px rgb(0 0 0 / 0.18)`,
-			height: `${height * scale}px`,
-			left: `${camera.x + left * scale}px`,
-			opacity: String(1 / (i + 1)),
-			top: `${camera.y + top * scale}px`,
-			width: `${width * scale}px`
+		for (const [cx, cy, from] of corners) {
+			for (let step = 0; step <= steps; step++) {
+				const angle = from + (step / steps) * (Math.PI / 2);
+				const [cos, sin] = [Math.cos(angle), Math.sin(angle)];
+
+				path.lineTo(
+					cx + r * Math.sign(cos) * Math.sqrt(Math.abs(cos)),
+					cy + r * Math.sign(sin) * Math.sqrt(Math.abs(sin))
+				);
+			}
+		}
+
+		path.closePath();
+
+		return path;
+	};
+	const output = canvas.getContext('2d')!;
+	const copy = new OffscreenCanvas(canvas.width, canvas.height).getContext('2d')!;
+
+	output.clearRect(0, 0, canvas.width, canvas.height);
+
+	// one copy of the window per camera position, each drawn at 1/n over the ones before, which
+	// leaves their mean: the motion blur. A still frame draws one copy. All of it goes on one canvas:
+	// a layer per copy overruns Chromium's tile memory when the copies are large, and drops tiles
+	shot.cameras.forEach(({ scale, x: cameraX, y: cameraY }, i) => {
+		const shadow = Math.min(scale, shadowMaxBlur / shadowBlur);
+		const [x, y, w, h] = [
+			cameraX + left * scale,
+			cameraY + top * scale,
+			width * scale,
+			height * scale
+		];
+		const path = outline(x, y, w, h, radius * scale);
+
+		copy.clearRect(0, 0, canvas.width, canvas.height);
+		copy.save();
+		Object.assign(copy, {
+			fillStyle: '#fff',
+			shadowBlur: shadowBlur * shadow,
+			shadowColor: box.shadowColor,
+			shadowOffsetY: shadowY * shadow
 		});
+		copy.fill(path);
+		copy.restore();
+		copy.save();
+		copy.clip(path);
+		copy.imageSmoothingQuality = 'high';
+		copy.drawImage(image, x, y, w, h);
+		copy.restore();
+		output.globalAlpha = 1 / (i + 1);
+		output.drawImage(copy.canvas, 0, 0);
 	});
+	output.globalAlpha = 1;
 
 	if (shot.caption && caption.textContent !== shot.caption.text) {
 		const font = Number(caption.dataset.font);
