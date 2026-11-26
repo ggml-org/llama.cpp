@@ -2348,6 +2348,12 @@ void llama_model_base::load_hparams_hadamard(llama_model_loader & ml) {
             throw std::runtime_error(format("unsupported prism.hadamard.version: %u", hadamard_version));
         }
 
+        // the rotation blocks of the inputs of ffn_down, attn_output and ssm_out would straddle the device slices,
+        // and the sign vectors and the grouped GDN head order of ssm_out have no tensor split state
+        if (split_mode() == LLAMA_SPLIT_MODE_TENSOR) {
+            throw std::runtime_error("LLAMA_SPLIT_MODE_TENSOR is not supported for models with Hadamard-folded weights (prism.hadamard), use -sm layer");
+        }
+
         if ((hadamard_version == 2) != hdmd.tied_output) {
             throw std::runtime_error("prism.hadamard version 2 requires tied_output=true; version 1 forbids it");
         }
