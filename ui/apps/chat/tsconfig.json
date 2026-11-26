@@ -48,7 +48,8 @@
 			"vaul-svelte": ["./node_modules/vaul-svelte"],
 			"vaul-svelte/*": ["./node_modules/vaul-svelte/*"],
 			"@lucide/svelte/icons/*": ["./node_modules/@lucide/svelte/dist/icons/*"],
-			"@ggml-org/llama-harness": ["../../lib/harness/src/index.ts"]
+			"@ggml-org/llama-harness": ["../../lib/harness/src/index.ts"],
+			"@ggml-org/llama-harness/trace": ["../../lib/harness/src/trace/index.ts"]
 		},
 		"sourceMap": true,
 		"strict": true

@@ -6,8 +6,8 @@
 	interface Props {
 		/** A reply is streaming: the form offers stop in place of send. */
 		isLoading?: boolean;
-		/** The form's message and files, kept in step with it for the test to read, and how often it sent. */
-		state: { files: ChatUploadedFile[]; sent?: number; value: string };
+		/** The form's message and files, kept in step with it for the test to read, and how often it sent or stopped. */
+		state: { files: ChatUploadedFile[]; sent?: number; stopped?: number; value: string };
 		voiceRecorder: VoiceRecorderLike;
 	}
 
@@ -19,6 +19,7 @@
 		bind:uploadedFiles={state.files}
 		bind:value={state.value}
 		{isLoading}
+		onStop={() => (state.stopped = (state.stopped ?? 0) + 1)}
 		onSubmit={() => (state.sent = (state.sent ?? 0) + 1)}
 		{voiceRecorder}
 	/>

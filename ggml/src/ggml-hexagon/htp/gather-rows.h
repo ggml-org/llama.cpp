@@ -44,11 +44,13 @@ static inline void htp_gather_rows_vtcm_layout_build(
     uint32_t region_size,
     uint32_t nr_max,
     uint32_t ne,
-    uint32_t elem_size) {
+    uint32_t src_es,
+    uint32_t dst_es) {
 
     const size_t vec_bytes      = (size_t) vg * 128;
     const size_t region_aligned = hex_round_up(region_size, 128);
-    const size_t out_aligned    = hex_round_up(region_aligned + (size_t) nr_max * ne * elem_size, 128) - region_aligned;
+    const size_t gather_bytes   = hex_round_up((size_t) nr_max * ne * src_es, 128);
+    const size_t out_aligned    = (dst_es > src_es) ? (2 * gather_bytes) : gather_bytes;
 
     size_t off = 0;
     VTCM_LAYOUT_ALLOC(off, off_tab,     vec_bytes);
@@ -65,23 +67,23 @@ static inline bool htp_gather_rows_solve_layout(
     struct htp_gather_rows_params * kparams,
     uint32_t na, uint32_t a_nb1,
     uint32_t nb, uint32_t b_nb1, bool b_dense,
-    uint32_t elem_size,
+    uint32_t src_es, uint32_t dst_es,
     uint32_t total_rows,
     uint32_t n_hvx,
     uint32_t mdev_count,
     uint32_t vtcm_size) {
 
-    const uint32_t max_ne0 = 128 / elem_size;
+    const uint32_t max_ne0 = 128 / src_es;
     const uint32_t ne = na + nb;
     if (ne == 0 || ne > max_ne0) {
         return false;
     }
 
-    if (elem_size != 4 && elem_size != 2) {
+    if ((src_es != 4 && src_es != 2) || (dst_es != 4 && dst_es != 2)) {
         return false;
     }
 
-    const uint32_t v_lanes = 128 / elem_size;
+    const uint32_t v_lanes = 128 / src_es;
     const uint32_t g       = hex_gcd_u32(ne, v_lanes);
     const uint32_t rg      = v_lanes / g;
     const uint32_t vg      = ne / g;
@@ -94,34 +96,37 @@ static inline bool htp_gather_rows_solve_layout(
         : total_rows;
     const uint32_t rows_per_hvx = hex_round_up((max_rows_per_dev + n_hvx - 1) / n_hvx, rg);
 
-    const uint32_t fixed = 3 * vg * 128;
-    const uint32_t per_row = a_nb1 + (nb > 0 ? (b_dense ? b_nb1 : nb * b_nb1) : 0) + ne * elem_size;
-    if (slice <= fixed + 2 * per_row * rg) {
+    const uint32_t max_es  = MAX(src_es, dst_es);
+    const uint32_t fixed   = 3 * vg * 128;
+    const uint32_t per_row = a_nb1 + (nb > 0 ? (b_dense ? b_nb1 : nb * b_nb1) : 0) + ne * max_es;
+    if (slice <= fixed + 2 * per_row) {
         return false;
     }
 
     const uint32_t avail_per_buf = (slice - fixed) / 2;
     uint32_t nr_max = MIN(avail_per_buf / per_row, rows_per_hvx);
-    if (elem_size == 2) {
+    if (src_es == 2) {
         const uint32_t per_row_region = a_nb1 + (nb > 0 ? (b_dense ? b_nb1 : nb * b_nb1) : 0);
         if (per_row_region > 0) {
-            nr_max = MIN(nr_max, (32768u - 256u) / per_row_region);
+            nr_max = MIN(nr_max, 1 + 32768u / per_row_region);
         }
     }
-    nr_max = (nr_max / rg) * rg;
+    if (nr_max >= rg) {
+        nr_max = (nr_max / rg) * rg;
+    }
 
     uint32_t v1          = 0;
     uint32_t span1       = 0;
     uint32_t region_size = 0;
 
     while (nr_max > 0) {
-        v1 = hex_round_up((nr_max - 1) * a_nb1 + na * elem_size, 128);
+        v1 = hex_round_up((nr_max - 1) * a_nb1 + na * src_es, 128);
         if (nb > 0) {
             if (b_dense) {
-                span1       = elem_size;
-                region_size = v1 + (nr_max - 1) * b_nb1 + nb * elem_size;
+                span1       = src_es;
+                region_size = v1 + (nr_max - 1) * b_nb1 + nb * src_es;
             } else {
-                span1       = (nr_max - 1) * b_nb1 + elem_size;
+                span1       = (nr_max - 1) * b_nb1 + src_es;
                 region_size = v1 + nb * span1;
             }
         } else {
@@ -130,13 +135,13 @@ static inline bool htp_gather_rows_solve_layout(
         }
 
         struct htp_gather_rows_vtcm_layout layout;
-        htp_gather_rows_vtcm_layout_build(&layout, vg, region_size, nr_max, ne, elem_size);
+        htp_gather_rows_vtcm_layout_build(&layout, vg, region_size, nr_max, ne, src_es, dst_es);
 
-        if ((elem_size != 2 || region_size <= 32768) && layout.total_per_hvx <= slice) {
+        if ((src_es != 2 || region_size <= 32768) && layout.total_per_hvx <= slice) {
             break;
         }
 
-        nr_max -= rg;
+        nr_max = (nr_max > rg) ? (nr_max - rg) : (nr_max - 1);
     }
 
     if (nr_max == 0) {

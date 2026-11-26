@@ -47,8 +47,8 @@ export function useToolsPanel(): UseToolsPanelReturn {
 
 		if (toolsStore.toolGroups.length > 0) return null;
 
-		// the MCP half only while MCP shows: with it hidden, there is nowhere to add a server
-		const mcpHint = uiStore.isMcpShown
+		// the MCP half only while MCP is on
+		const mcpHint = uiStore.isMcpEnabled
 			? ' To see MCP Tools you need to add / enable MCP Server(s).'
 			: '';
 

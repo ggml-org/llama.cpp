@@ -27,7 +27,10 @@
 		/** With `secondary`: filled like the stop button it stands beside, not bare. */
 		filled?: boolean;
 		onMicClick?: () => void;
-		/** A mouse or the focus came to the button: a press may follow, the microphone can open. */
+		/**
+		 * A mouse or the focus is on the button: a press may follow, the microphone can open
+		 * once it rests there. Called again as the pointer moves on it.
+		 */
 		onPrepare?: () => void;
 		/** It left again without a press. */
 		onPrepareEnd?: () => void;
@@ -67,6 +70,11 @@
 
 	// a touch presses at once, so only a mouse, a pen or the keyboard come ahead of the press
 	function handlePointerEnter(event: PointerEvent) {
+		if (event.pointerType !== PointerType.TOUCH && !isRecording) onPrepare?.();
+	}
+
+	// the pointer still moving over the button is passing, so the wait for it to rest restarts
+	function handlePointerMove(event: PointerEvent) {
 		if (event.pointerType !== PointerType.TOUCH && !isRecording) onPrepare?.();
 	}
 
@@ -110,6 +118,7 @@
 				onpointerdown={handlePointerDown}
 				onpointerenter={handlePointerEnter}
 				onpointerleave={handlePointerLeave}
+				onpointermove={handlePointerMove}
 				type="button"
 				variant={isRecording || showWarning
 					? 'ghost'

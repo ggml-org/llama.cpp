@@ -20,6 +20,7 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_PROFILE",
     "GGML_HEXAGON_NHVX",
     "GGML_HEXAGON_NHMX",
+    "GGML_HEXAGON_POWER_MODE",
     "GGML_HEXAGON_HOSTBUF",
     "GGML_HEXAGON_DMA64",
     "GGML_HEXAGON_OPBATCH",
@@ -27,12 +28,14 @@ MANAGED_ENV_NAMES = (
     "GGML_HEXAGON_OPPOLL",
     "GGML_HEXAGON_OPFILTER",
     "GGML_HEXAGON_OPFUSION",
+    "GGML_HEXAGON_OPLOWER",
     "GGML_HEXAGON_RT_REPACK",
     "GGML_HEXAGON_VMEM",
+    "GGML_HEXAGON_VTCM_SIZE",
     "GGML_HEXAGON_MBUF",
     "GGML_HEXAGON_MM_SELECT",
     "GGML_HEXAGON_FA_SELECT",
-    "GGML_HEXAGON_FA_HEAD_SPLIT",
+    "GGML_HEXAGON_FA_SPLIT",
     "GGML_HEXAGON_LI_SELECT",
     "GGML_HEXAGON_GDN_SELECT",
     "GGML_HEXAGON_SSM_SELECT",
@@ -212,15 +215,16 @@ def main():
     parser.add_argument("--hex-dma64", nargs="?", const="1", help="Enable (1) or disable (0) 64-bit DMA for model weights (GGML_HEXAGON_DMA64)")
     parser.add_argument("--hex-opbatch", help="Maximum number of operations to batch into a single HTP execution (GGML_HEXAGON_OPBATCH)")
     parser.add_argument("--hex-opqueue", help="Size of the asynchronous NPU operation queue (GGML_HEXAGON_OPQUEUE)")
-    parser.add_argument("--hex-oppoll", default="1", help="Enable (1) or Disable (0) polling for NPU opbatch completion (GGML_HEXAGON_OPPOLL) (default: 1)")
+    parser.add_argument("--hex-oppoll", default=None, help="NPU opbatch polling: 0=block, 1=poll, >1=hybrid poll budget in ms (GGML_HEXAGON_OPPOLL)")
     parser.add_argument("--hex-opfilter", help="Regex pattern to filter/select which operators are offloaded to NPU (GGML_HEXAGON_OPFILTER)")
     parser.add_argument("--hex-opfusion", help="NPU graph node fusion optimization level (0: disabled, 1: enabled) (GGML_HEXAGON_OPFUSION)")
-    parser.add_argument("--hex-rt-repack", help="Runtime weight repacking mode (0: disabled, 1: quantized only, 2: always) (GGML_HEXAGON_RT_REPACK)")
+    parser.add_argument("--hex-oplower", help="NPU graph FP16 activation lowering (0: disabled, 1: enabled) (GGML_HEXAGON_OPLOWER)")
+    parser.add_argument("--hex-rt-repack", help="Runtime weight repacking mode (0: disabled, 1: all tileable weights) (GGML_HEXAGON_RT_REPACK)")
     parser.add_argument("--hex-vmem", help="Maximum NPU VMEM size limit in MB to allocate (GGML_HEXAGON_VMEM)")
     parser.add_argument("--hex-mbuf", help="Host buffer size limits in MB (supports K/M/G suffix): <dyn>[,<static>[,<total>]] (default: 512,1024,0) (GGML_HEXAGON_MBUF)")
-    parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 2:HMX,1:HVX,0:disable")
-    parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 2:HMX,1:HVX,0:disable")
-    parser.add_argument("--hex-fa-head-split", help="Enable (1) or disable (0) head-parallel flash_attn partitioning (GGML_HEXAGON_FA_HEAD_SPLIT)")
+    parser.add_argument("--hex-mm-select", help="Select MUL_MAT and MUL_MAT_ID kernel (GGML_HEXAGON_MM_SELECT) 4:HMX-W8A8,3:HMX-W8A8-hybrid,2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-fa-select", help="Select Flash Attention kernel (GGML_HEXAGON_FA_SELECT) 3:HMX-W8A8,2:HMX,1:HVX,0:disable")
+    parser.add_argument("--hex-fa-split", "--hex-fa-head-split", dest="hex_fa_split", help="Enable (1) or disable (0) Flash Attention head/team split (GGML_HEXAGON_FA_SPLIT)")
     parser.add_argument("--hex-li-select", help="Select Lightning Indexer kernel (GGML_HEXAGON_LI_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-gdn-select", help="Select Gated Delta Net kernel (GGML_HEXAGON_GDN_SELECT) 2:HMX,1:HVX,0:disable")
     parser.add_argument("--hex-ssm-select", help="Select SSM Scan kernel (GGML_HEXAGON_SSM_SELECT) 2:HMX,1:HVX,0:disable")
@@ -371,12 +375,13 @@ def main():
     set_env("GGML_HEXAGON_OPPOLL", args.hex_oppoll)
     set_env("GGML_HEXAGON_OPFILTER", args.hex_opfilter)
     set_env("GGML_HEXAGON_OPFUSION", args.hex_opfusion)
+    set_env("GGML_HEXAGON_OPLOWER", args.hex_oplower)
     set_env("GGML_HEXAGON_RT_REPACK", args.hex_rt_repack)
     set_env("GGML_HEXAGON_VMEM", args.hex_vmem)
     set_env("GGML_HEXAGON_MBUF", args.hex_mbuf)
     set_env("GGML_HEXAGON_MM_SELECT", args.hex_mm_select)
     set_env("GGML_HEXAGON_FA_SELECT", args.hex_fa_select)
-    set_env("GGML_HEXAGON_FA_HEAD_SPLIT", args.hex_fa_head_split)
+    set_env("GGML_HEXAGON_FA_SPLIT", args.hex_fa_split)
     set_env("GGML_HEXAGON_LI_SELECT", args.hex_li_select)
     set_env("GGML_HEXAGON_GDN_SELECT", args.hex_gdn_select)
     set_env("GGML_HEXAGON_SSM_SELECT", args.hex_ssm_select)
@@ -407,7 +412,7 @@ def main():
 
     # Resolve executable path
     executable = cmd_args[0]
-    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "test-backend-ops", "test-llama-archs"]
+    known_binaries = ["llama-cli", "llama-bench", "llama-completion", "llama-mtmd-cli", "llama-perplexity", "test-backend-ops", "test-llama-archs"]
     if executable in known_binaries:
         if target_type in ("android", "linux"):
             resolved_exec = f"./bin/{executable}"

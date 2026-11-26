@@ -321,6 +321,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_hy_v3(params);
         case LLM_ARCH_HY_V4:
             return new llama_model_hy_v4(params);
+        case LLM_ARCH_HY_V4_FLASH:
+            return new llama_model_hy_v4_flash(params);
         case LLM_ARCH_SMOLLM3:
             return new llama_model_smollm3(params);
         case LLM_ARCH_OPENAI_MOE:
@@ -389,6 +391,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
             return new llama_model_kimi_k3(params);
         case LLM_ARCH_KIMI_K31:
             return new llama_model_kimi_k31(params);
+        case LLM_ARCH_RAON1_MINI:
+            return new llama_model_raon1_mini(params);
         case LLM_ARCH_GLM5_NEXT:
             return new llama_model_glm5_next(params);
         case LLM_ARCH_STEP35:
@@ -1193,6 +1197,7 @@ const char * llm_type_name(llm_type type) {
         case LLM_TYPE_21B_A3B:       return "21B.A3B";
         case LLM_TYPE_24B_A2B:       return "24B.A2B";
         case LLM_TYPE_26B_A4B:       return "26B.A4B";
+        case LLM_TYPE_29B_A4B:       return "29B.A4B";
         case LLM_TYPE_30B_A3B:       return "30B.A3B";
         case LLM_TYPE_31B_A3_5B:     return "31B.A3.5B";
         case LLM_TYPE_32B_A9B:       return "32B.A9B";
@@ -1706,8 +1711,12 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     }
     hparams.rope_freq_scale_train = ropescale == 0.0f ? 1.0f : 1.0f/ropescale;
 
-    ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR, hparams.rope_attn_factor, false);
-    ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,       hparams.rope_scaling_alpha, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_ATTN_FACTOR,      hparams.rope_attn_factor,   false);
+    ml.get_key(LLM_KV_ROPE_SCALING_ALPHA,            hparams.rope_scaling_alpha, false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR,  hparams.yarn_ext_factor,    false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, hparams.yarn_attn_factor,   false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,   hparams.yarn_beta_fast,     false);
+    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW,   hparams.yarn_beta_slow,     false);
 
     // non-transformer models do not have attention heads
     if (hparams.n_head() > 0) {
@@ -2897,7 +2906,8 @@ void llama_model::print_info() const {
         if (arch == LLM_ARCH_DEEPSEEK2 || arch == LLM_ARCH_DEEPSEEK2OCR ||
                 arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA ||
                 arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_MISTRAL4 ||
-                arch == LLM_ARCH_MISTRAL_LARGE4 || arch == LLM_ARCH_HY_V4) {
+                arch == LLM_ARCH_MISTRAL_LARGE4 || arch == LLM_ARCH_HY_V4 ||
+                arch == LLM_ARCH_HY_V4_FLASH) {
             LLAMA_LOG_INFO("%s: n_layer_dense_lead    = %d\n",     __func__, hparams.n_layer_dense_lead);
             LLAMA_LOG_INFO("%s: n_lora_q              = %d\n",     __func__, hparams.n_lora_q);
             LLAMA_LOG_INFO("%s: n_lora_kv             = %d\n",     __func__, hparams.n_lora_kv);
@@ -3343,6 +3353,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                 }
             } break;
         case LLM_ARCH_DOTS3NOTE:
+        case LLM_ARCH_HY_V4_FLASH:
             {
                 GGML_ASSERT(hparams.swa_type != LLAMA_SWA_TYPE_NONE);
 
@@ -3884,6 +3895,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_KIMI_K31:
+        case LLM_ARCH_RAON1_MINI:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STARCODER:
         case LLM_ARCH_INKLING2:
@@ -3949,6 +3961,9 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
         // HY_V4 rotates consecutive pairs, matching the reference implementation
         case LLM_ARCH_HY_V4:
             return LLAMA_ROPE_TYPE_NORM;
+        // HY_V4_FLASH keeps the interleaved rope rows and reorders them in the graph for M-RoPE (see src/models/hy-v4-flash.cpp)
+        case LLM_ARCH_HY_V4_FLASH:
+            return model->hparams.use_mrope() ? LLAMA_ROPE_TYPE_IMROPE : LLAMA_ROPE_TYPE_NORM;
 
         // the pairs of head values are offset by n_rot/2
         case LLM_ARCH_FALCON:

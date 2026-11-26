@@ -77,6 +77,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_SOPRANO           = 65,
     LLAMA_VOCAB_PRE_TYPE_TEKKEN_NUM3       = 66,
     LLAMA_VOCAB_PRE_TYPE_ZONOS3            = 67,
+    LLAMA_VOCAB_PRE_TYPE_RAON              = 68,
 };
 
 // HF Metaspace pre-tokenizer prepend_scheme
@@ -169,6 +170,7 @@ struct llama_vocab {
     bool get_remove_extra_whitespaces  () const;
     bool get_escape_whitespaces        () const;
     bool get_treat_whitespace_as_suffix() const;
+    enum llama_metaspace_prepend_scheme get_metaspace_prepend_scheme() const;
     const normalizer_options & get_normalizer_opts() const;
 
     const std::vector<llama_token> & get_suppress_tokens() const;

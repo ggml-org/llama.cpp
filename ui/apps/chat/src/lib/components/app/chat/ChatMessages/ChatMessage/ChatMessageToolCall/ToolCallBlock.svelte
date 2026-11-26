@@ -124,9 +124,9 @@
 
 <CollapsibleContentBlock
 	class="my-2"
-	inlineChevron
 	{onToggle}
 	{open}
+	pinnedChevron
 	shimmerTitle={showSpinner}
 	{subtitle}
 >
@@ -138,11 +138,13 @@
 		{/if}
 	{/snippet}
 
-	{#snippet titleSuffix()}
+	{#snippet trailing()}
 		{#if elapsedStart !== null}
 			<ToolCallElapsed startedAt={elapsedStart} />
 		{/if}
+	{/snippet}
 
+	{#snippet titleSuffix()}
 		{#if images.length > 0 && !open}
 			<span
 				transition:fade={{ duration: 150 }}

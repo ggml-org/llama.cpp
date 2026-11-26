@@ -97,7 +97,7 @@ bool parse_tool_choice(const json & j, common_chat_tool_choice & choice, std::st
         return false;
     }
     try {
-        choice = common_chat_tool_choice_parse_oaicompat(j.get<std::string>());
+        choice = common_chat_tool_choice_parse_oaicompat(j, {});
     } catch (const std::exception & e) {
         err = e.what();
         return false;
@@ -106,7 +106,7 @@ bool parse_tool_choice(const json & j, common_chat_tool_choice & choice, std::st
 }
 
 const char * tool_choice_str(common_chat_tool_choice choice) {
-    switch (choice) {
+    switch (choice.mode) {
         case COMMON_CHAT_TOOL_CHOICE_NONE:     return "none";
         case COMMON_CHAT_TOOL_CHOICE_REQUIRED: return "required";
         default:                               return "auto";

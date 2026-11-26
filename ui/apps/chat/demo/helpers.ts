@@ -237,6 +237,26 @@ export class Demo {
 		this.y = (viewport?.height ?? 0) / 2;
 	}
 
+	/**
+	 * Touches `target` for `ms` and lifts: a tap, or with a longer `ms` a press-and-hold, as a
+	 * phone's held rows ask for. It needs a touch device (`hasTouch`), and shows a fingertip.
+	 */
+	async hold(target: Locator, ms = 900, after = 500): Promise<void> {
+		await target.scrollIntoViewIfNeeded();
+
+		const { x, y } = await this.center(target);
+		const cdp = await this.session();
+
+		await this.page.waitForTimeout(this.between(60, 140));
+		await cdp.send('Input.dispatchTouchEvent', { touchPoints: [{ x, y }], type: 'touchStart' });
+		await this.page.waitForTimeout(ms);
+		await cdp.send('Input.dispatchTouchEvent', { touchPoints: [], type: 'touchEnd' });
+		await this.liftFingers();
+		this.x = x;
+		this.y = y;
+		await this.pause(after);
+	}
+
 	async hover(target: Locator, ms = 350): Promise<void> {
 		await this.moveTo(target);
 		await this.pause(ms);
@@ -324,6 +344,11 @@ export class Demo {
 		);
 		await this.hideCaption();
 		await this.pause(ms);
+	}
+
+	/** Taps `target` with a fingertip, on a touch device. */
+	tap(target: Locator, after = 500): Promise<void> {
+		return this.hold(target, this.between(60, 110), after);
 	}
 
 	/** Types quickly with uneven key timing, a little slower after spaces and punctuation. */
@@ -447,6 +472,8 @@ export class Demo {
 }
 
 interface DemoOptions {
+	/** Empty conversations added to the library before the demo starts, e.g. to fill a list. */
+	chats: number;
 	/** Path the demo starts from. */
 	startPath: string;
 	/** Extra UI settings merged into the seeded config. */
@@ -478,7 +505,7 @@ function loadTrace(name: string, dir: string): string {
 	return readFileSync(join(dir, `${name}.jsonl`), 'utf8');
 }
 
-/** Imports conversations through Settings > Import/Export, like a user would. */
+/** Imports conversations through Settings > Data, like a user would. */
 async function importTraces(page: Page, file: string): Promise<void> {
 	// the expanded sidebar adds the shortcut to the name
 	const settings = page.getByRole('button', { name: /^Settings(\s|$)/ }).first();
@@ -515,14 +542,30 @@ async function importTraces(page: Page, file: string): Promise<void> {
 
 	const scope = (await page.getByRole('dialog').count()) > 0 ? page.getByRole('dialog') : page;
 
-	await scope.getByText('Import/Export', { exact: true }).filter({ visible: true }).click();
+	// the section is Data in the regrouped settings, Import/Export before
+	await scope
+		.getByText(/^(Data|Import\/Export)$/)
+		.filter({ visible: true })
+		.first()
+		.click();
 
 	const chooser = page.waitForEvent('filechooser');
 
-	await scope.getByRole('button', { name: 'Import conversations' }).click();
+	await scope.getByRole('button', { name: /^Drop files here/ }).click();
 	await (await chooser).setFiles(file);
-	await page.getByRole('button', { name: /^Import \(\d+\)$/ }).click();
-	await page.getByRole('heading', { name: /^Imported \d+ conversation/ }).waitFor();
+
+	// one conversation gets a preview, then a prompt to open it; several get a picker, then a list
+	const notNow = page.getByRole('button', { exact: true, name: 'Not now' });
+	const importedList = page.getByRole('heading', { name: 'Imported Conversations' });
+
+	await page
+		.getByRole('button', { name: /^Import \(\d+\)$/ })
+		.or(page.getByRole('alertdialog').getByRole('button', { exact: true, name: 'Import' }))
+		.click();
+	await notNow.or(importedList).waitFor();
+
+	if (await notNow.isVisible()) await notNow.click();
+	else await page.keyboard.press('Escape');
 
 	// the app remembers the sidebar the import expanded; a demo starts with it collapsed, as on a
 	// first visit
@@ -533,11 +576,66 @@ async function importTraces(page: Page, file: string): Promise<void> {
 	});
 }
 
+/** The app's IndexedDB database and its conversations store, which a demo seeds. */
+const DEMO_DATABASE = 'LlamaUi';
+const DEMO_CONVERSATIONS_STORE = 'conversations';
+const HOUR_MS = 3_600_000;
+/** Names of the seeded conversations, repeated when a demo asks for more. */
+const DEMO_CHAT_NAMES = [
+	'Plan a trip to Lisbon',
+	'Explain tail recursion',
+	'Draft a polite follow-up',
+	'Summarize this changelog',
+	'Regex for ISO dates',
+	'Ideas for a weekend project',
+	'Debug a flaky test',
+	'Meal plan for the week'
+];
+
+/** Adds `count` empty conversations to the library, so a list has enough chats to fold. */
+async function seedChats(page: Page, count: number): Promise<void> {
+	await page.goto('/');
+	await page
+		.getByRole('textbox', { name: 'Type a message...' })
+		.waitFor({ timeout: APP_READY_TIMEOUT_MS });
+	await page.evaluate(
+		async ({ database, hourMs, names, store, total }) => {
+			const request = indexedDB.open(database);
+			const db = await new Promise<IDBDatabase>((resolve, reject) => {
+				request.onsuccess = () => resolve(request.result);
+				request.onerror = () => reject(request.error);
+			});
+			const tx = db.transaction(store, 'readwrite');
+
+			for (let i = 0; i < total; i++) {
+				tx.objectStore(store).put({
+					currNode: null,
+					id: `demo-chat-${i}`,
+					lastModified: Date.now() - i * hourMs,
+					name: names[i % names.length]
+				});
+			}
+
+			await new Promise((resolve) => (tx.oncomplete = resolve));
+			db.close();
+		},
+		{
+			database: DEMO_DATABASE,
+			hourMs: HOUR_MS,
+			names: DEMO_CHAT_NAMES,
+			store: DEMO_CONVERSATIONS_STORE,
+			total: count
+		}
+	);
+}
+
 export const test = base.extend<DemoOptions & { demo: Demo }>({
+	chats: [0, { option: true }],
 	demo: async ({ page }, use, testInfo) => {
 		await use(new Demo(page, `${testInfo.file}:${testInfo.title}`));
 	},
-	page: async ({ page, settings, startPath, traces }, use, testInfo) => {
+
+	page: async ({ chats, page, settings, startPath, traces }, use, testInfo) => {
 		await page.addInitScript(installCursorOverlay);
 		await page.addInitScript(seedSettings, {
 			mcpServers: JSON.stringify(demoMcpServerSettings()),
@@ -557,10 +655,12 @@ export const test = base.extend<DemoOptions & { demo: Demo }>({
 			await importTraces(page, file);
 		}
 
+		if (chats > 0) await seedChats(page, chats);
+
 		await page.goto(startPath);
 
 		// a hash route after the import doesn't reload, which the conversations list needs
-		if (traces.length > 0) await page.reload();
+		if (traces.length > 0 || chats > 0) await page.reload();
 
 		// a fresh checkout's dev server optimizes its dependencies on the first load and reloads the
 		// page, which can take well past an action's timeout; the recording has not started yet

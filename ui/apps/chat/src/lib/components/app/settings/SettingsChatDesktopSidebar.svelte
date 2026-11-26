@@ -11,7 +11,7 @@
 	let { isActive, onSectionChange, sections }: Props = $props();
 </script>
 
-<div class="sticky top-12 hidden w-64 flex-col self-start bg-background md:flex gap-6">
+<div class="sticky top-12 hidden w-64 flex-col gap-6 self-start md:flex">
 	<nav class="space-y-1">
 		{#each sections as section (section.title)}
 			<button

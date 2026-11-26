@@ -36,10 +36,12 @@
 		/** Shown right after the title, e.g. a live timer. */
 		titleSuffix?: Snippet;
 		/**
-		 * Put the chevron right after the title and keep it visible, for rows
-		 * that read as a line of text ( the tool call trace ) instead of a bar.
+		 * Keep the chevron visible at the end of the row, pointing right until
+		 * open, for rows that read as a line of text ( the tool call trace ).
+		 * The title takes the rest of the width, so a title that changes while
+		 * it streams never moves the chevron or the trailing content.
 		 */
-		inlineChevron?: boolean;
+		pinnedChevron?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
 	}
@@ -52,9 +54,9 @@
 		icon: IconComponent,
 		iconClass = ICON_CLASS_DEFAULT,
 		iconUrl = null,
-		inlineChevron = false,
 		onToggle,
 		open = $bindable(false),
+		pinnedChevron = false,
 		shimmerTitle = false,
 		subtitle,
 		title = '',
@@ -103,14 +105,14 @@
 	<span aria-hidden="true" class="h-px min-w-4 flex-1 bg-current opacity-25"></span>
 {/snippet}
 
-<!-- Beside the title it is always visible and points right until open; at the
-     end of the row it appears on hover and flips. -->
+<!-- Pinned, it is always visible and points right until open; otherwise it
+     appears on hover and flips. -->
 {#snippet chevron()}
 	<ChevronDown
 		class={cn(
 			'shrink-0 text-muted-foreground/60 duration-150 ease-out',
-			inlineChevron
-				? ['size-3.5 self-center transition-transform', !open && '-rotate-90']
+			pinnedChevron
+				? ['mt-1 size-3.5 transition-transform', !open && '-rotate-90']
 				: [
 						'mt-0.75 size-4 opacity-0 transition-all group-hover/collapsible:opacity-100',
 						open && 'rotate-180'
@@ -175,14 +177,15 @@
 				'py-1.5 pr-1'
 			)}
 		>
-			<div class="flex min-w-0 items-start gap-2 text-muted-foreground">
+			<div
+				class={cn(
+					'flex min-w-0 items-start gap-2 text-muted-foreground',
+					pinnedChevron && 'flex-1'
+				)}
+			>
 				{@render toggleIcon('mt-0.75')}
 
 				{@render toggleTitle('overflow-x-auto text-body-sm')}
-
-				{#if inlineChevron}
-					{@render chevron()}
-				{/if}
 			</div>
 
 			{#if trailing}
@@ -191,9 +194,7 @@
 				</div>
 			{/if}
 
-			{#if !inlineChevron}
-				{@render chevron()}
-			{/if}
+			{@render chevron()}
 
 			<span class="sr-only">Toggle content</span>
 		</Collapsible.Trigger>

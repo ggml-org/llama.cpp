@@ -55,6 +55,20 @@ struct llm_build_delta_net_base : public llm_graph_context {
             int64_t              conv_channels,
             int                  il);
 
+    ggml_tensor * build_kda_conv1d(
+            llm_graph_input_rs * inp,
+            ggml_tensor *        conv_states_all,
+            ggml_tensor *        conv_states_seq,
+            int64_t              qkv,
+            ggml_tensor *        x_proj,
+            ggml_tensor *        conv_w,
+            int64_t              d_conv,
+            int64_t              head_dim,
+            int64_t              n_heads,
+            int64_t              n_seq_tokens,
+            int64_t              n_seqs,
+            int                  il);
+
     // run delta-net attention and write the new recurrent state(s) back to ssm_states_all
     // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs); returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
     ggml_tensor * build_recurrent_attn(
@@ -1668,6 +1682,8 @@ struct llama_model_dflash : public llama_model_base {
         graph_base(const llm_graph_params & params);
 
         ggml_tensor * build_inject();
+        void          build_inject_ctx_mix();
+        void          store_inject_kv(ggml_tensor * Kcur, ggml_tensor * Vcur, int il);
         ggml_tensor * build_inp_tokens();
         ggml_tensor * build_layers(ggml_tensor * inp_tokens);
         ggml_tensor * build_logits(ggml_tensor * cur);
@@ -1711,6 +1727,9 @@ struct llama_model_dflash : public llama_model_base {
 
     // DFlash2 local conv, run by the base layers of DFlash2 and LiliCorr drafts
     static ggml_tensor * build_dflash2_conv(llm_graph_context & g, ggml_tensor * hidden, ggml_tensor * dynamic, ggml_tensor * base, int side);
+
+    // DSpark block input from mask_embd, run by the base layers and the Mistral Large 4 graph
+    static ggml_tensor * build_dspark_inp_block(const llm_graph_context & g, const llama_model & model, ggml_tensor * inp_tokens);
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
@@ -2464,6 +2483,100 @@ struct llama_model_hy_v4 : public llama_model_base {
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
 
+// hy_v4 iHC, gated MLA and sinks, with sparse and sliding-window layers, sandwich norms and latent routed experts
+struct llama_model_hy_v4_flash : public llama_model_base {
+    llama_model_hy_v4_flash(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    uint32_t graph_nodes_per_tensor() const override { return 32; }
+
+    // -1 when the layer has no Engram module, else its index among the Engram layers
+    int engram_index(int il) const;
+
+    // n-gram hash of module e: one row id and one validity per (token, column)
+    void engram_hash(int e, const llama_ubatch & ubatch, const std::vector<llama_token> & prev,
+            std::vector<int32_t> & ids, std::vector<float> & valid) const;
+
+    class llm_graph_input_pool;
+
+    struct graph : public llm_graph_context {
+        graph(const llama_model & model, const llm_graph_params & params);
+
+        // iHC, same layout as hy_v4
+        struct hc_pre {
+            ggml_tensor * cur;
+            ggml_tensor * post;
+        };
+
+        // reduce the hc streams to one, weighted by the pre gates
+        ggml_tensor * build_hc_reduce(
+                ggml_tensor * x,
+                ggml_tensor * weights,
+                int il) const;
+
+        hc_pre build_hc_pre(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base,
+                int il) const;
+
+        ggml_tensor * build_hc_post(
+                ggml_tensor * x,
+                ggml_tensor * residual,
+                ggml_tensor * post,
+                int il) const;
+
+        ggml_tensor * build_hc_head(
+                ggml_tensor * x,
+                ggml_tensor * hc_fn,
+                ggml_tensor * hc_scale,
+                ggml_tensor * hc_base) const;
+
+        ggml_tensor * build_attention(
+                const llama_model & model,
+                llm_graph_input_attn_k_dsa_iswa * inp_attn,
+                llm_graph_input_pool * inp_pool,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                int il);
+
+        llm_graph_input_pool * build_inp_pool(llm_graph_input_attn_k_dsa_iswa * inp_attn);
+
+        // rotate only the trailing n_rot of each indexer head
+        ggml_tensor * build_indexer_rope(ggml_tensor * x, ggml_tensor * pos, int64_t n_idx,
+                float freq_base, int il) const;
+
+        // the kq_mask of the sparse layer, opened on the best scored pools plus the token's own pool
+        ggml_tensor * build_pool_select(
+                ggml_tensor * cur,
+                ggml_tensor * qr,
+                ggml_tensor * inp_pos,
+                float freq_base,
+                const llama_layer & layer,
+                llm_graph_input_attn_k_dsa_iswa * inp_attn,
+                llm_graph_input_pool * inp_pool,
+                ggml_tensor * kq_mask,
+                int il);
+
+        // routed experts run at n_expert_latent, the router and the shared expert at n_embd
+        ggml_tensor * build_latent_moe(
+                const llama_model & model,
+                ggml_tensor * cur,
+                int il) const;
+
+        // Engram adds its delta to the hc streams before the attention
+        ggml_tensor * build_engram(
+                const llama_model & model,
+                ggml_tensor * x,
+                ggml_tensor * rows,
+                ggml_tensor * valid,
+                int il) const;
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
 struct llama_model_hunyuan_vl : public llama_model_base {
     llama_model_hunyuan_vl(const struct llama_model_params & params) : llama_model_base(params) {}
     void load_arch_hparams(llama_model_loader & ml) override;
@@ -2563,17 +2676,22 @@ struct llama_model_inkling2 : public llama_model_base {
 
         // the inputs and the token embeddings
         ggml_tensor * build_inputs();
-        // cache slot il of physical layer ip; messages [n_embd, LOOP_CTRL_COUNT, n_tokens] are mixed into its inputs
+        // cache slot il of physical layer ip; messages [LOOP_CTRL_COUNT, n_embd, n_tokens] are mixed into its inputs
         ggml_tensor * build_layer(int il, int ip, ggml_tensor * cur, std::vector<ggml_tensor *> & blocks,
                 ggml_tensor * messages = nullptr, const loop_layer * loop = nullptr);
         void build_output(ggml_tensor * cur, const std::vector<ggml_tensor *> & blocks);
 
         llm_graph_input_mem_hybrid_iswa_rel * inp  = nullptr;
-        llm_graph_input_attn_kv_iswa        * attn = nullptr;
         llm_graph_input_rs                  * recr = nullptr;
 
         ggml_tensor * inp_out_ids = nullptr;
         ggml_tensor * tau         = nullptr; // log-scaled positions
+
+        // the normalized state stacks of mix(), keyed by their tensors
+        ggml_tensor * mix_stack(const std::vector<ggml_tensor *> & list);
+        std::map<std::vector<ggml_tensor *>, ggml_tensor *> mix_stacks;
+
+        std::map<int64_t, ggml_tensor *> zero_sinks; // by head count
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
@@ -3192,11 +3310,6 @@ struct llama_model_kimi_k3 : public llama_model_base {
                                       int64_t d_conv, int64_t head_dim, int64_t n_head_kda,
                                       int64_t d_inner, int64_t n_seq_tokens, int64_t n_seqs, int il);
 
-        // causal conv1d over one of Q/K/V, qkv selects which third of the conv state row is used
-        ggml_tensor * build_kda_conv1d(llm_graph_input_rs * inp_rs, ggml_tensor * conv_states_all, ggml_tensor * conv_state_all,
-                                       int64_t qkv, ggml_tensor * x, ggml_tensor * proj_w, ggml_tensor * conv_w,
-                                       int64_t d_conv, int64_t head_dim, int64_t n_head_kda, int64_t n_seq_tokens, int64_t n_seqs, int il);
-
         ggml_tensor * build_mla_layer(ggml_tensor * cur, const llama_layer & layer,
                                       llm_graph_input_attn_k  * inp_attn_k,
                                       llm_graph_input_attn_kv * inp_attn_kv,
@@ -3257,6 +3370,39 @@ struct llama_model_kimi_k31 : public llama_model_base {
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+struct llama_model_raon1_mini : public llama_model_base {
+    llama_model_raon1_mini(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    uint32_t graph_nodes_per_tensor() const override { return 64; }
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llm_graph_params & params);
+
+        ggml_tensor * helmert    = nullptr;
+        ggml_tensor * identity   = nullptr;
+        ggml_tensor * chart_base = nullptr;
+
+        ggml_tensor * build_hc_pre(ggml_tensor * x, ggml_tensor * fn, ggml_tensor * scale,
+                                   ggml_tensor * base, ggml_tensor ** post, ggml_tensor ** comb, int il);
+
+        ggml_tensor * build_hc_post(ggml_tensor * x, ggml_tensor * branch,
+                                    ggml_tensor * post, ggml_tensor * comb, int il);
+
+        ggml_tensor * build_rda_gate(ggml_tensor * x, ggml_tensor * ssm_a);
+
+        ggml_tensor * build_rda_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_rs * inp_rs, int il);
+
+        ggml_tensor * build_mla_layer(ggml_tensor * cur, const llama_layer & layer,
+                                      llm_graph_input_attn_k * inp_attn_k, int il);
+
+        ggml_tensor * build_situ_ffn(ggml_tensor * cur, ggml_tensor * up, ggml_tensor * gate,
+                                     ggml_tensor * down, int il);
+    };
 };
 
 struct llama_model_glm5_next : public llama_model_base {

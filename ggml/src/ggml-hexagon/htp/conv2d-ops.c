@@ -1,6 +1,3 @@
-#pragma clang diagnostic ignored "-Wunused-variable"
-#pragma clang diagnostic ignored "-Wunused-function"
-
 #include <HAP_farf.h>
 #include <stdint.h>
 #include <string.h>
@@ -1406,9 +1403,8 @@ static void conv2d_hmx_win_wrows_dma(const struct htp_conv2d_win_context * wc, d
 }
 
 // K-contiguous kernel (k = cin * T + t): transpose the 32 cout rows of a packing unit to k rows of 32 cout, then into tiles
-__attribute__((noinline))
-static void conv2d_hmx_win_wrows_pack(const struct htp_conv2d_win_context * wc, const uint8_t * raw, uint8_t * xr, HVX_Vector * vin,
-                                      HVX_Vector * scratch, uint32_t unit, uint32_t n_cs) {
+static inline void conv2d_hmx_win_wrows_pack_impl(const struct htp_conv2d_win_context * wc, const uint8_t * raw, uint8_t * xr, HVX_Vector * vin,
+                                                  HVX_Vector * scratch, uint32_t unit, uint32_t n_cs, const bool is_f16) {
     const struct htp_conv2d_kernel_params * kp     = wc->kp;
     const struct htp_tensor *            kernel = wc->octx->src[0];
 
@@ -1419,7 +1415,6 @@ static void conv2d_hmx_win_wrows_pack(const struct htp_conv2d_win_context * wc, 
     const uint32_t T      = KW * KH;
     const uint32_t n_cc   = kp->window.n_cc;
     const uint32_t CS     = kp->window.w_cs;
-    const bool     is_f16 = kernel->type == HTP_TYPE_F16;
     const uint32_t kpw    = is_f16 ? 64 : 32; // k per vector
     const uint32_t rstep  = is_f16 ? 64 : 128; // bytes per transposed k row
 
@@ -1488,6 +1483,27 @@ static void conv2d_hmx_win_wrows_pack(const struct htp_conv2d_win_context * wc, 
             const HVX_Vector b = conv2d_keep(hvx_vmemu(xr + (size_t) ((pc + 1) * T + t) * rstep), pc + 1 < nc);
             tile[p] = is_f16 ? Q6_V_lo_W(Q6_W_vshuff_VVR(b, a, -2)) : conv2d_f32_to_f16_shuff_z(a, b, zero);
         }
+    }
+}
+
+__attribute__((noinline))
+static void conv2d_hmx_win_wrows_pack_f16(const struct htp_conv2d_win_context * wc, const uint8_t * raw, uint8_t * xr, HVX_Vector * vin,
+                                          HVX_Vector * scratch, uint32_t unit, uint32_t n_cs) {
+    conv2d_hmx_win_wrows_pack_impl(wc, raw, xr, vin, scratch, unit, n_cs, true);
+}
+
+__attribute__((noinline))
+static void conv2d_hmx_win_wrows_pack_f32(const struct htp_conv2d_win_context * wc, const uint8_t * raw, uint8_t * xr, HVX_Vector * vin,
+                                          HVX_Vector * scratch, uint32_t unit, uint32_t n_cs) {
+    conv2d_hmx_win_wrows_pack_impl(wc, raw, xr, vin, scratch, unit, n_cs, false);
+}
+
+static inline void conv2d_hmx_win_wrows_pack(const struct htp_conv2d_win_context * wc, const uint8_t * raw, uint8_t * xr, HVX_Vector * vin,
+                                             HVX_Vector * scratch, uint32_t unit, uint32_t n_cs) {
+    if (wc->octx->src[0]->type == HTP_TYPE_F16) {
+        conv2d_hmx_win_wrows_pack_f16(wc, raw, xr, vin, scratch, unit, n_cs);
+    } else {
+        conv2d_hmx_win_wrows_pack_f32(wc, raw, xr, vin, scratch, unit, n_cs);
     }
 }
 
@@ -1807,7 +1823,6 @@ static void conv2d_hmx_win_croutons_fold(const struct htp_conv2d_win_context * w
     const uint32_t Cin = input->ne[2];
     const uint32_t N   = input->ne[3];
     const uint32_t KW  = octx->src[0]->ne[0];
-    const uint32_t nch = KW * Cin;
     const uint32_t SR  = kp->window.sr;
     const uint32_t IHS = kp->window.ihs;
     const int32_t  p0  = octx->op_params[2];
@@ -1984,7 +1999,6 @@ static void conv2d_hmx_win_croutons_fold_cwhn(const struct htp_conv2d_win_contex
 }
 
 static void conv2d_hmx_win_pack(const struct htp_conv2d_win_context * wc, const htp_thread_t * th, unsigned int nth, unsigned int ith) {
-    struct htp_ops_context *             octx = wc->octx;
     const struct htp_conv2d_kernel_params * kp   = wc->kp;
 
     uint32_t       ts;

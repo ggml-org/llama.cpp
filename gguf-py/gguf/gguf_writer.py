@@ -1053,6 +1053,9 @@ class GGUFWriter:
     def add_layer_norm_rms_eps(self, value: float) -> None:
         self.add_float32(Keys.Attention.LAYERNORM_RMS_EPS.format(arch=self.arch), value)
 
+    def add_latent_norm_rms_eps(self, value: float) -> None:
+        self.add_float32(Keys.Attention.LATENT_NORM_RMS_EPS.format(arch=self.arch), value)
+
     def add_group_norm_eps(self, value: float) -> None:
         self.add_float32(Keys.Attention.GROUPNORM_EPS.format(arch=self.arch), value)
 
@@ -1109,6 +1112,9 @@ class GGUFWriter:
 
     def add_has_confidence_head(self, value: bool) -> None:
         self.add_bool(Keys.LLM.HAS_CONFIDENCE_HEAD.format(arch=self.arch), value)
+
+    def add_has_markov_context(self, value: bool) -> None:
+        self.add_bool(Keys.LLM.HAS_MARKOV_CONTEXT.format(arch=self.arch), value)
 
     def add_target_layers(self, value: Sequence[int]) -> None:
         self.add_array(Keys.LLM.TARGET_LAYERS.format(arch=self.arch), value)

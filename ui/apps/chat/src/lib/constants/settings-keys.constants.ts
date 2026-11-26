@@ -30,6 +30,7 @@ export const SETTINGS_KEYS = {
 	DYNATEMP_RANGE: 'dynatemp_range',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
 	ENABLE_DISCOVER_MODELS: 'enableDiscoverModels',
+	ENABLE_MCP: 'enableMcp',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	FREQUENCY_PENALTY: 'frequency_penalty',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
@@ -58,7 +59,6 @@ export const SETTINGS_KEYS = {
 	SHOW_AGENTIC_TURN_STATS: 'showAgenticTurnStats',
 	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
-	SHOW_MCP: 'showMcp',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_MODEL_CAPABILITIES_IN_SELECTOR: 'showModelCapabilitiesInSelector',

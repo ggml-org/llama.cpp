@@ -32,6 +32,7 @@ export const STORYBOOK_SECTIONS: StorybookSection[] = [
 		name: 'Llama Chat',
 		pages: [
 			'Foundations',
+			'Mobile',
 			'Chat',
 			'Content',
 			'Models',

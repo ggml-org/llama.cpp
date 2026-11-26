@@ -20,6 +20,7 @@ import type {
 	DatabaseMessageExtra,
 	DatabaseMessageExtraImageFile
 } from '#lib/types/database.js';
+import { withoutRepeatedAttachments } from '#lib/utils/media-content-parts.ts';
 
 /**
  * Derives display sections from a single assistant message and its direct tool results.
@@ -85,7 +86,7 @@ function deriveSingleTurnSections(
 			toolCwd: resultMsg?.toolCwd,
 			toolName: tc.function?.name,
 			toolResult: resultMsg?.content,
-			toolResultExtras: resultMsg?.extra,
+			toolResultExtras: resultMsg?.extra && withoutRepeatedAttachments(resultMsg.extra),
 			type
 		});
 	}

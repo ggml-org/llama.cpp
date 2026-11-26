@@ -69,14 +69,8 @@ function(mime_from_ext name out_var)
     set(${out_var} "${m}" PARENT_SCOPE)
 endfunction()
 
-# Fail when a dist tree is present but is missing files the UI needs at
-# runtime; catches truncated/stale asset trees early with a useful message.
-function(ui_validate_assets files in_dir)
-    list(LENGTH files n_assets)
-    if(n_assets EQUAL 0)
-        return()
-    endif()
-
+# List the files the UI needs at runtime that are not in ${files}.
+function(ui_missing_assets files out_var)
     set(found_index FALSE)
     set(found_manifest FALSE)
     set(found_sw FALSE)
@@ -138,6 +132,18 @@ function(ui_validate_assets files in_dir)
         list(APPEND missing "_app/immutable/assets/[name][hash].css (or bundle[hash].css)")
     endif()
 
+    set(${out_var} "${missing}" PARENT_SCOPE)
+endfunction()
+
+# Fail when a dist tree is present but is missing files the UI needs at
+# runtime; catches truncated/stale asset trees early with a useful message.
+function(ui_validate_assets files in_dir)
+    list(LENGTH files n_assets)
+    if(n_assets EQUAL 0)
+        return()
+    endif()
+
+    ui_missing_assets("${files}" missing)
     if(missing)
         set(listing "")
         foreach(f ${files})
@@ -225,7 +231,10 @@ function(emit_files dist_dir)
             set(gzip_dir  "${gzip_root}/_gzip")
             file(REMOVE_RECURSE "${gzip_root}")
             foreach(f IN LISTS assets)
-                get_filename_component(asset_path "${dist_dir}/${f}" REALPATH)
+                get_filename_component(asset_path "${dist_dir}/${f}" ABSOLUTE)
+                if(IS_SYMLINK "${asset_path}")
+                    get_filename_component(asset_path "${asset_path}" REALPATH)
+                endif()
                 get_filename_component(dst_dir "${gzip_dir}/${f}" DIRECTORY)
                 file(MAKE_DIRECTORY "${dst_dir}")
                 file(ARCHIVE_CREATE
@@ -489,6 +498,7 @@ function(hf_download version out_var out_resolved)
         list(APPEND candidates "${version}")
     endif()
     list(APPEND candidates "latest")
+    list(REMOVE_DUPLICATES candidates)
 
     foreach(resolved ${candidates})
         set(base "https://huggingface.co/buckets/${HF_BUCKET}/resolve/${resolved}")
@@ -549,8 +559,13 @@ function(hf_download version out_var out_resolved)
 
         file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${DIST_DIR}")
 
-        if(NOT EXISTS "${DIST_DIR}/index.html")
-            message(STATUS "UI: archive from ${resolved} is missing required assets")
+        # 'latest' can be from a newer build with a file layout this checkout does not know
+        file(GLOB_RECURSE extracted LIST_DIRECTORIES false RELATIVE "${DIST_DIR}" "${DIST_DIR}/*")
+        ui_missing_assets("${extracted}" missing)
+        if(missing)
+            string(REPLACE ";" ", " missing "${missing}")
+            message(STATUS "UI: archive from ${resolved} is missing required assets: ${missing}")
+            file(REMOVE_RECURSE "${DIST_DIR}")
             continue()
         endif()
 

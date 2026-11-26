@@ -249,6 +249,15 @@ public:
 
     void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    // pools of kpool consecutive tokens of a sequence, in the order of their positions, for a pooled indexer (hy_v4_flash)
+    // the pools are rebuilt from the cells for every ubatch, so no sequence edit can leave them stale
+    //   pool_idxs [kpool, n_pool]          I32: member cells of each complete pool, cell 0 for an unused one
+    //   pool_pos  [n_pool*n_pos_per_embd]  I32: position of the first member, where the pooled key is rotated
+    //   pool_mask [n_pool, n_tokens]       F16: 0 for a pool of the token's sequence that ends before the token's own pool, else -inf
+    //   tail_idxs [kpool, n_tokens]        I32: cells of the token's own pool, the token's cell for the members it does not have yet
+    void set_input_kpool(ggml_tensor * pool_idxs, ggml_tensor * pool_pos, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
+            const llama_ubatch * ubatch, const slot_info & sinfo, uint32_t kpool, uint32_t n_kv) const;
     void set_input_relative_pos(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const;
 
     // true if llama_kv_cell_ext holds information that has to survive a state save/restore
@@ -454,6 +463,8 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_attn_mask (const llm_attn_mask & attn_mask, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+    void set_input_kpool(ggml_tensor * pool_idxs, ggml_tensor * pool_pos, ggml_tensor * pool_mask, ggml_tensor * tail_idxs,
+            const llama_ubatch * ubatch, uint32_t kpool) const;
     void set_input_relative_pos(ggml_tensor * dst, const llama_ubatch * ubatch, uint32_t extent) const;
 
     // see llama_kv_cache::get_prev_tokens()

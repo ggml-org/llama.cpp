@@ -563,6 +563,51 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
         // short-hand
         id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
 
+        // with one command buffer thread (the default), encode the graph in chunks and commit each chunk as soon as it
+        // is encoded, so the GPU runs a chunk while the next one is encoded. the path below lets the GPU wait while the
+        // last 90% of the nodes are encoded. the abort callback and the capture keep the path below
+        if (n_cb == 1 && ctx->abort_callback == NULL && !use_capture) {
+            const int n_nodes_chunk = 256;
+
+            for (int i0 = 0; i0 < gf->n_nodes; ) {
+                // a fusion cannot span two command buffers, so a chunk ends at the end of a fusable group
+                int i1 = i0;
+                while (i1 < MIN(i0 + n_nodes_chunk, gf->n_nodes)) {
+                    i1 += ggml_metal_fusion_max(gf, i1);
+                }
+                i1 = MIN(i1, gf->n_nodes);
+
+                id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
+                [cmd_buf retain];
+                [cmd_buf enqueue];
+
+                ggml_metal_op_t ctx_op = ggml_metal_op_init(ctx->dev, cmd_buf, gf, ctx->finfo, i0, i1,
+                        ctx->use_concurrency, false, ctx->debug_graph);
+
+                for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
+                    const int res = ggml_metal_op_encode(ctx_op, idx);
+                    if (res == 0) {
+                        break;
+                    }
+
+                    idx += res - 1;
+                }
+
+                ggml_metal_op_free(ctx_op);
+
+                [cmd_buf commit];
+
+                // checked and released by ggml_metal_synchronize
+                [ctx->cmd_bufs_ext addObject:cmd_buf];
+
+                ctx->cmd_buf_last = cmd_buf;
+
+                i0 = i1;
+            }
+
+            return GGML_STATUS_SUCCESS;
+        }
+
         // the main thread commits the first few commands immediately
         // cmd_buf[n_cb]
         {

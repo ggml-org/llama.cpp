@@ -80,6 +80,50 @@ ggml_tensor * llm_build_delta_net_base::build_conv_state(
     return conv_input;
 }
 
+// qkv selects one third of the shared convolution state row: Q, K or V.
+ggml_tensor * llm_build_delta_net_base::build_kda_conv1d(
+        llm_graph_input_rs * inp,
+        ggml_tensor *        conv_states_all,
+        ggml_tensor *        conv_states_seq,
+        int64_t              qkv,
+        ggml_tensor *        x_proj,
+        ggml_tensor *        conv_w,
+        int64_t              d_conv,
+        int64_t              head_dim,
+        int64_t              n_heads,
+        int64_t              n_seq_tokens,
+        int64_t              n_seqs,
+        int                  il) {
+    const int64_t d_inner         = head_dim * n_heads;
+    const int64_t conv_state_size = (d_conv - 1) * d_inner;
+    const int64_t n_embd_r_total  = 3 * conv_state_size;
+
+    ggml_tensor * x_3d = ggml_reshape_3d(ctx0, x_proj, d_inner, n_seq_tokens, n_seqs);
+
+    ggml_tensor * conv_x = nullptr;
+    if (cparams.rs_replay) {
+        // the row holds the q, k and v conv histories one after the other
+        conv_x = build_conv_state_replay(inp, conv_states_all, x_3d, d_conv - 1, d_inner, il, conv_states_seq, qkv);
+    } else {
+        ggml_tensor * conv_state = ggml_view_3d(ctx0, conv_states_seq, d_conv - 1, d_inner, n_seqs,
+            (d_conv - 1)   * ggml_element_size(conv_states_seq),
+            n_embd_r_total * ggml_element_size(conv_states_seq),
+            qkv * conv_state_size * ggml_element_size(conv_states_seq));
+
+        conv_x = ggml_concat(ctx0, conv_state, ggml_transpose(ctx0, x_3d), 0);
+
+        build_conv_state_store(inp, conv_states_all, conv_x, d_conv - 1,
+            ggml_row_size(conv_states_all->type, qkv * conv_state_size));
+    }
+
+    ggml_tensor * conv_weight = ggml_reshape_2d(ctx0, conv_w, d_conv, d_inner);
+    ggml_tensor * conv_out    = ggml_ssm_conv(ctx0, conv_x, conv_weight);
+    conv_out = ggml_reshape_2d(ctx0, conv_out, d_inner, n_tokens);
+    conv_out = ggml_silu(ctx0, conv_out);
+
+    return ggml_reshape_4d(ctx0, conv_out, head_dim, n_heads, n_seq_tokens, n_seqs);
+}
+
 // [TAG_RECURRENT_REPLAY]
 // rs_replay keeps one committed state per seq plus the inputs of the last ubatch when it is short enough to be rolled
 // back (2 <= n_seq_tokens <= n_rs_seq + 1). The next ubatch first replays the pending tokens that seq_rm kept, commits

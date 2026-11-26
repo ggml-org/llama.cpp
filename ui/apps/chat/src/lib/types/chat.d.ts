@@ -139,9 +139,14 @@ export interface ChatMessageAgenticTurnStats {
 }
 
 export interface ChatMessageToolCallTiming {
+	/** The call's id; older messages lack it and the wall-clock times. */
+	id?: string;
 	name: string;
 	duration_ms: number;
 	success: boolean;
+	/** Wall-clock start and end (ms since epoch), waits for approval included. */
+	startedAt?: number;
+	endedAt?: number;
 }
 
 /**
@@ -151,7 +156,6 @@ export interface ChatStreamCallbacks {
 	onChunk?: (chunk: string) => void;
 	onReasoningChunk?: (chunk: string) => void;
 	onToolCallsStreaming?: (toolCalls: ApiChatCompletionToolCall[]) => void;
-	onAttachments?: (messageId: string, extras: DatabaseMessageExtra[]) => void;
 	onModel?: (model: string) => void;
 	onCompletionId?: (id: string) => void;
 	onTimings?: (timings?: ChatMessageTimings, promptProgress?: ChatMessagePromptProgress) => void;
@@ -365,9 +369,13 @@ export interface ChatFormActionsContext {
 	readonly hasVideoModality: boolean;
 	readonly hasVisionModality: boolean;
 	onFileUpload?: () => void;
+	/** Adds files picked outside the form's own file input, such as the camera or photo library. */
+	onFilesSelect?: (files: File[]) => void;
 	onSystemPromptClick?: () => void;
 	/** Opens the working directory picker; set where the + menu offers it. */
 	onWorkingDirectoryClick?: () => void;
 	/** The working directory's name in the + menu, or what sets one. */
 	readonly workingDirectoryLabel: string;
+	/** The working directory's abbreviated path, or null when none is set. */
+	readonly workingDirectory: string | null;
 }

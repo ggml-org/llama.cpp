@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { PanelLeftClose, PanelLeftOpen, Search } from '@lucide/svelte';
+	import { Button } from '@ggml-org/llama-ui/ui/button';
+	import { PanelLeftClose, PanelLeftOpen, Search, Settings, SquarePen } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		DialogConversationDelete,
@@ -12,17 +13,17 @@
 		DialogSettingsChat,
 		Logo,
 		ModelsManagerModelDrawer,
+		SettingsSheet,
 		SidebarNavigationActions,
 		SidebarNavigationConversationList,
 		SidebarNavigationFooter
 	} from '#lib/components/app/index.ts';
 	import {
 		ROUTES,
-		SIDEBAR_ACTIONS_ITEMS,
 		SIDEBAR_COLLAPSE_WIDTH,
 		SIDEBAR_COLLAPSED_WIDTH,
 		SIDEBAR_CONTENT_FADE_MS,
-		SIDEBAR_FOOTER_ITEMS,
+		SIDEBAR_KEYS_TEXT,
 		SIDEBAR_MAX_WIDTH,
 		SIDEBAR_MIN_WIDTH,
 		SIDEBAR_OVERSTRETCH_PX,
@@ -41,7 +42,7 @@
 		settingsStore,
 		uiStore
 	} from '#lib/stores/index.ts';
-	import { buildConversationTree, remToPx } from '#lib/utils/index.ts';
+	import { buildConversationTree, hapticTap, remToPx } from '#lib/utils/index.ts';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { tick } from 'svelte';
@@ -173,7 +174,8 @@
 
 	let renameDialogOpen = $state(false);
 	let settingsDialogOpen = $state(false);
-	let mcpDialogOpen = $state(false);
+	// a phone's settings: a sheet over the page, where a desktop or tablet opens the dialog
+	let settingsSheetOpen = $state(false);
 	let renameTargetConversationId = $state<string | null>(null);
 	let renameDraft = $state('');
 	let renameOriginalTitle = $state('');
@@ -542,14 +544,10 @@
 				openDialog(() => uiStore.openModelsManager());
 
 				break;
-			// dialogs on a desktop or tablet; on a phone, pages of their own
-			case SidebarAction.MCP:
-				if (isOnMobile) navigateBehind(() => goto(ROUTES.MCP_SERVERS));
-				else openDialog(() => (mcpDialogOpen = true));
-
-				break;
+			// a dialog on a desktop or tablet; on a phone, a sheet
 			case SidebarAction.SETTINGS:
-				if (isOnMobile) navigateBehind(() => goto(ROUTES.SETTINGS));
+				// the sheet rises over the sidebar, which stays open behind it
+				if (isOnMobile) settingsSheetOpen = true;
 				else openDialog(() => (settingsDialogOpen = true));
 
 				break;
@@ -665,16 +663,18 @@
 					: ''}"
 				inert={isStripHidden}
 			>
-				<!-- a phone has no footer: its items join these -->
-				<SidebarNavigationActions
-					class="px-2 md:my-3"
-					items={isOnMobile ? [...SIDEBAR_ACTIONS_ITEMS, ...SIDEBAR_FOOTER_ITEMS] : undefined}
-					onAction={handleSidebarAction}
-					onNavigate={navigateBehind}
-				/>
+				<!-- a phone has New chat and Settings pinned under the conversations instead -->
+				{#if !isOnMobile}
+					<SidebarNavigationActions
+						class="px-2 md:my-3"
+						onAction={handleSidebarAction}
+						onNavigate={navigateBehind}
+					/>
+				{/if}
 
+				<!-- on a phone only the conversations scroll, fading out above the pinned keys -->
 				<div
-					class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade) max-md:pb-safe-2"
+					class="flex min-h-0 flex-1 flex-col overflow-y-auto opacity-(--sidebar-fade) max-md:pb-6 max-md:mask-[linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)]"
 				>
 					<SidebarNavigationConversationList
 						{allSelectedArePinned}
@@ -705,10 +705,38 @@
 					/>
 				</div>
 
-				<!-- the footer, at the bottom of the sidebar and of its collapsed strip alike (a
-				     phone lists its items with the actions above) -->
+				<!-- the footer, at the bottom of the sidebar and of its collapsed strip alike; a
+				     phone pins Settings to its left corner and New chat to its right -->
 				{#if !isOnMobile}
 					<SidebarNavigationFooter onAction={handleSidebarAction} />
+				{:else}
+					<div class="flex shrink-0 items-center justify-between px-2 pb-safe-3">
+						<ActionIcon
+							ariaLabel={SIDEBAR_KEYS_TEXT.SETTINGS}
+							class="matte-key size-12 rounded-full! bg-card! hover:bg-card! dark:bg-muted-foreground/15! dark:hover:bg-muted-foreground/15!"
+							icon={Settings}
+							iconSize="size-5"
+							onclick={() => {
+								hapticTap();
+								handleSidebarAction(SidebarAction.SETTINGS);
+							}}
+							size="lg"
+						/>
+
+						<!-- the sidebar's main action, so the one primary key on it -->
+						<Button
+							class="h-12 rounded-(--chat-form-single-row-radius) text-body"
+							onclick={() => {
+								hapticTap();
+								handleSidebarAction(SidebarAction.NEW_CHAT);
+							}}
+							size="lg"
+						>
+							<SquarePen class="size-icon-md" />
+
+							{SIDEBAR_KEYS_TEXT.NEW_CHAT}
+						</Button>
+					</div>
 				{/if}
 			</div>
 		</div>
@@ -758,9 +786,13 @@
 
 <DialogSettingsChat bind:open={settingsDialogOpen} />
 
+{#if isOnMobile}
+	<SettingsSheet bind:open={settingsSheetOpen} />
+{/if}
+
 <DialogSearch bind:open={searchOpen} onAction={handleSidebarAction} />
 
-<DialogMcpServers bind:open={mcpDialogOpen} />
+<DialogMcpServers bind:open={uiStore.mcpServersOpen} />
 
 <DialogDiscoverModels bind:open={uiStore.discoverModelsOpen} />
 

@@ -1,4 +1,5 @@
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "hvx-exp.h"
@@ -44,6 +45,7 @@ struct htp_ssm_scan_context {
     struct htp_ops_context *                  octx;
     const struct htp_ssm_scan_kernel_params * kparams;
     struct htp_ssm_scan_vtcm_layout           layout;
+    const int32_t *                           ids_data;
     uint32_t                                  unit_start;
     uint32_t                                  nunits;
     uint32_t                                  units_per_hvx;
@@ -355,8 +357,7 @@ static inline void ssm_scan_decode_push_inputs(
     const struct htp_tensor *                 A                = octx->src[3];
     const struct htp_tensor *                 B                = octx->src[4];
     const struct htp_tensor *                 C                = octx->src[5];
-    const struct htp_tensor *                 ids              = octx->src[6];
-    const int32_t                             id               = ((const int32_t *) (uintptr_t) ids->data)[unit->q];
+    const int32_t                             id               = scctx->ids_data[unit->q];
     const size_t                              state_row_bytes  = (size_t) kparams->d_state * sizeof(float);
     const size_t                              state_row_stride = layout->state_row_stride;
     const size_t                              x_bytes          = (size_t) unit->nrows * sizeof(float);
@@ -498,7 +499,6 @@ static inline void ssm_scan_prefill_push_fetch(
     const struct htp_tensor *                 A                = octx->src[3];
     const struct htp_tensor *                 B                = octx->src[4];
     const struct htp_tensor *                 C                = octx->src[5];
-    const struct htp_tensor *                 ids              = octx->src[6];
     const struct htp_ssm_scan_unit            unit             = ssm_scan_decode_unit(kparams, unit_index);
     const uint32_t                            t0               = c * kparams->token_tile;
     const uint32_t                            nt               = MIN(kparams->token_tile, kparams->n_tokens - t0);
@@ -508,7 +508,7 @@ static inline void ssm_scan_prefill_push_fetch(
     const size_t                              row_bytes        = (size_t) unit.nrows * sizeof(float);
 
     if (c == 0) {
-        const int32_t    id       = ((const int32_t *) (uintptr_t) ids->data)[unit.q];
+        const int32_t    id       = scctx->ids_data[unit.q];
         const size_t     a_bytes  = (size_t) kparams->n_a * sizeof(float);
         const dma_addr_t state_in = s->data + (size_t) id * s->nb[3] + (size_t) unit.head * s->nb[2] + (size_t) unit.row0 * s->nb[1];
         const dma_addr_t A_in     = A->data + (size_t) unit.head * A->nb[1];
@@ -1484,17 +1484,31 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
     const struct htp_ssm_scan_kernel_params * kparams =
         (const struct htp_ssm_scan_kernel_params *) octx->kernel_params;
 
-    if (htp_tensor_is_extended(ids)) {
-        return HTP_STATUS_NO_SUPPORT;
+    const size_t ids_bytes = hex_round_up(htp_tensor_nbytes(ids), 128);
+    void * ids_buf = (ids_bytes <= octx->ctx->ddr_spad_size) ? octx->ctx->ddr_spad_base : memalign(128, ids_bytes);
+    if (!ids_buf) {
+        return HTP_STATUS_INTERNAL_ERR;
+    }
+    if (htp_tensor_read(&octx->ctx->main_th, ids_buf, ids_bytes, ids) == 0) {
+        if (ids_buf != octx->ctx->ddr_spad_base) {
+            free(ids_buf);
+        }
+        return HTP_STATUS_INTERNAL_ERR;
     }
 
-    const int32_t * ids_data = (const int32_t *) ids->data;
+    const int32_t * ids_data = (const int32_t *) ids_buf;
     for (uint32_t q = 0; q < kparams->n_seqs; ++q) {
         if (ids_data[q] < 0 || (uint32_t) ids_data[q] >= s->ne[3]) {
+            if (ids_buf != octx->ctx->ddr_spad_base) {
+                free(ids_buf);
+            }
             return HTP_STATUS_INVAL_PARAMS;
         }
     }
     if (octx->flags & HTP_OPFLAGS_STUB) {
+        if (ids_buf != octx->ctx->ddr_spad_base) {
+            free(ids_buf);
+        }
         return HTP_STATUS_OK;
     }
 
@@ -1509,6 +1523,9 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
     }
 
     if (nunits == 0) {
+        if (ids_buf != octx->ctx->ddr_spad_base) {
+            free(ids_buf);
+        }
         return HTP_STATUS_OK;
     }
 
@@ -1520,6 +1537,7 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
     struct htp_ssm_scan_context scctx = {
         .octx          = octx,
         .kparams       = kparams,
+        .ids_data      = ids_data,
         .unit_start    = unit_start,
         .nunits        = nunits,
         .units_per_hvx = units_per_hvx,
@@ -1530,29 +1548,35 @@ static int op_ssm_scan_f32(struct htp_ops_context * octx) {
         kparams->kernel_type == HTP_SSM_SCAN_KERNEL_HMX
     );
 
-    octx->n_hvx                 = n_hvx;
-    octx->src0_spad.data         = octx->ctx->vtcm_base;
-    octx->src0_spad.size_per_hvx = kparams->vtcm_per_hvx;
-    octx->src0_spad.size         = kparams->vtcm_size;
+    octx->n_hvx = n_hvx;
 
+    int status = HTP_STATUS_OK;
     switch (kparams->kernel_type) {
         case HTP_SSM_SCAN_KERNEL_HVX_DECODE:
             work_queue_run(octx->ctx->hvx_queue, ssm_scan_thread_f32_decode, &scctx, n_hvx);
+            status = octx->status;
             break;
 
         case HTP_SSM_SCAN_KERNEL_HVX_PREFILL:
             work_queue_run(octx->ctx->hvx_queue, ssm_scan_thread_f32_prefill, &scctx, n_hvx);
+            status = octx->status;
             break;
 
         case HTP_SSM_SCAN_KERNEL_HMX:
             ssm_scan_run_hmx_chunked(&scctx);
+            status = octx->status;
             break;
 
         default:
-            return HTP_STATUS_NO_SUPPORT;
+            status = HTP_STATUS_NO_SUPPORT;
+            break;
     }
 
-    return octx->status;
+    if (ids_buf != octx->ctx->ddr_spad_base) {
+        free(ids_buf);
+    }
+
+    return status;
 }
 
 int op_ssm_scan(struct htp_ops_context * octx) {
