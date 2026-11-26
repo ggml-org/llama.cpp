@@ -3267,7 +3267,13 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             return 0;
         };
     } else {
-        device->matmul_tile_selector = [](uint32_t m, uint32_t n, uint32_t /*k*/, uint32_t /*shader_core_count*/,
+        // Intel Xe2 (BMG) workaround: the large-tile matmul dispatch deadlocks the command streamer under ANV.
+        // Clamp to the medium tile, which executes correctly.
+        const bool intel_xe2_medium_only =
+            device->vendor_id == VK_VENDOR_ID_INTEL &&
+            device->driver_id == vk::DriverId::eIntelOpenSourceMESA &&
+            device->architecture == INTEL_XE2;
+        device->matmul_tile_selector = [intel_xe2_medium_only](uint32_t m, uint32_t n, uint32_t /*k*/, uint32_t /*shader_core_count*/,
                                           const std::vector<vk_matmul_pipeline_pair>& configs) -> uint32_t {
             if (configs.size() <= 1) return 0;
             for (uint32_t i = 0; i < configs.size(); ++i) {
@@ -3277,7 +3283,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             while (last > 0 && configs[last].narrow_n_max != 0) --last;
             if (last == 0 || m <= 32 || n <= 32) return 0;
             if (last == 1) return 1;
-            if (m <= 64 || n <= 64) return 1;
+            if (m <= 64 || n <= 64 || intel_xe2_medium_only) return 1;
             return last;
         };
         device->matmul_id_tile_selector = device->matmul_tile_selector;
