@@ -112,18 +112,24 @@ static ggml_prec ggml_cuda_mmq_get_prec_env() {
     return GGML_PREC_UNDEFINED;
 }
 
+// GGML_CUDA_MMQ_PREC if set, else the src1 precision requested by the graph
+static ggml_prec ggml_cuda_mmq_get_prec(const ggml_prec prec_requested) {
+    static const ggml_prec prec_env = ggml_cuda_mmq_get_prec_env();
+    return prec_env != GGML_PREC_UNDEFINED ? prec_env : prec_requested;
+}
+
+bool ggml_cuda_mmq_prec_src1_supported(const ggml_prec prec_requested) {
+    const ggml_prec prec = ggml_cuda_mmq_get_prec(prec_requested);
+    return prec == GGML_PREC_UNDEFINED || prec == GGML_PREC_Q8 || prec == GGML_PREC_Q4;
+}
+
 // src1 is quantized to Q8_1 unless the FP4 types can use 4-bit activations, in which case they
 // default to the native W4A4 instructions on Blackwell.
-static ggml_prec ggml_cuda_mmq_get_prec_src1(const ggml_type type, const ggml_prec prec_requested, const int cc) {
-    static const ggml_prec prec_env = ggml_cuda_mmq_get_prec_env();
-
-    ggml_prec prec = prec_env;
-    if (prec == GGML_PREC_UNDEFINED) {
-        prec = prec_requested;
-    }
+ggml_prec ggml_cuda_mmq_get_prec_src1(const ggml_type type, const ggml_prec prec_requested, const int cc) {
+    GGML_ASSERT(ggml_cuda_mmq_prec_src1_supported(prec_requested));
+    const ggml_prec prec = ggml_cuda_mmq_get_prec(prec_requested);
 
     // Q4 only for the FP4 types on Blackwell
-    GGML_ASSERT(prec == GGML_PREC_UNDEFINED || prec == GGML_PREC_Q8 || prec == GGML_PREC_Q4);
     const bool can_use_q4 = (type == GGML_TYPE_NVFP4 || type == GGML_TYPE_MXFP4) && blackwell_mma_available(cc);
     if (prec == GGML_PREC_Q8 || !can_use_q4) {
         return GGML_PREC_Q8;
