@@ -1,17 +1,13 @@
 #pragma once
 
 // Compiled blobs include weights. Cache-only execution skips weight uploads and graph compilation.
-// On NPU, GGML_OPENVINO_SELF_CONTAINED_BLOB=1 exports embedded-weight prefill/decode
-// blobs. A warm hit skips weight requantization, graph conversion, and compilation,
-// at the cost of roughly model-size storage per blob and separate NPUW weight banks.
-// After both blobs exist, GGML_OPENVINO_SELF_CONTAINED_MMAP=1 additionally wraps the
-// GGUF mmap instead of allocating the private OpenVINO model buffer. This mode is
-// import-only and fails clearly if either required blob is missing or invalid.
-// GGML_OPENVINO_NPU_WEIGHTLESS_BANK=1 is the same raw-weight flow, but exports weightless
-// prefill/decode blobs plus ONE <weights_fp>-<weights_fp>.weights.bin shared by every prefill/decode pair
-// of the model (pairs differ only in KV window). Warm import reads the weights from that file
-// (ov::weights_path) and NPUW deduplicates all models into one bank
-// (no OpenVINO patch needed), so the weights are stored once on disk and resident once.
+// On NPU, GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR imports the cached prefill/decode blobs when they are
+// valid; otherwise it compiles them and exports weightless blobs plus ONE
+// <weights_fp>-<weights_fp>.weights.bin shared by every prefill/decode pair of the model (pairs differ
+// only in KV window), with a warning. Import reads the weights from that file (ov::weights_path) and NPUW
+// deduplicates all models into one bank, so the weights are stored once on disk and resident once.
+// GGML_OPENVINO_SELF_CONTAINED_MMAP=1 additionally wraps the GGUF mmap instead of allocating the private
+// OpenVINO model buffer. This mode is import-only and fails clearly if a required blob is missing.
 
 #include "ggml.h"
 
@@ -84,7 +80,7 @@ bool ggml_openvino_model_cache_verify_manifest(const std::string & path,
                                                std::vector<std::string> & inputs,
                                                std::vector<std::string> & outputs);
 
-// GGML_OPENVINO_NPU_WEIGHTLESS_BANK: a weights file shared by weightless blobs. Every weightless-tagged
+// NPU cache: a weights file shared by weightless blobs. Every weightless-tagged
 // Constant is one region keyed by its data pointer (NPUW maps a Constant to its file offset by pointer).
 struct ggml_openvino_weights_layout {
     std::string path;

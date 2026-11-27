@@ -3,7 +3,6 @@
 #include "../utils.h"
 #include "ggml-openvino/ggml-openvino-extra.h"
 
-#include <cassert>
 #include <cstdint>
 #include <memory>
 #include <numeric>
