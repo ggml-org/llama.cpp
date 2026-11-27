@@ -121,19 +121,38 @@ inline T erf_approx(T x) {
     return sign_x * y;
 }
 
+// exp(x) - 1, accurate as x -> 0
+inline float ggml_metal_expm1(float x) {
+    // far from 0 the plain formula is accurate
+    if (fabs(x) > 0.5f) {
+        return precise::exp(x) - 1.0f;
+    }
+
+    float p = 1.0f / 40320.0f;
+    p = p * x + 1.0f / 5040.0f;
+    p = p * x + 1.0f / 720.0f;
+    p = p * x + 1.0f / 120.0f;
+    p = p * x + 1.0f / 24.0f;
+    p = p * x + 1.0f / 6.0f;
+    p = p * x + 1.0f / 2.0f;
+    p = p * x + 1.0f;
+
+    return x * p;
+}
+
 template<typename T> T elu_approx(T x);
 
 template<> inline float elu_approx<float>(float x) {
-    return (x > 0.f) ? x : (exp(x) - 1);
+    return (x > 0.f) ? x : ggml_metal_expm1(x);
 }
 
 template<> inline float4 elu_approx<float4>(float4 x) {
     float4 res;
 
-    res[0] = (x[0] > 0.0f) ? x[0] : (exp(x[0]) - 1.0f);
-    res[1] = (x[1] > 0.0f) ? x[1] : (exp(x[1]) - 1.0f);
-    res[2] = (x[2] > 0.0f) ? x[2] : (exp(x[2]) - 1.0f);
-    res[3] = (x[3] > 0.0f) ? x[3] : (exp(x[3]) - 1.0f);
+    res[0] = (x[0] > 0.0f) ? x[0] : ggml_metal_expm1(x[0]);
+    res[1] = (x[1] > 0.0f) ? x[1] : ggml_metal_expm1(x[1]);
+    res[2] = (x[2] > 0.0f) ? x[2] : ggml_metal_expm1(x[2]);
+    res[3] = (x[3] > 0.0f) ? x[3] : ggml_metal_expm1(x[3]);
 
     return res;
 }
