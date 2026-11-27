@@ -193,11 +193,73 @@ class Rwkv7Model(TextModel):
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
         name, gen = item
 
-        # unify tensor names here to make life easier
-        name = name.replace("blocks", "layers").replace("ffn", "feed_forward")
-        name = name.replace("self_attn", "attention").replace("attn", "attention")
-        name = name.replace("time_mixer.", "")
+        # Handle user's model naming convention (blocks.X.att.*, blocks.X.ffn.*)
+        # Map to expected tensor mapping convention for RWKV7:
+        # model.layers.{bid}.attention.{a0,a1,a2,v0,v1,v2,g1,g2,k_k,k_a,r_k,key,value,receptance,ln_x,output,x_r,x_w,x_k,x_v,x_a,x_g}
+        # model.layers.{bid}.feed_forward.{x_k,key,value}
+        # model.layers.{bid}.{attn_norm,ffn_norm,emb_norm}
+        name = name.replace("blocks.", "model.layers.")
+        name = name.replace(".att.", ".attention.")
+        name = name.replace(".ffn.", ".feed_forward.")
 
+        # Map specific tensor names from user's model to tensor mapping convention
+        # x_r, x_w, x_k, x_v, x_a, x_g are already correctly named as attention.x_r, etc. after .att. -> .attention.
+        # No additional mapping needed for these.
+
+        # w0, w1, w2 -> attention.w0, w1, w2 (for TIME_MIX_W0, W1, W2)
+        # a0, a1, a2 -> attention.a0, a1, a2 (for TIME_MIX_A0, A1, A2)
+        # v0, v1, v2 -> attention.v0, v1, v2 (for TIME_MIX_V0, V1, V2)
+        # g1, g2 -> attention.g1, g2 (for TIME_MIX_G1, G2)
+        # k_k -> attention.k_k (for TIME_MIX_K_K)
+        # k_a -> attention.k_a (for TIME_MIX_K_A)
+        # r_k -> attention.r_k (for TIME_MIX_R_K)
+        name = name.replace("attention.w0", "attention.w0")
+        name = name.replace("attention.w1", "attention.w1")
+        name = name.replace("attention.w2", "attention.w2")
+        name = name.replace("attention.a0", "attention.a0")
+        name = name.replace("attention.a1", "attention.a1")
+        name = name.replace("attention.a2", "attention.a2")
+        name = name.replace("attention.v0", "attention.v0")
+        name = name.replace("attention.v1", "attention.v1")
+        name = name.replace("attention.v2", "attention.v2")
+        name = name.replace("attention.g1", "attention.g1")
+        name = name.replace("attention.g2", "attention.g2")
+        name = name.replace("attention.k_k", "attention.k_k")
+        name = name.replace("attention.k_a", "attention.k_a")
+        name = name.replace("attention.r_k", "attention.r_k")
+
+        # Attention weight matrices
+        name = name.replace("attention.receptance.weight", "attention.receptance.weight")
+        name = name.replace("attention.key.weight", "attention.key.weight")
+        name = name.replace("attention.value.weight", "attention.value.weight")
+        name = name.replace("attention.output.weight", "attention.output.weight")
+        name = name.replace("attention.ln_x.weight", "attention.ln_x.weight")
+        name = name.replace("attention.ln_x.bias", "attention.ln_x.bias")
+
+        # FFN tensors
+        name = name.replace("feed_forward.x_k", "feed_forward.x_k")  # CHANNEL_MIX_LERP_K
+        name = name.replace("feed_forward.key.weight", "feed_forward.key.weight")
+        name = name.replace("feed_forward.value.weight", "feed_forward.value.weight")
+
+        # Layer norms
+        name = name.replace("ln1.weight", "attn_norm.weight")
+        name = name.replace("ln1.bias", "attn_norm.bias")
+        # Skip ln2 (FFN norm) - RWKV7 doesn't use it, model may be hybrid but we use RWKV7 arch
+        # name = name.replace("ln2.weight", "ffn_norm.weight")
+        # name = name.replace("ln2.bias", "ffn_norm.bias")
+        # ln0 only exists on block 0, maps to model.pre_ln (shared embedding norm)
+        name = name.replace("model.layers.0.ln0.weight", "model.pre_ln.weight")
+        name = name.replace("model.layers.0.ln0.bias", "model.pre_ln.bias")
+        # Skip ln0 for other layers (they don't have it)
+
+        # Output/embedding
+        name = name.replace("emb.weight", "token_embd.weight")
+        name = name.replace("head.weight", "output.weight")
+        # Output norm (ln_out)
+        name = name.replace("ln_out.weight", "output_norm.weight")
+        name = name.replace("ln_out.bias", "output_norm.bias")
+
+        # unify tensor names here to make life easier (fla-hub convention)
         name = name.replace("feed_forward_norm", "ln2")
         name = name.replace("g_norm", "ln_x")
 
