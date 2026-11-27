@@ -7759,8 +7759,7 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_OPT_STEP_SGD:
             return true;
         case GGML_OP_GATED_DELTA_NET:
-            // replay of pending tokens (op param 1) is not implemented
-            return ggml_get_op_params_i32(op, 1) == 0;
+            return ggml_are_same_stride(op->src[0], op->src[1]);
         case GGML_OP_SSM_CONV:
             return op->type == GGML_TYPE_F32 &&
                    op->src[0]->type == GGML_TYPE_F32 &&
