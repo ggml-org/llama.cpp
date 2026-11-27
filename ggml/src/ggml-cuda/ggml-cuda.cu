@@ -86,6 +86,7 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <chrono>
 #include <cinttypes>
 #include <condition_variable>
 #include <cstddef>
@@ -100,6 +101,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <string>
+#include <thread>
 #include <vector>
 
 static_assert(sizeof(half) == sizeof(ggml_fp16_t), "wrong fp16 size");
@@ -223,6 +225,13 @@ static cudaError_t ggml_cuda_device_malloc(void ** ptr, size_t size, int device)
 #endif // defined(GGML_USE_HIP)
     } else {
         err = cudaMalloc(ptr, size);
+#if defined(GGML_USE_HIP)
+        for (int i = 0; i < 20 && err == hipErrorOutOfMemory; i++) {
+            (void)hipGetLastError();
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            err = cudaMalloc(ptr, size);
+        }
+#endif // defined(GGML_USE_HIP)
     }
     return err;
 }
