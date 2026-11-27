@@ -517,6 +517,7 @@ struct ggml_cuda_unroll<1> {
     }
 };
 
+// If only_lane0_is_used is set to true, then the performance can be better but only lane 0 is guaranteed to have the correct result.
 template<typename T, int width, bool only_lane0_is_used = false>
 static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
 #if defined(GGML_USE_HIP)
