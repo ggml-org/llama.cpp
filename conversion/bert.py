@@ -261,7 +261,7 @@ class BertForSequenceClassification(BertModel):
 
     def set_gguf_parameters(self):
         if "classifier.dense.weight" in self.model_tensors:
-            self.hparams["classifier_activation"] = "tanh"
+            self.hparams.setdefault("classifier_activation", "tanh")
         super().set_gguf_parameters()
 
 
