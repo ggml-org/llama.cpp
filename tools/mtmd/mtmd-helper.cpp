@@ -32,6 +32,7 @@
 #define MA_NO_NODE_GRAPH
 #define MA_NO_ENGINE
 #define MA_NO_GENERATION
+#define MA_NO_THREADING // Haiku does not export pthread_attr_setinheritsched
 #define MA_API static
 #include "miniaudio/miniaudio.h"
 

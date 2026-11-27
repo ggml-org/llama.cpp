@@ -10,6 +10,10 @@ if (WIN32)
     target_link_libraries(ggml-rpc PRIVATE ws2_32)
 endif()
 
+if (CMAKE_SYSTEM_NAME STREQUAL "Haiku")
+    target_link_libraries(ggml-rpc PRIVATE network)
+endif()
+
 # RDMA auto-detection: Linux RoCE/IB via libibverbs, Apple RDMA-over-Thunderbolt via librdma
 if (APPLE)
     set(RDMA_LIB_NAME rdma)

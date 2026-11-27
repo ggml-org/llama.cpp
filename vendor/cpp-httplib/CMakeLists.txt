@@ -24,6 +24,10 @@ if (WIN32 AND NOT MSVC)
     target_link_libraries(${TARGET} PUBLIC ws2_32)
 endif()
 
+if (CMAKE_SYSTEM_NAME STREQUAL "Haiku")
+    target_link_libraries(${TARGET} PUBLIC network)
+endif()
+
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
 
 target_compile_definitions(${TARGET} PRIVATE
