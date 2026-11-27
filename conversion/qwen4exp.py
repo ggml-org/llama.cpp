@@ -251,8 +251,8 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         weight_gen, scale_gen, scale2_gen = self._nvfp4_ple_shards[name]
 
         def load() -> np.ndarray:
-            packed = LazyTorchTensor.to_eager(weight_gen()[rows]).numpy()
-            scales = LazyTorchTensor.to_eager(scale_gen()[rows]).float().numpy()
+            packed = LazyTorchTensor.read_rows(weight_gen(), rows).numpy()
+            scales = LazyTorchTensor.read_rows(scale_gen(), rows).float().numpy()
             scale2 = float(LazyTorchTensor.to_eager(scale2_gen()).float().item())
             if not np.isfinite(scale2) or scale2 < 0 or not np.isfinite(scales).all() or np.any(scales < 0):
                 raise ValueError(f"NVFP4 PLE shard {name!r} has invalid scales")

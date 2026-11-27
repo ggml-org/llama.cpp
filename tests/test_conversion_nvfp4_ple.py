@@ -151,6 +151,108 @@ class TestNVFP4PLEConversion(unittest.TestCase):
             del model
 
 
+    def test_remote_chunks_read_only_the_requested_rows(self):
+        tensors, expected = self.fixture()
+        dtypes = {torch.uint8: "U8", torch.float8_e4m3fn: "F8_E4M3", torch.float32: "F32"}
+        sources = {}
+        payloads = {}
+        for name, tensor in tensors.items():
+            url = "https://example.invalid/" + name
+            payload = tensor.contiguous().view(torch.uint8).numpy().tobytes()
+            sources[name] = gguf.utility.RemoteTensor(dtypes[tensor.dtype], tuple(tensor.shape), 128, len(payload), url)
+            payloads[url] = bytes(128) + payload
+        calls = []
+
+        def read_range(url, start, size=-1):
+            calls.append((url, start, size))
+            return payloads[url][start:start + size]
+
+        for eager in (False, True):
+            with self.subTest(eager=eager), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                hp = {"model_type": "qwen4exp", "architectures": ["Qwen4ExpForCausalLM"],
+                      "num_hidden_layers": 2, "mtp_num_hidden_layers": 1, "split_ngram_parts": 2,
+                      "quantization_config": {"quant_method": "modelopt", "quant_algo": "NVFP4"}}
+                calls.clear()
+                with patch.object(gguf.utility.SafetensorRemote, "get_list_tensors_hf_model", return_value=sources), \
+                     patch.object(gguf.utility.SafetensorRemote, "get_data_by_range", side_effect=read_range), \
+                     patch("conversion.qwen4exp._NVFP4_PLE_CHUNK_ROWS", 128):
+                    model = Qwen4ExpTextModel(path, gguf.LlamaFileType.MOSTLY_F16, path / "out.gguf",
+                                             hparams=hp, eager=eager, remote_hf_model_id="test/model")
+                    model.prepare_tensors()
+                    self.assertEqual(calls, [])
+                    table = model.gguf_writer.tensors[0][self.output_name].tensor
+                    assert table is not None
+                    for repeat in range(2):
+                        calls.clear()
+                        output_path = path / f"table-{repeat}.bin"
+                        with output_path.open("wb") as output:
+                            table.tofile(output)
+                        actual = np.fromfile(output_path, dtype=np.float16).reshape(expected.shape)
+                        np.testing.assert_array_equal(actual.view(np.uint16), expected.astype(np.float16).view(np.uint16))
+                        for name, source in sources.items():
+                            if name.endswith("weight_scale_2"):
+                                continue
+                            row_bytes = source.size // source.shape[0]
+                            reads = [(offset, size) for url, offset, size in calls if url == source.url]
+                            self.assertEqual(reads, [(128 + start * row_bytes, min(128, source.shape[0] - start) * row_bytes)
+                                                     for start in range(0, source.shape[0], 128)])
+
+    def test_local_chunks_map_only_the_requested_rows(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            tensors, expected = self.fixture()
+            model = self.prepare(path, tensors, ftype=gguf.LlamaFileType.MOSTLY_F16)
+            sources = gguf.utility.SafetensorsLocal(path / "model.safetensors").tensors
+            mapped = []
+            mmap_bytes = gguf.utility.LocalTensor.mmap_bytes
+
+            def map_rows(source):
+                mapped.append((source.data_range.offset, source.data_range.size))
+                return mmap_bytes(source)
+
+            table = model.gguf_writer.tensors[0][self.output_name].tensor
+            with patch.object(gguf.utility.LocalTensor, "mmap_bytes", autospec=True, side_effect=map_rows):
+                for repeat in range(2):
+                    mapped.clear()
+                    output_path = path / f"table-{repeat}.bin"
+                    with output_path.open("wb") as output:
+                        table.tofile(output)
+                    actual = np.fromfile(output_path, dtype=np.float16).reshape(expected.shape)
+                    np.testing.assert_array_equal(actual.view(np.uint16), expected.astype(np.float16).view(np.uint16))
+                    for name, source in sources.items():
+                        if name.endswith("weight_scale_2"):
+                            continue
+                        begin = source.data_range.offset
+                        row_bytes = source.data_range.size // source.shape[0]
+                        reads = [(offset, size) for offset, size in mapped if begin <= offset < begin + source.data_range.size]
+                        self.assertEqual(reads, [(begin + start * row_bytes, min(128, source.shape[0] - start) * row_bytes)
+                                                 for start in range(0, source.shape[0], 128)])
+
+    def test_source_row_reader_preserves_bounds_and_transforms(self):
+        expected = torch.arange(24, dtype=torch.float32).reshape(6, 4)
+        payload = expected.numpy().tobytes()
+        source = gguf.utility.RemoteTensor("F32", (6, 4), 128, len(payload), "https://example.invalid/weight")
+
+        def read_range(url, start, size):
+            return payload[start - 128:start - 128 + size]
+
+        with patch.object(gguf.utility.SafetensorRemote, "get_data_by_range", side_effect=read_range) as read:
+            tensor = LazyTorchTensor.from_remote_tensor(source)
+            np.testing.assert_array_equal(LazyTorchTensor.read_rows(tensor, slice(-3, 100)).numpy(), expected[-3:].numpy())
+            read.assert_called_once_with(url=source.url, start=176, size=48)
+            self.assertEqual(tuple(LazyTorchTensor.read_rows(tensor, slice(4, 2)).shape), (0, 4))
+            self.assertEqual(read.call_count, 1)
+            # Expressions must retain their operations instead of reading the raw source bytes.
+            actual = LazyTorchTensor.read_rows(tensor + 2, slice(1, 3))
+            np.testing.assert_array_equal(actual.numpy(), (expected + 2)[1:3].numpy())
+            self.assertEqual(read.call_count, 2)
+            actual = LazyTorchTensor.read_rows(tensor, slice(2, 4))
+            np.testing.assert_array_equal(actual.numpy(), expected[2:4].numpy())
+            self.assertEqual(read.call_count, 2)
+        self.assertEqual((source.offset_start, source.size, source.shape), (128, len(payload), (6, 4)))
+
+
 class TestMTPQuantizationMetadata(unittest.TestCase):
     canonical = "mtp.layers.0.mlp.experts"
     alias = "mtp.layers.48.mlp.experts"

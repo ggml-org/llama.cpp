@@ -13,6 +13,7 @@ import re
 import sys
 import tempfile
 from enum import IntEnum
+from dataclasses import replace
 from pathlib import Path
 from hashlib import sha256
 from typing import TYPE_CHECKING, Any, Callable, ContextManager, Iterable, Iterator, Literal, Sequence, TypeVar, cast
@@ -3455,6 +3456,7 @@ class LazyTorchTensor(gguf.LazyBase):
     # to keep the type-checker happy
     dtype: torch.dtype
     shape: torch.Size
+    _source_tensor: gguf.utility.LocalTensor | gguf.utility.RemoteTensor | None = None
 
     # only used when converting a torch.Tensor to a np.ndarray
     _dtype_map: dict[torch.dtype, type] = {
@@ -3539,6 +3541,7 @@ class LazyTorchTensor(gguf.LazyBase):
         dtype = cls._dtype_str_map[t.dtype]
         shape = t.shape
         lazy = cls(meta=cls.meta_with_dtype_and_shape(dtype, shape), args=(t,), func=lambda r: load_tensor(r))
+        lazy._source_tensor = t
         return cast(torch.Tensor, lazy)
 
     @classmethod
@@ -3553,7 +3556,33 @@ class LazyTorchTensor(gguf.LazyBase):
         shape = remote_tensor.shape
         meta = cls.meta_with_dtype_and_shape(dtype, shape)
         lazy = cls(meta=meta, args=(remote_tensor,), func=lambda r: torch.from_numpy(byteswap_tensor(np.frombuffer(r.data(), dtype=numpy_dtype), numpy_dtype)).view(dtype).reshape(shape))
+        lazy._source_tensor = remote_tensor
         return cast(torch.Tensor, lazy)
+
+    @classmethod
+    def read_rows(cls, tensor: Tensor, rows: slice) -> Tensor:
+        if not isinstance(tensor, cls) or tensor._source_tensor is None or tensor._data is not None:
+            return cls.to_eager(tensor[rows])
+
+        source = tensor._source_tensor
+        start, stop, step = rows.indices(tensor.shape[0])
+        if step != 1:
+            raise ValueError("Source row reads require a contiguous slice")
+        shape = (max(0, stop - start), *tensor.shape[1:])
+        row_bytes = prod(tensor.shape[1:]) * tensor._meta.element_size()
+        source_size = source.size if isinstance(source, gguf.utility.RemoteTensor) else source.data_range.size
+        if source_size != tensor.shape[0] * row_bytes:
+            raise ValueError("Tensor source size does not match its shape and dtype")
+        if shape[0] == 0:
+            return torch.empty(shape, dtype=tensor.dtype)
+
+        # Slice the backing range before materializing, so a chunk never loads the full source.
+        offset, size = start * row_bytes, shape[0] * row_bytes
+        if isinstance(source, gguf.utility.RemoteTensor):
+            sliced = replace(source, shape=shape, offset_start=source.offset_start + offset, size=size)
+            return cls.to_eager(cls.from_remote_tensor(sliced))
+        data_range = replace(source.data_range, offset=source.data_range.offset + offset, size=size)
+        return cls.to_eager(cls.from_local_tensor(replace(source, shape=shape, data_range=data_range)))
 
     @classmethod
     def __torch_function__(cls, func, types, args=(), kwargs=None):
