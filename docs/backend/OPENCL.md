@@ -72,6 +72,8 @@ However, A6x GPUs in phones are likely not supported due to the outdated driver 
 | MXFP4                  | Support                    |
 | IQ4_NL                 | Support                    |
 
+`MUL_MAT` supports F32 weight scales per tensor or per output channel. `MUL_MAT_ID` supports F32 weight scales per tensor, per expert, or per output channel of each expert.
+
 `MUL_MAT_ID` accepts an expert id of `-1` and writes zeros to that slot. `ADD_ID` adds no bias for `-1`, including in fused MoE operations.
 
 ## Model Preparation

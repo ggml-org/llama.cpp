@@ -865,6 +865,7 @@ struct ggml_backend_opencl_context {
 
     cl_kernel kernel_add, kernel_add_row, kernel_add_f16, kernel_add_row_f16;
     cl_kernel kernel_mul, kernel_mul_row, kernel_mul_f16, kernel_mul_row_f16;
+    cl_kernel kernel_mul_mat_scale = nullptr;
     cl_kernel kernel_div, kernel_div_row, kernel_div_f16, kernel_div_row_f16;
     cl_kernel kernel_sub, kernel_sub_row, kernel_sub_f16, kernel_sub_row_f16;
     cl_kernel kernel_add_id;
@@ -1573,6 +1574,7 @@ struct ggml_backend_opencl_context {
 #endif
         for (cl_kernel kernel : {
                 kernel_gemv_f32_f32_mcr,
+                kernel_mul_mat_scale,
                 kernel_xielu_f32,
                 kernel_xielu_f16,
                 kernel_mul_mm_f16_f32_kq_p8,
@@ -4584,6 +4586,7 @@ static void load_cl_kernels(ggml_backend_opencl_context *backend_ctx) {
         CL_CHECK((backend_ctx->kernel_mul_row     = clCreateKernel(backend_ctx->program_mul, "kernel_mul_row", &err), err));
         CL_CHECK((backend_ctx->kernel_mul_f16     = clCreateKernel(backend_ctx->program_mul, "kernel_mul_f16", &err), err));
         CL_CHECK((backend_ctx->kernel_mul_row_f16 = clCreateKernel(backend_ctx->program_mul, "kernel_mul_row_f16", &err), err));
+        CL_CHECK((backend_ctx->kernel_mul_mat_scale = clCreateKernel(backend_ctx->program_mul, "kernel_mul_mat_scale", &err), err));
         GGML_LOG_CONT(".");
     }
 
@@ -11380,7 +11383,7 @@ static void ggml_cl_moe_gemm_coopmat(
     clReleaseMemObject(buf_dst_image);
 }
 
-static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
+static void ggml_cl_mul_mat_ext(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst);
 
 // Runs the gate and up matmuls unchanged, then one kernel in place of
 // add_id(gate) + add_id(up) + swiglu_oai. See ggml_opencl_can_fuse_moe_bias_glu.
@@ -11388,8 +11391,8 @@ static void ggml_cl_moe_bias_glu_fused(ggml_backend_t backend, ggml_tensor * gat
                                        ggml_tensor * up_mm, const ggml_tensor * up_add, const ggml_tensor * glu) {
     ggml_backend_opencl_context * backend_ctx = (ggml_backend_opencl_context *)backend->context;
 
-    ggml_cl_mul_mat_id(backend, gate_mm->src[0], gate_mm->src[1], gate_mm);
-    ggml_cl_mul_mat_id(backend, up_mm->src[0], up_mm->src[1], up_mm);
+    ggml_cl_mul_mat_ext(backend, gate_mm->src[0], gate_mm->src[1], gate_mm);
+    ggml_cl_mul_mat_ext(backend, up_mm->src[0], up_mm->src[1], up_mm);
 
     const ggml_tensor * gbias = gate_add->src[1];
     const ggml_tensor * ubias = up_add->src[1];
@@ -11677,6 +11680,10 @@ static bool ggml_opencl_can_fuse(const ggml_backend_opencl_context * backend_ctx
         const ggml_tensor *gate = cgraph->nodes[node_idx];
         const ggml_tensor *up   = cgraph->nodes[node_idx+1];
         const ggml_tensor *glu  = cgraph->nodes[node_idx+2];
+
+        if (ggml_get_src_scale(gate, 0) || ggml_get_src_scale(up, 0)) {
+            return false;
+        }
 
         // decode GEMV path only (single token); prefill GEMM is separate
         if (gate->ne[1] != 1 || up->ne[1] != 1) {
@@ -12743,10 +12750,6 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
 
     // reject ops that match the opfilter regex
     if (dev_ctx->opfilter && std::regex_match(std::string(ggml_op_desc(op)), *dev_ctx->opfilter)) {
-        return false;
-    }
-
-    if (ggml_get_src_scale(op, 0)) {
         return false;
     }
 
@@ -39795,6 +39798,60 @@ static void ggml_cl_mul_mat_id(ggml_backend_t backend, const ggml_tensor * src0,
     backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, local_work_size, dst);
 }
 
+static void ggml_cl_mul_mat_ext(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
+    const ggml_tensor * ids = dst->op == GGML_OP_MUL_MAT_ID ? dst->src[2] : nullptr;
+    if (ids) {
+        ggml_cl_mul_mat_id(backend, src0, src1, dst);
+    } else {
+        ggml_cl_mul_mat(backend, src0, src1, dst);
+    }
+
+    const ggml_tensor * scale = ggml_get_src_scale(dst, 0);
+    if (!scale) {
+        return;
+    }
+    GGML_ASSERT(ggml_is_contiguous(dst) && dst->type == GGML_TYPE_F32 && scale->type == GGML_TYPE_F32);
+
+    cl_ulong channel_stride = 0;
+    cl_ulong expert_stride  = 0;
+    if (!ggml_is_scalar(scale)) {
+        if (ids && ggml_is_vector(scale) && scale->ne[0] == src0->ne[2]) {
+            expert_stride = scale->nb[0];
+        } else {
+            channel_stride = scale->nb[0];
+            expert_stride  = ids ? scale->nb[1] : 0;
+        }
+    }
+
+    auto * backend_ctx = (ggml_backend_opencl_context *) backend->context;
+    auto * ed = (ggml_tensor_extra_cl *) dst->extra;
+    auto * es = (ggml_tensor_extra_cl *) scale->extra;
+    auto * ei = ids ? (ggml_tensor_extra_cl *) ids->extra : nullptr;
+    const cl_ulong offsetd = ed->offset + dst->view_offs;
+    const cl_ulong offsets = es->offset + scale->view_offs;
+    const cl_mem   ids_buf = ids ? ei->data_device : nullptr;
+    const cl_ulong offseti = ids ? ei->offset + ids->view_offs : 0;
+    const cl_ulong ids_nb0 = ids ? ids->nb[0] : 0;
+    const cl_ulong ids_nb1 = ids ? ids->nb[1] : 0;
+    const cl_long n_expert = src0->ne[2];
+
+    cl_kernel kernel = backend_ctx->kernel_mul_mat_scale;
+    CL_CHECK(clSetKernelArg(kernel,  0, sizeof(cl_mem),   &ed->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  1, sizeof(cl_ulong), &offsetd));
+    CL_CHECK(clSetKernelArg(kernel,  2, sizeof(cl_mem),   &es->data_device));
+    CL_CHECK(clSetKernelArg(kernel,  3, sizeof(cl_ulong), &offsets));
+    CL_CHECK(clSetKernelArg(kernel,  4, sizeof(cl_ulong), &channel_stride));
+    CL_CHECK(clSetKernelArg(kernel,  5, sizeof(cl_ulong), &expert_stride));
+    CL_CHECK(clSetKernelArg(kernel,  6, sizeof(cl_mem),   &ids_buf));
+    CL_CHECK(clSetKernelArg(kernel,  7, sizeof(cl_ulong), &offseti));
+    CL_CHECK(clSetKernelArg(kernel,  8, sizeof(cl_ulong), &ids_nb0));
+    CL_CHECK(clSetKernelArg(kernel,  9, sizeof(cl_ulong), &ids_nb1));
+    CL_CHECK(clSetKernelArg(kernel, 10, sizeof(cl_long),  &n_expert));
+
+    size_t global_work_size[] = { (size_t) dst->ne[0], (size_t) dst->ne[1], (size_t) (dst->ne[2]*dst->ne[3]) };
+    backend_ctx->enqueue_ndrange_kernel(kernel, 3, global_work_size, nullptr, dst);
+}
+
 static void ggml_cl_scale(ggml_backend_t backend, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     GGML_ASSERT(src0);
     GGML_ASSERT(src0->extra);
@@ -42049,13 +42106,13 @@ bool ggml_cl_compute_forward(ggml_backend_t backend, struct ggml_tensor * tensor
             if (!any_on_device && !ggml_cl_can_mul_mat(tensor->src[0], tensor->src[1], tensor)) {
                 return false;
             }
-            func = ggml_cl_mul_mat;
+            func = ggml_cl_mul_mat_ext;
             break;
         case GGML_OP_MUL_MAT_ID:
             if (!any_on_device) {
                 return false;
             }
-            func = ggml_cl_mul_mat_id;
+            func = ggml_cl_mul_mat_ext;
             break;
         case GGML_OP_SCALE:
             if (!any_on_device) {
