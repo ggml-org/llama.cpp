@@ -13,12 +13,15 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from typing import cast
+from unittest.mock import patch
 
 import numpy as np
 import torch
 from safetensors.torch import save_file
+from safetensors import safe_open
 
-from conversion.base import LazyTorchTensor, gguf
+from conversion.base import LazyTorchTensor, ModelBase, gguf
 from conversion.deepseek import DeepseekV2Model
 from conversion.inkling2 import Inkling2Model, _E4M3, _E2M1
 from conversion.llama import LlamaModel
@@ -774,6 +777,158 @@ class TestQwen4ExpPleScale(unittest.TestCase):
                     dtype, data = result[self.TABLE]
                     self.assertEqual(dtype, qtype)
                     np.testing.assert_array_equal(data, values * (0.25 if scaled else 1.))
+
+
+class TestNVFP4CSFConversion(unittest.TestCase):
+    def fixture(self, empty=False):
+        rows, cols = 32, 8
+        expected = np.array([[80 + r % 16 + (r + 3 * c) % 16 for c in range(cols)] for r in range(rows)], dtype=np.uint8)
+        fixed = []
+        for start in range(0, rows, 16):
+            bases = [80 + r % 16 for r in range(start, start + 16)]
+            codes = []
+            for r in range(start, start + 16):
+                codes.extend((r + 3 * c) % 16 | ((r + 3 * (c + 1)) % 16) << 4 for c in range(0, cols, 2))
+            fixed.append(bases + codes)
+        replacements = [] if empty else [(0, 88), (7, 99), (8, 90), (127, 110), (128, 92), (255, 101)]
+        words = []
+        for position, value in replacements:
+            words.append(position | value << 24)
+            expected.reshape(-1)[position] = value
+        return torch.tensor(fixed, dtype=torch.uint8), torch.tensor(words, dtype=torch.uint32), expected
+
+    def test_decode_scale_bytes(self):
+        for empty in (False, True):
+            with self.subTest(empty=empty):
+                fixed, exceptions, expected = self.fixture(empty)
+                actual = ModelBase._decode_nvfp4_csf(fixed, exceptions)
+                self.assertEqual(actual.dtype, torch.float8_e4m3fn)
+                np.testing.assert_array_equal(actual.view(torch.uint8).numpy(), expected)
+        fixed, _, expected = self.fixture(empty=True)
+        expected.reshape(-1)[0] = 255
+        actual = ModelBase._decode_nvfp4_csf(fixed, torch.tensor([0xFF000000], dtype=torch.uint32))
+        np.testing.assert_array_equal(actual.view(torch.uint8).numpy(), expected)
+
+    def test_invalid_streams(self):
+        fixed, exceptions, _ = self.fixture()
+        invalid_base = fixed.clone()
+        invalid_base[0, 0] = 241
+        for bad_fixed, bad_exceptions, message in (
+            (fixed.float(), exceptions, "fixed stream"),
+            (fixed[:, :-1], exceptions, "fixed stream"),
+            (torch.empty((1, 16), dtype=torch.uint8), exceptions, "fixed stream"),
+            (torch.empty((0, 80), dtype=torch.uint8), exceptions, "fixed stream"),
+            (fixed, exceptions.to(torch.int64), "U32"),
+            (fixed, exceptions.reshape(2, 3), "one-dimensional"),
+            (invalid_base, exceptions, "row bases"),
+            (fixed, torch.tensor([256], dtype=torch.uint32), "increasing and in range"),
+            (fixed, torch.tensor([1, 1], dtype=torch.uint32), "increasing and in range"),
+            (fixed, torch.tensor([2, 1], dtype=torch.uint32), "increasing and in range"),
+            (torch.empty((524289, 32), dtype=torch.uint8, device="meta"), exceptions, "24-bit"),
+        ):
+            with self.subTest(message=message, shape=tuple(bad_fixed.shape)):
+                with self.assertRaisesRegex(ValueError, message):
+                    ModelBase._decode_nvfp4_csf(bad_fixed, bad_exceptions)
+
+    def test_u32_loaders_preserve_high_bits(self):
+        values = torch.tensor([0, 0x80000000, 0xFFFFFFFF], dtype=torch.uint32)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "model.safetensors"
+            save_file({"words": values}, str(path))
+            with safe_open(str(path), framework="pt") as checkpoint:
+                lazy = LazyTorchTensor.from_safetensors_slice(checkpoint.get_slice("words"))
+                self.assertEqual(lazy.dtype, torch.uint32)
+                self.assertEqual(LazyTorchTensor.to_eager(lazy).tolist(), values.tolist())
+                np.testing.assert_array_equal(gguf.LazyNumpyTensor.to_eager(lazy.numpy()), values.numpy())
+            with gguf.utility.SafetensorsLocal(path) as checkpoint:
+                lazy = LazyTorchTensor.from_local_tensor(checkpoint["words"])
+                self.assertEqual(LazyTorchTensor.to_eager(lazy).tolist(), values.tolist())
+            del lazy, checkpoint
+
+        class RemoteWords:
+            dtype = "U32"
+            shape = (3,)
+
+            def data(self):
+                return bytearray(values.numpy().astype("<u4").tobytes())
+
+        lazy = LazyTorchTensor.from_remote_tensor(cast(gguf.utility.RemoteTensor, RemoteWords()))
+        self.assertEqual(LazyTorchTensor.to_eager(lazy).tolist(), values.tolist())
+
+    def test_expert_conversion_matches_uncompressed(self):
+        fixed, exceptions, expected = self.fixture()
+        module = "model.layers.0.mlp.experts"
+        common = {}
+        compressed, canonical = {}, {}
+        for expert in (1, 0):
+            name = f"{module}.{expert}.down_proj.weight"
+            common[name] = (torch.arange(32 * 64).reshape(32, 64) % 256).to(torch.uint8)
+            common[name + "_scale_2"] = torch.tensor([0.25 + expert])
+            common[name.replace(".weight", ".input_scale")] = torch.tensor([0.5 + expert])
+            compressed[name + "_scale.nvfp4_csf_fixed"] = fixed.clone()
+            compressed[name + "_scale.nvfp4_csf_exceptions"] = exceptions.clone()
+            canonical[name + "_scale"] = torch.from_numpy(expected.copy()).view(torch.float8_e4m3fn)
+        hp = {"quantization_config": {"quant_method": "modelopt", "quant_algo": "MIXED_PRECISION", "quantized_layers": {
+            module: {"quant_algo": "NVFP4", "group_size": 16, "weight_scale_encoding": "csf"},
+        }}}
+        helper = TestFP8Conversion()
+        for eager in (False, True):
+            with self.subTest(eager=eager):
+                actual = helper.convert(Qwen2MoeModel, common | compressed, eager=eager, hparams_override=hp)
+                reference = helper.convert(Qwen2MoeModel, common | canonical, eager=eager, hparams_override=hp)
+                self.assertEqual(actual.keys(), reference.keys())
+                self.assertEqual(actual["blk.0.ffn_down_exps.weight"][0], gguf.GGMLQuantizationType.NVFP4)
+                for name in actual:
+                    self.assertEqual(actual[name][0], reference[name][0])
+                    np.testing.assert_array_equal(actual[name][1], reference[name][1], name)
+                np.testing.assert_array_equal(actual["blk.0.ffn_down_exps.scale"][1], [0.25, 1.25])
+                np.testing.assert_array_equal(actual["blk.0.ffn_down_exps.input_scale"][1], [0.5, 1.5])
+
+    def test_stream_pairing_errors(self):
+        fixed, exceptions, expected = self.fixture()
+        name = "model.layers.0.mlp.experts.0.down_proj.weight"
+        tensors = {name: torch.zeros((32, 64), dtype=torch.uint8), name + "_scale.nvfp4_csf_fixed": fixed,
+                   name + "_scale.nvfp4_csf_exceptions": exceptions}
+        hp = {"quantization_config": {"quant_method": "modelopt", "quant_algo": "NVFP4"}}
+        for remove, extra, message in (
+            (name + "_scale.nvfp4_csf_fixed", {}, "Incomplete"),
+            (name + "_scale.nvfp4_csf_exceptions", {}, "Incomplete"),
+            (name, {}, "no weight tensor"),
+            (None, {name + "_scale": torch.from_numpy(expected).view(torch.float8_e4m3fn)}, "both compressed and uncompressed"),
+            (None, {name: torch.zeros((16, 64), dtype=torch.uint8)}, "expected"),
+        ):
+            with self.subTest(message=message):
+                case = tensors | extra
+                if remove:
+                    del case[remove]
+                with self.assertRaisesRegex(ValueError, message):
+                    TestFP8Conversion().convert(Qwen2MoeModel, case, hparams_override=hp)
+
+    def test_scale_preparation_is_lazy_and_idempotent(self):
+        fixed, exceptions, expected = self.fixture()
+        name = "model.layers.0.mlp.experts.0.down_proj.weight"
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            hp = {"num_hidden_layers": 1, "architectures": ["Qwen2MoeForCausalLM"]}
+            save_file({name: torch.zeros((32, 64), dtype=torch.uint8), name + "_scale.nvfp4_csf_fixed": fixed,
+                       name + "_scale.nvfp4_csf_exceptions": exceptions}, str(path / "model.safetensors"))
+            model = Qwen2MoeModel(path, gguf.LlamaFileType.MOSTLY_F16, path / "out.gguf", hparams=hp)
+            calls = []
+            original = ModelBase._decode_nvfp4_csf
+
+            def decode(fixed, exceptions):
+                calls.append(1)
+                return original(fixed, exceptions)
+
+            with patch.object(ModelBase, "_decode_nvfp4_csf", staticmethod(decode)):
+                model._prepare_nvfp4_csf_scales()
+                model._prepare_nvfp4_csf_scales()
+                scale = model.model_tensors[name + "_scale"]()
+                self.assertEqual(calls, [])
+                self.assertEqual(set(model.model_tensors), {name, name + "_scale"})
+                np.testing.assert_array_equal(LazyTorchTensor.to_eager(scale).view(torch.uint8).numpy(), expected)
+                self.assertEqual(calls, [1])
+            del scale, model
 
 
 if __name__ == "__main__":
