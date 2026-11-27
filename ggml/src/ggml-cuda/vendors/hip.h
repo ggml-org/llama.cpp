@@ -315,6 +315,22 @@ static __device__ __forceinline__ unsigned int __vcmpne4(unsigned int a, unsigne
     return (ne_any_bit >> 7) * 0xff;
 }
 
+// Pure-register SWAR carry-free sign application for strictly positive (1..127) IQ2/IQ3 grid words.
+// All 5 GGML IQ2/IQ3 grids (iq2xxs, iq2xs, iq2s, iq3xxs, iq3s) satisfy min_byte >= 1 (8,8,8,4,1),
+// so (~b + 1) stays within [0x81..0xFF] with zero cross-byte carry.
+static __device__ __forceinline__ uint32_t ggml_hip_unpack_ksigns_rep(const uint8_t v) {
+    const uint32_t sb = (uint32_t) v ^ ((__popc((uint32_t) v) & 1u) << 7);
+    return sb * 0x01010101u;
+}
+
+static __device__ __forceinline__ int ggml_hip_apply_signs_nz_swar(
+        const uint32_t grid_word, const uint32_t signs_rep, const uint32_t bit_mask) {
+    const uint32_t nz = ((signs_rep & bit_mask) + 0x7F7F7F7Fu) & 0x80808080u;
+    const uint32_t m1 = nz >> 7;
+    const uint32_t m  = nz | (nz - m1);
+    return (int) ((grid_word ^ m) + m1);
+}
+
 // v_perm_b32 with selector bytes in [0, 7]: 0-3 pick bytes of lo, 4-7 pick bytes of hi.
 static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, const uint32_t lo, const uint32_t sel) {
 #if __has_builtin(__builtin_amdgcn_is_invocable)
