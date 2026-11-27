@@ -1,6 +1,6 @@
 {
 	"name": "@ggml-org/llama-chat",
-	"version": "0.3.1",
+	"version": "0.4.0",
 	"description": "Llama Chat, the chat app for llama.cpp. Run it with npx @ggml-org/llama-chat against any llama-server.",
 	"keywords": [
 		"llama.cpp",

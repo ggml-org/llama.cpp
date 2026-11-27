@@ -47,6 +47,8 @@ jobs:
       - name: Build application
         env:
           LLAMA_BUILD_NUMBER: ${{ steps.version.outputs.ui_version }}
+          # the UI that the releases and the prebuilt download are made of has the Hugging Face lib
+          VITE_PUBLIC_HUGGING_FACE: "true"
         run: npm run build
         working-directory: ui/apps/chat
 

@@ -30,6 +30,7 @@
 	import { usePwa } from '#lib/hooks/use-pwa.svelte.ts';
 	import { useSidebarReveal } from '#lib/hooks/use-sidebar-reveal.svelte.ts';
 	import { RouterService } from '#lib/services/router.service.ts';
+	import { startHuggingFace } from '#lib/stores/huggingface.svelte.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -213,6 +214,9 @@
 
 	onMount(() => {
 		updateFavicon();
+
+		startHuggingFace();
+
 		// snapshot of every backend running stream on first load, populates the sidebar spinners
 		// so the user sees each conv that has a live inference, even ones not opened yet
 		void chatStore.syncRemoteRunningStreams();

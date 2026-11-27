@@ -5,10 +5,11 @@ The UI of llama.cpp: the packages in `lib` and the apps built on them.
 ```text
 ui/
 ├── lib/
-│   ├── ui/       @ggml-org/llama-ui: design tokens, fonts, surfaces and components
-│   ├── voice/    @ggml-org/llama-voice: microphone capture, transcription and dictation
-│   ├── harness/  @ggml-org/llama-harness: the agentic loop, headless
-│   └── demo/     @ggml-org/llama-demo: scripted demo videos for PRs and docs
+│   ├── ui/           @ggml-org/llama-ui: design tokens, fonts, surfaces and components
+│   ├── voice/        @ggml-org/llama-voice: microphone capture, transcription and dictation
+│   ├── harness/      @ggml-org/llama-harness: the agentic loop, headless
+│   ├── demo/         @ggml-org/llama-demo: scripted demo videos for PRs and docs
+│   └── huggingface/  @ggml-org/llama-huggingface: a Hugging Face account, and sharing to it
 └── apps/
     └── chat/       Llama Chat, the chat app that llama-server serves
 ```
@@ -24,6 +25,9 @@ ui/
 - [`lib/demo`](lib/demo/README.md) records scripted demo videos of the apps for PRs and docs, and renders them on the
   Llama brand. It is Node TypeScript that an app adds as a local `file:` dependency and imports by name, with the app's own
   Playwright; it is private, not published to npm.
+- [`lib/huggingface`](lib/huggingface/README.md) gives an app a Hugging Face account: signing in from the browser,
+  and sharing a conversation to a dataset as an agent trace, with the components for both. It knows no app; apps in
+  this repo compile its sources too. It is not published yet.
 - [`apps/chat`](apps/chat/README.md) talks to llama-server, stores conversations and runs the agentic loop through the
   harness. CMake builds it into llama-server (see `scripts/ui-assets.cmake`), and it is published to npm as
   `@ggml-org/llama-chat` (with `llama-chat` as its short name), so `npx llama-chat` runs it against any llama-server.
