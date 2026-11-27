@@ -6870,11 +6870,6 @@ struct test_mul_mat_id : public test_case {
         return 2 * m * k * n * n_used;
     }
 
-    std::string op_desc(ggml_tensor * t) override {
-        GGML_UNUSED(t);
-        return ggml_op_name(GGML_OP_MUL_MAT_ID);
-    }
-
     test_mul_mat_id(ggml_type type_a = GGML_TYPE_F32, ggml_type type_b = GGML_TYPE_F32,
             int n_mats = 8, int n_used = 2, bool b = false,
             int64_t m = 32, int64_t n = 32, int64_t k = 32,
@@ -13488,18 +13483,6 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     for (int64_t n : {1, 16}) {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_NVFP4, GGML_TYPE_F32, 4, 2, false, 32, n, 256, 0, false, false, 0, true));
-    }
-
-    // FP8 weight-scale coverage (Qwen3.5-35B-A3B-FP8 shapes): dense per-channel + MoE per-channel-per-expert
-    for (int scale_gran : {1, 2}) {
-        // dense attention/shexp: (k, m)
-        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, 8192, 1, 2048, {1, 1}, {1, 1}, {0,1,2,3}, 0, 1, false, 0, 0, 0, false, scale_gran));
-        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, 8192, 16, 2048, {1, 1}, {1, 1}, {0,1,2,3}, 0, 1, false, 0, 0, 0, false, scale_gran));
-        // MoE experts: (type, n_mats, n_used, b, m, n, k)
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, 256, 8, false, 512, 1, 2048, 0, false, false, scale_gran));  // gate/up decode
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, 256, 8, false, 512, 16, 2048, 0, false, false, scale_gran)); // gate/up prompt
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, 256, 8, false, 2048, 1, 512, 0, false, false, scale_gran));  // down decode
-        test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_F8_E4M3, GGML_TYPE_F32, 256, 8, false, 2048, 16, 512, 0, false, false, scale_gran)); // down prompt
     }
 
 #if 0

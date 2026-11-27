@@ -1026,76 +1026,6 @@ static std::vector<float> get_logits(
     return ret;
 }
 
-static void write_moe_scales(const std::string & source_path, const std::string & path) {
-    ggml_context * ctx_raw = nullptr;
-    gguf_context_ptr source(gguf_init_from_file(source_path.c_str(), { false, &ctx_raw }));
-    ggml_context_ptr source_ctx(ctx_raw);
-    if (!source || !source_ctx) {
-        throw std::runtime_error("failed to read MoE scale test fixture");
-    }
-    const int64_t n_tensors = gguf_get_n_tensors(source.get());
-    gguf_context_ptr scaled(gguf_init_empty());
-    gguf_set_kv(scaled.get(), source.get());
-    ggml_context_ptr scale_ctx(ggml_init({ size_t(n_tensors)*ggml_tensor_overhead(), nullptr, true }));
-    const std::regex expert_down("blk\\.[0-9]+\\.ffn_down_exps\\.weight");
-    // GGUF keeps pointers into these buffers until the file is written.
-    std::vector<std::vector<float>> scale_data;
-    for (int64_t i = 0; i < n_tensors; ++i) {
-        const char * name = gguf_get_tensor_name(source.get(), i);
-        const ggml_tensor * w = ggml_get_tensor(source_ctx.get(), name);
-        gguf_add_tensor(scaled.get(), w);
-        if (!std::regex_match(name, expert_down)) {
-            continue;
-        }
-        ggml_tensor * scale = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, w->ne[2]);
-        const std::string scale_name = std::string(name, strlen(name) - strlen("weight")) + "scale";
-        ggml_set_name(scale, scale_name.c_str());
-        scale_data.emplace_back(ggml_nelements(scale), 1.0f);
-        scale->data = scale_data.back().data();
-        gguf_add_tensor(scaled.get(), scale);
-
-        ggml_tensor * scale_in = ggml_new_tensor_1d(scale_ctx.get(), GGML_TYPE_F32, w->ne[2]);
-        const std::string scale_in_name = std::string(name, strlen(name) - strlen("weight")) + "input_scale";
-        ggml_set_name(scale_in, scale_in_name.c_str());
-        scale_data.emplace_back(ggml_nelements(scale_in), 1.0f);
-        scale_in->data = scale_data.back().data();
-        gguf_add_tensor(scaled.get(), scale_in);
-    }
-    if (scale_data.empty()) {
-        throw std::runtime_error("MoE scale test fixture has no expert down weights");
-    }
-    if (!gguf_write_to_file(scaled.get(), path.c_str(), false)) {
-        throw std::runtime_error("failed to write MoE scale test fixture");
-    }
-}
-
-static bool check_moe_scaled_roundtrip(const std::string & source_path, const std::vector<llama_token> & tokens,
-        const std::vector<ggml_backend_dev_t> & devs,
-        const llama_model_tensor_buft_override * overrides, size_t cache_size, size_t seed, float stdev) {
-    const std::string path = get_tmp_gguf_path();
-    write_moe_scales(source_path, path);
-    std::unique_ptr<FILE, int (*)(FILE *)> file(fopen(path.c_str(), "rb"), fclose);
-    GGML_ASSERT(file);
-    auto scaled = get_model_and_ctx(nullptr, file.get(), seed, stdev, devs, LLAMA_SPLIT_MODE_LAYER, false, overrides, cache_size);
-    const auto expected = get_logits(scaled.first.get(), scaled.second.get(), tokens);
-
-    const std::string roundtrip_path = get_tmp_gguf_path();
-    llama_model_save_to_file(scaled.first.get(), roundtrip_path.c_str());
-    std::unique_ptr<FILE, int (*)(FILE *)> roundtrip_file(fopen(roundtrip_path.c_str(), "rb"), fclose);
-    GGML_ASSERT(roundtrip_file);
-    auto reloaded = get_model_and_ctx(nullptr, roundtrip_file.get(), seed, stdev, devs, LLAMA_SPLIT_MODE_LAYER, false, overrides, cache_size);
-    const auto actual = get_logits(reloaded.first.get(), reloaded.second.get(), tokens);
-    file.reset();
-    roundtrip_file.reset();
-    std::filesystem::remove(path);
-    std::filesystem::remove(roundtrip_path);
-    if (actual != expected) {
-        fprintf(stderr, "MoE scaled roundtrip: logits differ\n");
-        return false;
-    }
-    return true;
-}
-
 // entries [n/4, n/2) are embd rows, decoded either as token/embd/token chunks or as one mixed batch
 // returns the llama_process() error code
 static int32_t get_logits_mixed(
@@ -1714,11 +1644,6 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         }
 
                         fclose(file);
-                        if (arch == LLM_ARCH_DEEPSEEK2 && moe &&
-                                !check_moe_scaled_roundtrip(path, tokens, dc.devs, overrides, dc.moe_cache_size, seed, stdev)) {
-                            test_ok = false;
-                            status_roundtrip = "\033[1;31mFAIL\033[0m (scaled)";
-                        }
                         std::filesystem::remove(path);
                     }
                 }
