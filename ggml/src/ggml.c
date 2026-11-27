@@ -5646,12 +5646,12 @@ static bool ggml_flash_attn_ext_add_bias_indexed_validate(const struct ggml_tens
         return false;
     }
 
-    const struct ggml_tensor * table   = a->src[6];
-    const struct ggml_tensor * indices = a->src[7];
     const struct ggml_tensor * q       = a->src[0];
     const struct ggml_tensor * k       = a->src[1];
     const struct ggml_tensor * mask    = a->src[3];
     const struct ggml_tensor * rows    = a->src[5];
+    const struct ggml_tensor * table   = a->src[6];
+    const struct ggml_tensor * indices = a->src[7];
 
     if (!q || !k || !a->src[2] || !mask) {
         return false;
