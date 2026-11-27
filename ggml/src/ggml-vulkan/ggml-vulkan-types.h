@@ -465,10 +465,11 @@ struct vk_xe_fa_pipeline_state {
     bool unaligned_q;
     bool partial_row_mask;
     bool multi_head_mask;
+    bool kv_rows;
 
     bool operator<(const vk_xe_fa_pipeline_state &b) const {
-        return std::tie(HSK, HSV, qk_ratio, pv_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask) <
-               std::tie(b.HSK, b.HSV, b.qk_ratio, b.pv_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask);
+        return std::tie(HSK, HSV, qk_ratio, pv_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask, kv_rows) <
+               std::tie(b.HSK, b.HSV, b.qk_ratio, b.pv_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask, b.kv_rows);
     }
 };
 
