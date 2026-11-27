@@ -985,8 +985,10 @@ inline bool ggml_webgpu_flash_attn_can_use_subgroup_matrix_path(bool            
                                                                 uint32_t            sg_mat_k,
                                                                 uint32_t            sg_mat_n,
                                                                 const ggml_tensor * Q,
-                                                                const ggml_tensor * V) {
-    return supports_subgroup_matrix && Q->ne[0] % sg_mat_k == 0 && V->ne[0] % sg_mat_n == 0;
+                                                                const ggml_tensor * V,
+                                                                ggml_prec           precision) {
+    return precision != GGML_PREC_F32 && precision != GGML_PREC_BF16 && supports_subgroup_matrix &&
+           Q->ne[0] % sg_mat_k == 0 && V->ne[0] % sg_mat_n == 0;
 }
 
 /** Matrix Multiplication **/
@@ -3053,7 +3055,8 @@ class ggml_webgpu_shader_lib {
 
     webgpu_pipeline get_flash_attn_pipeline(const ggml_webgpu_shader_lib_context & context, bool kv_overlap) {
         const bool can_use_subgroup_matrix = ggml_webgpu_flash_attn_can_use_subgroup_matrix_path(
-            context.supports_subgroup_matrix, context.sg_mat_k, context.sg_mat_n, context.src0, context.src2);
+            context.supports_subgroup_matrix, context.sg_mat_k, context.sg_mat_n, context.src0, context.src2,
+            ggml_flash_attn_ext_get_prec(context.dst));
         ggml_webgpu_flash_attn_decisions decisions = {};
         decisions.use_sg_matrix                    = can_use_subgroup_matrix;
         decisions.q_tile = decisions.use_sg_matrix ? context.sg_mat_m : GGML_WEBGPU_FLASH_ATTN_TILE_Q_TILE;

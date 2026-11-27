@@ -9166,6 +9166,20 @@ struct test_flash_attn_ext : public test_case {
     }
 };
 
+struct test_flash_attn_ext_overflow : public test_flash_attn_ext {
+    using test_flash_attn_ext::test_flash_attn_ext;
+
+    std::string vars() override {
+        return test_flash_attn_ext::vars() + ",overflow=1";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        test_flash_attn_ext::initialize_tensors(ctx);
+        init_tensor_uniform(ggml_get_tensor(ctx, "q"), 100.0f, 100.0f);
+        init_tensor_uniform(ggml_get_tensor(ctx, "k"), 100.0f, 100.0f);
+    }
+};
+
 // large Q values, so the online softmax has to rescale the partial results
 struct test_flash_attn_ext_large_logits : public test_flash_attn_ext {
     static constexpr int q_range = 20;
@@ -10623,6 +10637,10 @@ static const ggml_type other_types[] = {
 static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
+
+    for (ggml_prec prec : {GGML_PREC_F32, GGML_PREC_BF16}) {
+        test_cases.emplace_back(new test_flash_attn_ext_overflow(64, 64, 1, {1, 1}, 64, 32, false, false, 0, 0, prec, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, false));
+    }
 
     // unary ops
     // TODO: add GGML_UNARY_OP_SOFTPLUS test that is sensitive to using `log1p(exp(x))` vs `log(exp(x) + 1)`
