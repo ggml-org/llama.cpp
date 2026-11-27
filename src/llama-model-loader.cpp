@@ -1257,8 +1257,10 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         // some models use the token embedding tensor as the output, but since these are used in different layers and with different ops
         // the tensor is duplicated
         // to handle this, we check if the tensor is duplicated, and if so, we assume that it is being loaded as the output tensor
+        // except for pooled models: a pooled context skips the LM head, so it stays with token_embd and a context that computes logits copies it
+        const bool pooled = hparams.pooling_type != LLAMA_POOLING_TYPE_NONE && hparams.pooling_type != LLAMA_POOLING_TYPE_UNSPECIFIED;
         llm_tensor tn_tensor = tn.tensor;
-        if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && (flags & TENSOR_DUPLICATED)) {
+        if (tn.tensor == LLM_TENSOR_TOKEN_EMBD && (flags & TENSOR_DUPLICATED) && !pooled) {
             tn_tensor = LLM_TENSOR_OUTPUT;
         }
 

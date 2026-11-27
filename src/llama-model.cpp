@@ -3049,6 +3049,20 @@ bool llama_model::has_tensor_overrides() const {
     return pimpl->has_tensor_overrides;
 }
 
+ggml_backend_buffer_type_t llama_model::lm_head_buft() const {
+    // a pooled model keeps token_embd as the output, see llama_model_loader::create_tensor, and any -ot keeps the head with token_embd
+    if (output == nullptr || output != tok_embd || has_tensor_overrides()) {
+        return nullptr;
+    }
+
+    ggml_backend_buffer_type_t buft = ::select_buft(*pimpl->dev_output.buft_list, [&](ggml_context * ctx) {
+        ggml_tensor * cur = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, output->ne[0], 512);
+        return ggml_mul_mat(ctx, ggml_dup_tensor(ctx, output), cur);
+    });
+
+    return ggml_backend_buft_is_host(buft) ? nullptr : buft;
+}
+
 const ggml_tensor * llama_model::get_tensor(const char * name) const {
     auto it = std::find_if(tensors_by_name.begin(), tensors_by_name.end(),
             [name](const std::pair<std::string, ggml_tensor *> & it) {

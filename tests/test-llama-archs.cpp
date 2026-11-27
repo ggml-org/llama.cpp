@@ -945,13 +945,36 @@ static std::string get_tmp_gguf_path() {
     return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
 }
 
+static std::string save_tied_gguf(const std::string & path, const llm_arch arch) {
+    ggml_context * ctx_data = nullptr;
+    gguf_context_ptr src(gguf_init_from_file(path.c_str(), { /*.no_alloc =*/ false, /*.ctx =*/ &ctx_data }));
+    GGML_ASSERT(src);
+    ggml_context_ptr data(ctx_data);
+    gguf_context_ptr dst(gguf_init_empty());
+    gguf_set_kv(dst.get(), src.get());
+    kv_writer(arch, dst.get()).add_kv(LLM_KV_POOLING_TYPE, uint32_t(LLAMA_POOLING_TYPE_MEAN));
+    for (int64_t i = 0; i < gguf_get_n_tensors(src.get()); i++) {
+        const char * name = gguf_get_tensor_name(src.get(), i);
+        if (strcmp(name, "output.weight") != 0) {
+            gguf_add_tensor(dst.get(), ggml_get_tensor(ctx_data, name));
+        }
+    }
+    const std::string path_tied = get_tmp_gguf_path();
+    gguf_write_to_file(dst.get(), path_tied.c_str(), false);
+    return path_tied;
+}
+
 static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const bool no_alloc = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
+    model_params.no_alloc = no_alloc;
+    if (no_alloc) {
+        model_params.load_mode = LLAMA_LOAD_MODE_NONE; // as in the fit
+    }
     model_params.progress_callback = silent_model_load_progress;
     std::vector<ggml_backend_dev_t> devs_copy = devs;
     devs_copy.push_back(nullptr);
@@ -973,11 +996,13 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0) {
-    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, const size_t moe_cache_size = 0, const bool embeddings = false,
+        const bool no_alloc = false) {
+    llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides, no_alloc);
 
     llama_context_params ctx_params = llama_context_default_params();
     ctx_params.n_ctx = 0;
+    ctx_params.embeddings = embeddings;
     ctx_params.n_threads = 4;
     ctx_params.n_threads_batch = 4;
     if (!encode) {
@@ -1384,6 +1409,51 @@ static std::string get_device_label(ggml_backend_dev_t dev) {
     return std::string(desc) + " (" + name + ")";
 }
 
+static size_t device_bytes(llama_context * lctx, size_t llama_memory_breakdown_data::* field = &llama_memory_breakdown_data::model) {
+    size_t ret = 0;
+    for (const auto & [buft, mb] : llama_get_memory_breakdown(lctx)) {
+        ret += ggml_backend_buft_is_host(buft) ? 0 : mb.*field;
+    }
+    return ret;
+}
+
+// the graph reads the device copy of the LM head, in a weights buffer like the model weights
+static bool reads_lm_head(llama_context * lctx) {
+    ggml_cgraph * gf = llama_graph_reserve(lctx, 1, 1, 1);
+    for (int i = 0; i < ggml_graph_n_nodes(gf); i++) {
+        const ggml_tensor * src = ggml_graph_node(gf, i)->src[0];
+        if (src != nullptr && strncmp(src->name, "lm_head.", 8) == 0) {
+            return ggml_backend_buffer_get_usage(src->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+        }
+    }
+    return false;
+}
+
+// a pooled context copies the LM head to the device when it switches to logits, as the server does
+// a CPU context and a context with -ot have no copy, and the fit measures a pooled context with the copy
+static bool check_lm_head_copy(
+        FILE * file, const size_t seed, const float stdev, const std::vector<ggml_backend_dev_t> & devs, const llama_split_mode split_mode,
+        llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens) {
+    rewind(file);
+    auto [model_cpu, lctx_cpu] = get_model_and_ctx(nullptr, file, seed, stdev, {});
+    const size_t pooled = device_bytes(lctx, &llama_memory_breakdown_data::context);
+    llama_set_embeddings(lctx, false);
+    const double err = nmse(get_logits(model_cpu.get(), lctx_cpu.get(), tokens), get_logits(model, lctx, tokens));
+    bool ok = err <= 1e-4 && device_bytes(lctx, &llama_memory_breakdown_data::context) > pooled && reads_lm_head(lctx) && !reads_lm_head(lctx_cpu.get());
+
+    const llama_model_tensor_buft_override cpu_token_embd[] = {
+        { "token_embd\\.weight", ggml_backend_cpu_buffer_type() },
+        { nullptr, nullptr },
+    };
+    rewind(file);
+    auto [model_ot, lctx_ot] = get_model_and_ctx(nullptr, file, seed, stdev, devs, split_mode, false, cpu_token_embd);
+    ok = ok && !reads_lm_head(lctx_ot.get());
+
+    rewind(file);
+    auto [model_fit, lctx_fit] = get_model_and_ctx(nullptr, file, seed, stdev, devs, split_mode, false, nullptr, 0, true, true);
+    return ok && device_bytes(lctx_fit.get(), &llama_memory_breakdown_data::context) > pooled;
+}
+
 static int test_backends(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * target_backend) {
     struct user_data_t {
         struct {
@@ -1625,10 +1695,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         FILE * file = fopen(path.c_str(), "rb");
                         GGML_ASSERT(file != nullptr);
 
+                        size_t bytes_roundtrip = 0;
                         {
                             auto model_and_ctx_roundtrip = get_model_and_ctx(nullptr, file, seed, stdev, dc.devs, dc.split_mode, encode, overrides, dc.moe_cache_size);
                             const std::vector<float> logits_roundtrip = get_logits(
                                 model_and_ctx_roundtrip.first.get(), model_and_ctx_roundtrip.second.get(), tokens, encode);
+                            bytes_roundtrip = device_bytes(model_and_ctx_roundtrip.second.get());
                             status_roundtrip = "\033[1;32mOK\033[0m";
                             GGML_ASSERT(logits_roundtrip.size() == logits_dev.size());
                             for (size_t i = 0; i < logits_roundtrip.size(); i++) {
@@ -1638,6 +1710,39 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                                     break;
                                 }
                             }
+                        }
+
+                        // a pooled model without output.weight uses token_embd as the output, the device holds no copy of it
+                        if (!dc.host_experts && !ggml_backend_buft_is_host(ggml_backend_dev_buffer_type(dc.devs[0]))) {
+                            const std::string path_tied = save_tied_gguf(path, arch);
+                            FILE * file_tied = fopen(path_tied.c_str(), "rb");
+                            GGML_ASSERT(file_tied != nullptr);
+                            // only qwen3 starts pooled and switches to logits, the other archs make the copy when the context is created
+                            std::pair<llama_model_ptr, llama_context_ptr> tied;
+                            bool ok = true;
+                            ud.verbosity = LOG_LEVEL_OUTPUT;
+                            try {
+                                tied = get_model_and_ctx(nullptr, file_tied, seed, stdev, dc.devs, dc.split_mode, encode, nullptr, 0, arch == LLM_ARCH_QWEN3);
+                            } catch (const std::exception & err) {
+                                // archs that require output.weight reject the file, a context that fails is a failure
+                                ok = strcmp(err.what(), "failed to create llama model") == 0;
+                            }
+                            ud.verbosity = verbosity;
+                            ok = ok && (!tied.second || device_bytes(tied.second.get()) < bytes_roundtrip);
+                            if (ok && arch == LLM_ARCH_QWEN3) {
+                                ok = tied.second && check_lm_head_copy(file_tied, seed, stdev, dc.devs, dc.split_mode, tied.first.get(), tied.second.get(), tokens);
+                            }
+                            // release the model before its file is removed
+                            tied.second.reset();
+                            tied.first.reset();
+                            if (!ok) {
+                                if (test_ok) {
+                                    status_roundtrip = "\033[1;31mFAIL\033[0m (tied)";
+                                }
+                                test_ok = false;
+                            }
+                            fclose(file_tied);
+                            std::filesystem::remove(path_tied);
                         }
 
                         fclose(file);

@@ -1752,6 +1752,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     cross            (params.cross),
     moe_cache        (params.moe_cache),
     hdmd             (model.hdmd.rot.empty() ? nullptr : &model.hdmd),
+    lm_head          (params.lm_head),
     layer_inp_dev    (params.layer_inp_dev),
     layer_inp_src    (params.layer_inp_src),
     h_nextn_dev      (params.h_nextn_dev),
@@ -1850,7 +1851,10 @@ ggml_tensor * llm_graph_context::build_lora_mm(
 
     // a Hadamard-folded weight reads the transformed input; a LoRA delta lives in the primal basis and reads `cur`
     ggml_tensor * cur_mm = build_hadamard_input(w, cur);
-    ggml_tensor * res = ggml_mul_mat(ctx0, w, cur_mm);
+
+    // the context may hold a device copy of the tied LM head
+    // TODO: the archs that call ggml_mul_mat(ctx0, model.output, cur) directly do not read the copy
+    ggml_tensor * res = ggml_mul_mat(ctx0, (lm_head != nullptr && w == model.output) ? lm_head : w, cur_mm);
 
     if (w->type == GGML_TYPE_NVFP4) {
         ggml_prec_set_acc(res, GGML_PREC_BF16);

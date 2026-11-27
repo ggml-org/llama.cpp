@@ -873,6 +873,7 @@ struct llm_graph_params {
     const llama_cross            * cross;
     const llama_moe_cache        * moe_cache;
 
+    ggml_tensor * lm_head       = nullptr; // own device copy of the LM head tied to token_embd (read)
     ggml_tensor * layer_inp_dev = nullptr; // own layer input device buffer (write)
     ggml_tensor * layer_inp_src = nullptr; // ctx_other's layer input device buffer (read)
     ggml_tensor * h_nextn_dev   = nullptr; // own h_nextn device buffer (write)
@@ -1149,6 +1150,7 @@ struct llm_graph_context {
 
     const llama_hadamard * hdmd;
 
+    ggml_tensor * lm_head;
     ggml_tensor * layer_inp_dev;
     ggml_tensor * layer_inp_src;
     ggml_tensor * h_nextn_dev;
