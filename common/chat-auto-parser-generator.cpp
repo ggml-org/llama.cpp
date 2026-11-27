@@ -236,8 +236,10 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
 
     // Handle content wrappers if present
     if (ctx.content && ctx.content->is_always_wrapped()) {
-        auto wrapped_content = ctx.content->build_optional_wrapped(ctx);
-        return ctx.reasoning_parser + wrapped_content + tools_parser + p.end();
+        return (inputs.allow_reasoning_before_tools ? ctx.reasoning_parser : p.eps())
+            + (inputs.allow_content_before_tools ? ctx.content->build_optional_wrapped(ctx) : p.eps())
+            + tools_parser
+            + p.end();
     }
 
     std::string tool_start = "{";
@@ -247,7 +249,10 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         tool_start = format.per_call_start;
     }
 
-    return ctx.reasoning_parser + p.optional(p.content(p.until(tool_start))) + tools_parser + p.end();
+    return (inputs.allow_reasoning_before_tools ? ctx.reasoning_parser : p.eps())
+        + (inputs.allow_content_before_tools ? p.optional(p.content(p.until(tool_start))) : p.eps())
+        + tools_parser
+        + p.end();
 }
 
 common_peg_parser analyze_tools::build_func_parser(common_chat_peg_builder & p, const std::string & name,
@@ -366,7 +371,11 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
-    return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
+
+    return (inputs.allow_reasoning_before_tools ? ctx.reasoning_parser : p.eps())
+        + (inputs.allow_content_before_tools ? p.optional(p.content(content_before_tools)) : p.eps())
+        + tool_calls
+        + p.end();
 }
 
 common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_context & ctx) const {
@@ -487,7 +496,11 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     std::string trigger_marker       = !format.section_start.empty() ? format.section_start : format.per_call_start;
     auto        content_before_tools = trigger_marker.empty() ? p.eps() : p.until(trigger_marker);
-    return ctx.reasoning_parser + p.optional(p.content(content_before_tools)) + tool_calls + p.end();
+
+    return (inputs.allow_reasoning_before_tools ? ctx.reasoning_parser : p.eps())
+        + (inputs.allow_content_before_tools ? p.optional(p.content(content_before_tools)) : p.eps())
+        + tool_calls
+        + p.end();
 }
 
 }  // namespace autoparser

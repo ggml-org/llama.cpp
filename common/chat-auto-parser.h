@@ -72,6 +72,8 @@ struct generation_params {
     bool                                  add_inference = false;
     bool                                  mark_input    = true;  // whether to mark input strings in the jinja context
     common_peg_tokens                     specials;
+    bool                                  allow_reasoning_before_tools = true;
+    bool                                  allow_content_before_tools = true;
 
     bool has_continuation() const {
         return continue_final_message != COMMON_CHAT_CONTINUATION_NONE && !continue_msg.empty();

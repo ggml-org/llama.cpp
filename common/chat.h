@@ -300,6 +300,8 @@ struct common_chat_templates_inputs {
     bool                                  add_bos = false;
     bool                                  add_eos = false;
     bool                                  force_pure_content = false;
+    bool                                  allow_reasoning_before_tools = true;
+    bool                                  allow_content_before_tools = true;
 };
 
 struct common_chat_prompt_part {

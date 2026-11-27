@@ -1594,15 +1594,17 @@ static common_chat_params common_chat_templates_apply_jinja(const struct common_
     params.messages              = src.find("｜DSML｜ calls>") != std::string::npos ?
                                        render_message_to_json_deepseek_v4_1(*messages_to_render, tmpl.original_caps()) :
                                        render_message_to_json(*messages_to_render, tmpl.original_caps());
-    params.tool_choice           = inputs.tool_choice;
-    params.reasoning_format      = inputs.reasoning_format;
-    params.enable_thinking       = inputs.enable_thinking;
-    params.grammar               = inputs.grammar;
-    params.now                   = inputs.now;
-    params.add_generation_prompt = inputs.add_generation_prompt;
-    params.add_bos               = tmpls->add_bos;
-    params.add_eos               = tmpls->add_eos;
-    params.specials              = tmpls->specials;
+    params.tool_choice                  = inputs.tool_choice;
+    params.reasoning_format             = inputs.reasoning_format;
+    params.enable_thinking              = inputs.enable_thinking;
+    params.allow_reasoning_before_tools = inputs.allow_reasoning_before_tools;
+    params.allow_content_before_tools   = inputs.allow_content_before_tools;
+    params.grammar                      = inputs.grammar;
+    params.now                          = inputs.now;
+    params.add_generation_prompt        = inputs.add_generation_prompt;
+    params.add_bos                      = tmpls->add_bos;
+    params.add_eos                      = tmpls->add_eos;
+    params.specials                     = tmpls->specials;
 
     params.continue_final_message = inputs.continue_final_message;
     if (params.continue_final_message != COMMON_CHAT_CONTINUATION_NONE) {
