@@ -1430,6 +1430,20 @@ bool llama_batch_ext::set_token_pos(int32_t idx, const llama_pos * pos_in) {
     return true;
 }
 
+bool llama_batch_ext::reserve_embd(size_t n_tokens, size_t n_embd_row) {
+    if (n_tokens == 0 || n_tokens > n_tokens_max) {
+        return false;
+    }
+    if (n_embd_row == 0) {
+        return false;
+    }
+    if (n_embd_row > embd.max_size() / n_tokens) {
+        return false;
+    }
+    embd.reserve(n_tokens * n_embd_row);
+    return true;
+}
+
 bool llama_batch_ext::set_output(int32_t idx, bool output_last) {
     if (idx < 0 || idx >= (int32_t) tokens.size()) {
         return false;
@@ -1539,6 +1553,10 @@ bool llama_batch_ext_set_decision_order(llama_batch_ext * batch, int32_t idx, ll
 
 bool llama_batch_ext_set_decision_group(llama_batch_ext * batch, int32_t idx, int32_t group) {
     return batch->set_decision_group(idx, group);
+}
+
+bool llama_batch_ext_reserve_embd(llama_batch_ext * batch, size_t n_tokens, size_t n_embd) {
+    return batch->reserve_embd(n_tokens, n_embd);
 }
 
 // llama_batch_compat

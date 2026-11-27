@@ -8,6 +8,7 @@
 #include "llama.h"
 #include "llama-cpp.h"
 #include "mtmd.h"
+#include "../../src/llama-ext.h"
 
 #include <cstdarg>
 #include <cstdio>
@@ -161,6 +162,7 @@ struct decode_embd_batch {
             batch.reset(llama_batch_ext_init(lctx));
         }
         llama_batch_ext_clear(batch.get());
+        llama_batch_ext_reserve_embd(batch.get(), n, n_mmproj_embd);
         for (int i = offset; i < offset + n; i++) {
             const llama_embd e = { embd + (size_t) i * n_mmproj_embd, 1, (size_t) n_mmproj_embd };
             const int32_t idx = llama_batch_ext_add_embd(batch.get(), seq_id, e);
