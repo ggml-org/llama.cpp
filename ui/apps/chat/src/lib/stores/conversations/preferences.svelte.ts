@@ -194,7 +194,7 @@ export class ConversationPreferences {
 	 * MCP category on and the server-scoped key not disabled.
 	 */
 	policyEnabledServerIds(): string[] {
-		if (!this.isCategoryEnabled(ToolSource.MCP)) return [];
+		if (!mcpStore.isFeatureEnabled || !this.isCategoryEnabled(ToolSource.MCP)) return [];
 
 		return mcpStore
 			.getServers()

@@ -351,6 +351,11 @@ struct mtmd_graph_hunyuanvl : mtmd_graph {
     ggml_cgraph * build() override;
 };
 
+struct mtmd_graph_hy_v4 : mtmd_graph {
+    mtmd_graph_hy_v4(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
+    ggml_cgraph * build() override;
+};
+
 struct mtmd_graph_mobilenetv5 : mtmd_graph {
     mtmd_graph_mobilenetv5(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
@@ -387,6 +392,10 @@ struct mtmd_graph_mobilenetv5 : mtmd_graph {
 struct mtmd_graph_qwen3a : mtmd_graph {
     mtmd_graph_qwen3a(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph(ctx, img) {}
     ggml_cgraph * build() override;
+
+    // audio tokens from n_frames mel frames: 13 per 100-frame chunk, ceil^3(tail) otherwise.
+    // shared with mtmd_model::n_output_tokens so they cannot drift
+    static int64_t qwen3a_tokens_for_frames(int64_t n_frames);
 };
 
 struct mtmd_graph_mimo_audio : mtmd_graph {

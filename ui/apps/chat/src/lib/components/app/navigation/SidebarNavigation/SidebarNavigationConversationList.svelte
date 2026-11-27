@@ -5,12 +5,9 @@
 	import SidebarNavigationSectionHeading from './SidebarNavigationSectionHeading.svelte';
 	import SidebarNavigationSelectionBar from './SidebarNavigationSelectionBar.svelte';
 	import SidebarNavigationShowMore from './SidebarNavigationShowMore.svelte';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import { FolderPlus, MoreHorizontal, Pin } from '@lucide/svelte';
-	import {
-		CollapsibleRegion,
-		ContextMenuActions,
-		DropdownMenuActions
-	} from '#lib/components/app/index.ts';
+	import { ContextMenuActions, DropdownMenuActions } from '#lib/components/app/index.ts';
 	import {
 		SIDEBAR_ROW_SLIDE_MS,
 		SIDEBAR_SECTION_IDS,
@@ -37,8 +34,6 @@
 		isSelectionMode?: boolean;
 		selectedIds?: Set<string>;
 		onSelect: (id: string) => void;
-		onEdit: (id: string) => void;
-		onDelete: (id: string) => void;
 		onStop: (id: string) => void;
 		onToggleSelect?: (id: string) => void;
 		onEnterSelectionMode?: (id: string) => void;
@@ -67,8 +62,6 @@
 		onBulkExport,
 		onBulkPinToggle,
 		onCloseSelection,
-		onDelete,
-		onEdit,
 		onEnterSelectionMode,
 		onRowMouseDown,
 		onSelect,
@@ -277,8 +270,6 @@
 		isActive={currentChatId === conversation.id}
 		isSelected={selectedIds.has(conversation.id)}
 		{isSelectionMode}
-		{onDelete}
-		{onEdit}
 		{onEnterSelectionMode}
 		{onRowMouseDown}
 		{onSelect}
@@ -307,17 +298,22 @@
 			</div>
 		{/snippet}
 
-		<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.PINNED)}>
-			<ul class="flex w-full min-w-0 flex-col md:gap-0.5 {className}">
-				{#each previewOf(SIDEBAR_SECTION_IDS.PINNED, pinnedConversations) as { conversation, depth } (conversation.id)}
-					<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
-						{@render conversationItem(conversation, depth)}
-					</li>
-				{/each}
+		<Collapsible.Root open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.PINNED)}
+			><Collapsible.Content>
+				<ul class="flex w-full min-w-0 flex-col md:gap-0.5 {className}">
+					{#each previewOf(SIDEBAR_SECTION_IDS.PINNED, pinnedConversations) as { conversation, depth } (conversation.id)}
+						<li
+							transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }}
+							class="group/item relative p-0"
+						>
+							{@render conversationItem(conversation, depth)}
+						</li>
+					{/each}
 
-				{@render showMore(SIDEBAR_SECTION_IDS.PINNED, pinnedConversations.length)}
-			</ul>
-		</CollapsibleRegion>
+					{@render showMore(SIDEBAR_SECTION_IDS.PINNED, pinnedConversations.length)}
+				</ul>
+			</Collapsible.Content></Collapsible.Root
+		>
 	</SidebarNavigationDropZone>
 {/snippet}
 
@@ -358,22 +354,27 @@
 			</ContextMenuActions>
 		{/snippet}
 
-		<CollapsibleRegion open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.RECENT)}>
-			<ul class="flex w-full min-w-0 flex-col md:gap-0.5">
-				{#each previewOf(SIDEBAR_SECTION_IDS.RECENT, unpinnedConversations) as { conversation, depth } (conversation.id)}
-					<li transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }} class="group/item relative p-0">
-						{@render conversationItem(conversation, depth)}
-					</li>
-				{/each}
+		<Collapsible.Root open={uiStore.isSidebarSectionOpen(SIDEBAR_SECTION_IDS.RECENT)}
+			><Collapsible.Content>
+				<ul class="flex w-full min-w-0 flex-col md:gap-0.5">
+					{#each previewOf(SIDEBAR_SECTION_IDS.RECENT, unpinnedConversations) as { conversation, depth } (conversation.id)}
+						<li
+							transition:slide={{ duration: SIDEBAR_ROW_SLIDE_MS }}
+							class="group/item relative p-0"
+						>
+							{@render conversationItem(conversation, depth)}
+						</li>
+					{/each}
 
-				{#if conversations.length === 0}
-					<li class="px-2 py-4 text-center">
-						<p class="mb-4 p-4 text-body-sm text-muted-foreground">No conversations yet</p>
-					</li>
-				{/if}
+					{#if conversations.length === 0}
+						<li class="px-2 py-4 text-center">
+							<p class="mb-4 p-4 text-body-sm text-muted-foreground">No conversations yet</p>
+						</li>
+					{/if}
 
-				{@render showMore(SIDEBAR_SECTION_IDS.RECENT, unpinnedConversations.length)}
-			</ul>
-		</CollapsibleRegion>
+					{@render showMore(SIDEBAR_SECTION_IDS.RECENT, unpinnedConversations.length)}
+				</ul>
+			</Collapsible.Content></Collapsible.Root
+		>
 	</SidebarNavigationDropZone>
 {/snippet}

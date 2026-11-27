@@ -1,8 +1,9 @@
 <script lang="ts">
 	import { ChatForm } from '#lib/components/app/index.ts';
-	import { SETTINGS_KEYS } from '#lib/constants/index.ts';
+	import { SETTINGS_KEYS, SYSTEM_MESSAGE_PLACEHOLDER } from '#lib/constants/index.ts';
+	import { MessageRole } from '#lib/enums/index.ts';
 	import { useDraftMessages } from '#lib/hooks/use-draft-messages.svelte.ts';
-	import { deviceStore, settingsStore } from '#lib/stores/index.ts';
+	import { chatStore, conversationsStore, deviceStore, settingsStore } from '#lib/stores/index.ts';
 	import { hapticTap, shouldTypeToFocus } from '#lib/utils/index.ts';
 	import { afterNavigate } from '$app/navigation';
 	import { page } from '$app/state';
@@ -16,7 +17,6 @@
 		onFileUpload?: (files: File[]) => void;
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
-		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
 		uploadedFiles?: ChatUploadedFile[];
 	}
 
@@ -28,7 +28,6 @@
 		onFileUpload,
 		onSend,
 		onStop,
-		onSystemPromptAdd,
 		uploadedFiles = $bindable([])
 	}: Props = $props();
 
@@ -65,10 +64,13 @@
 	let message = $state('');
 	let previousIsLoading = $derived(isLoading);
 
+	let isSystemMode = $state(false);
+	let stashedDraft = $state<{ files: ChatUploadedFile[]; message: string } | null>(null);
+
 	const { clearDraft } = useDraftMessages({
 		getChatId: () => chatId,
-		getFiles: () => uploadedFiles,
-		getMessage: () => message,
+		getFiles: () => (isSystemMode ? (stashedDraft?.files ?? []) : uploadedFiles),
+		getMessage: () => (isSystemMode ? (stashedDraft?.message ?? '') : message),
 		setFiles: (f) => (uploadedFiles = f),
 		setMessage: (m) => (message = m)
 	});
@@ -78,6 +80,8 @@
 	}
 
 	async function handleSubmit() {
+		if (isSystemMode) return handleSystemSubmit();
+
 		if ((!message.trim() && uploadedFiles.length === 0) || disabled || hasLoadingAttachments)
 			return;
 
@@ -105,8 +109,48 @@
 		}
 	}
 
+	// The form itself turns into the system message editor, whether or not the conversation
+	// shows its system message
+
 	function handleSystemPromptClick() {
-		onSystemPromptAdd?.({ files: uploadedFiles, message });
+		const existing = conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM);
+
+		stashedDraft = { files: uploadedFiles, message };
+		const current = conversationsStore.activeConversation
+			? existing?.content
+			: chatStore.pendingSystemMessage;
+
+		message = current && current !== SYSTEM_MESSAGE_PLACEHOLDER ? current : '';
+		uploadedFiles = [];
+		isSystemMode = true;
+		void tick().then(() => chatFormRef?.focus());
+	}
+
+	function exitSystemMode(restoreDraft: boolean) {
+		isSystemMode = false;
+
+		if (restoreDraft && stashedDraft) {
+			message = stashedDraft.message;
+			uploadedFiles = stashedDraft.files;
+		}
+
+		stashedDraft = null;
+		void tick().then(() => chatFormRef?.focus());
+	}
+
+	async function handleSystemSubmit() {
+		const content = message.trim();
+
+		if (!content) return;
+
+		const draft = stashedDraft ?? { files: [], message: '' };
+
+		isSystemMode = false;
+		stashedDraft = null;
+		message = draft.message;
+		uploadedFiles = draft.files;
+
+		await chatStore.saveSystemPrompt(content);
 	}
 
 	function handleUploadedFileRemove(fileId: string) {
@@ -130,6 +174,12 @@
 	// Typing while nothing takes text starts the message: focused during keydown, the
 	// character the key types lands in the form
 	function handleWindowKeydown(event: KeyboardEvent) {
+		if (isSystemMode && event.key === 'Escape') {
+			exitSystemMode(true);
+
+			return;
+		}
+
 		if (disabled || deviceStore.isMobile || !shouldTypeToFocus(event)) return;
 
 		chatFormRef?.focus();
@@ -172,6 +222,8 @@
 		onSubmit={handleSubmit}
 		onSystemPromptClick={handleSystemPromptClick}
 		onUploadedFileRemove={handleUploadedFileRemove}
+		placeholder={isSystemMode ? 'System message...' : undefined}
 		singleRow={settingsStore.config[SETTINGS_KEYS.SINGLE_ROW_CHAT_FORM] !== false}
+		systemMode={isSystemMode}
 	/>
 </div>

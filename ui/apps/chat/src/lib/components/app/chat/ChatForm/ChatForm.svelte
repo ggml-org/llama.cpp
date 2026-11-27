@@ -13,21 +13,26 @@
 		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
+		ChatFormSystemMessageAttachment,
+		ChatFormSystemMessageChip,
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
-		CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX,
+		CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
+		OPEN_OVERLAY_SELECTOR,
 		PROMPT_CONTENT_SEPARATOR,
 		SETTING_CONFIG_DEFAULT,
+		SYSTEM_MESSAGE_PLACEHOLDER,
 		VOICE_EDITOR_SELECTOR
 	} from '#lib/constants/index.ts';
 	import {
 		ContentPartType,
 		FileExtensionText,
 		KeyboardKey,
+		MessageRole,
 		MimeTypeText,
 		SpecialFileType,
 		ToolSource
@@ -59,7 +64,6 @@
 	} from '#lib/types/index.ts';
 	import {
 		buildMentionInsertion,
-		findCommandToken,
 		findMentionToken,
 		getConversationModel,
 		isIMEComposing,
@@ -87,6 +91,8 @@
 		placeholder?: string;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
+		/** Writing the system message: the form takes the system message's dashed, muted look. */
+		systemMode?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -120,6 +126,7 @@
 		showAddButton = true,
 		showModelSelector = true,
 		singleRow = false,
+		systemMode = false,
 		uploadedFiles = $bindable([]),
 		value = $bindable(''),
 		voiceRecorder
@@ -132,6 +139,7 @@
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
 	let inputRef: ChatFormInput | undefined = $state(undefined);
+	let workingDirectoryRef: ChatFormCurrentWorkingDirectory | undefined = $state(undefined);
 
 	// Voice input
 	const recorder: VoiceRecorderLike = untrack(() => voiceRecorder) ?? new VoiceRecorder();
@@ -140,8 +148,8 @@
 	/** Why the last start failed (denied, no microphone, busy); the next tap tries again. */
 	let micError = $state<string | null>(null);
 
-	// Invisible anchor the pickers' popovers float above: the form's top edge, or in the
-	// expanded editor the line being written
+	// Invisible anchor the pickers' popovers float above: the line being written, or on a
+	// phone the form's top edge
 	let pickerAnchor: HTMLDivElement | null = $state(null);
 	let pickerAnchorBox = $state({ height: 1, top: 0 });
 
@@ -149,6 +157,25 @@
 		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
 	);
 
+	let systemMessage = $derived(
+		conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM)
+	);
+	// A new chat shows the system message written for it as an attachment, until the first
+	// message sends it. A conversation with one offers it in a chip under the form.
+	// A placeholder is one nobody has written yet
+	let systemMessageAttachment = $derived.by(() => {
+		if (conversationsStore.activeConversation) return null;
+
+		const content = chatStore.pendingSystemMessage;
+
+		return content && content.trim() && content !== SYSTEM_MESSAGE_PLACEHOLDER ? content : null;
+	});
+	let systemMessageChip = $derived(
+		conversationsStore.activeConversation ? systemMessage?.content : undefined
+	);
+
+	// a system message is the same whichever model answers: its editor offers no selector
+	let isModelSelectorShown = $derived(showModelSelector && !systemMode);
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
 	// On a desktop the chip under the form shows a directory once one is set, and the + menu
 	// sets one until then. A phone has no chip: a chat shows it in its header (see
@@ -160,12 +187,16 @@
 
 	const pickers = useChatFormPickers({
 		canCompact: () => chatStore.canCompact(conversationsStore.activeMessages),
+		canEditSystemMessage: () => !!onSystemPromptClick && !systemMode,
+		// a phone picks in a drawer with its own search field, and a touch screen opens no
+		// typed pickers (see opensOnInput)
+		editsCwdInline: () => !deviceStore.isMobile && !deviceStore.isTouch,
 		focusInput: refocusInput,
 		getCaretOffset: () => inputRef?.getCaretOffset(),
 		getCwd: () => cwd,
 		getPickersRef: () => pickersRef,
 		getServerHome: () => toolsStore.serverHome ?? null,
-		getShowModelSelector: () => showModelSelector,
+		getShowModelSelector: () => isModelSelectorShown,
 		getValue: () => value,
 		hasCwdTools: () => conversationsStore.preferences.hasEnabledCwdTools(),
 		// policy-aware, same rule as the agentic flow: MCP category on and at
@@ -173,19 +204,24 @@
 		hasPrompts: () => {
 			const prefs = conversationsStore.preferences;
 
-			if (!prefs.isCategoryEnabled(ToolSource.MCP)) return false;
+			if (!mcpStore.isFeatureEnabled || !prefs.isCategoryEnabled(ToolSource.MCP)) return false;
 
 			return mcpStore
 				.getServers()
 				.some((s) => s.enabled && prefs.isServerToolsEnabled(s.id) && s.url.trim());
 		},
 		onCompact: () => chatStore.compactConversation(),
+		onSystemMessage: () => onSystemPromptClick?.({ files: uploadedFiles, message: value }),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		// TODO: no typed pickers with an on-screen keyboard for now: each mobile browser moves
 		// the page its own way as it opens, so a list by the form can not stay clear of the
 		// text. A drawer with its own search field (as the directory picker is) could.
 		opensOnInput: () => !deviceStore.isTouch,
-		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
+		setCaretOffset: (offset) => {
+			inputRef?.setCaretOffset(offset);
+			// the caret moved without typing, e.g. onto the `/cwd` line the + menu just added
+			measurePickerAnchor();
+		},
 		setValue: (v) => {
 			value = v;
 			onValueChange?.(v);
@@ -212,14 +248,9 @@
 	});
 
 	async function handleWorkingDirectoryChange(newDir: string | null) {
-		// Committing a directory consumes the `/cwd` token; the chip's
-		// clear-X path has no token to consume.
-		const token = findCommandToken(value);
-
-		if (token && token.name === 'cwd') {
-			value = '';
-			onValueChange?.('');
-		}
+		// Committing a directory consumes the `/cwd` line and keeps the message below it; the
+		// chip's clear-X path has no line to consume.
+		pickers.consumeCwdCommand();
 
 		await conversationsStore.preferences.setCwd(newDir);
 
@@ -289,12 +320,14 @@
 	// wrapped, as the wider row of its own would fit it again and flip it straight back
 	let textHeight = $state<number | null>(null);
 	let wrappedAtLength = Infinity;
+	let lastLength = 0;
 	let canBeSingleRow = $derived(
 		singleRow &&
 			!deviceStore.isMobile &&
 			!isExpanded &&
 			!voice.isActive &&
 			!hasAttachments &&
+			!systemMessageAttachment &&
 			!mcpStore.resources.hasAttachments &&
 			!value.includes('\n')
 	);
@@ -306,11 +339,16 @@
 	$effect(() => {
 		void textHeight;
 
-		const height = inputRef?.getContentDOM()?.offsetHeight ?? 0;
-		const fitsOneLine = height < CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX;
+		const content = inputRef?.getContentDOM();
+		const lineHeight = content ? parseFloat(getComputedStyle(content).lineHeight) : 0;
+		const lines = content && lineHeight ? content.offsetHeight / lineHeight : 0;
+		const fitsOneLine = lines < CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES;
 		const length = value.length;
 
-		if (!length) wrappedAtLength = Infinity;
+		// an emptied form tries the one row again; one that wraps while empty keeps the two rows
+		if (!length && lastLength) wrappedAtLength = Infinity;
+
+		lastLength = length;
 
 		if (!canBeSingleRow) {
 			isSingleRow = false;
@@ -333,18 +371,30 @@
 		isExpanded && deviceStore.isMobile ? (actionsEl ?? null) : pickerAnchor
 	);
 
+	// The anchor covers the caret's line, kept within the form when the line is scrolled out
+	// of the editor's view; on a phone the form's top edge
+	function measurePickerAnchor() {
+		const line = deviceStore.isMobile ? null : inputRef?.getCaretRect();
+		const form = pickerAnchor?.parentElement?.getBoundingClientRect();
+
+		if (!line || !form) {
+			pickerAnchorBox = { height: 1, top: 0 };
+
+			return;
+		}
+
+		const top = Math.min(Math.max(line.top - form.top, 0), form.height);
+
+		pickerAnchorBox = { height: Math.max(line.bottom - line.top, 1), top };
+	}
+
 	// before the popover is drawn, and again as the query is typed and the line moves
 	$effect.pre(() => {
 		if (!isPickerOpen) return;
 
 		void value;
 
-		const line = isExpanded && !deviceStore.isMobile ? inputRef?.getCaretRect() : null;
-		const formTop = pickerAnchor?.parentElement?.getBoundingClientRect().top ?? 0;
-
-		pickerAnchorBox = line
-			? { height: line.bottom - line.top, top: line.top - formTop }
-			: { height: 1, top: 0 };
+		measurePickerAnchor();
 	});
 	// shown on hover (always on touch screens) while collapsed, always while expanded: on
 	// the phone sheet it keeps the collapsed card's place, below the status bar
@@ -415,7 +465,14 @@
 	function handleKeydown(event: KeyboardEvent) {
 		// Pickers consume navigation/escape keys first; when consumed, skip
 		// the enter-to-submit logic below and keep the key from the editor.
-		if (pickers.handleKeydown(event)) {
+		// The directory picker takes the keys typed on its `/cwd` line; in the message below
+		// it only Escape, so Enter and the arrows there stay the message's
+		const isDirectoryKey = pickers.isCaretInCwdCommand() || event.key === KeyboardKey.ESCAPE;
+
+		if (
+			(isDirectoryKey && workingDirectoryRef?.handleKeydown(event)) ||
+			pickers.handleKeydown(event)
+		) {
 			event.preventDefault();
 
 			return;
@@ -646,6 +703,13 @@
 	async function submit() {
 		if (!canSubmit || disabled || hasLoadingAttachments || isSendWaiting) return;
 
+		// sending closes the directory picker first, so its `/cwd` command is not sent as text
+		if (pickers.isWorkingDirectoryPickerOpen) {
+			pickers.handleWorkingDirectoryClose();
+
+			if (!canSubmit) return;
+		}
+
 		if (voice.isRefining) {
 			isSendWaiting = true;
 
@@ -669,16 +733,35 @@
 		await submit();
 	}
 
-	// Escape drops a recording, wherever the focus is
-	function handleWindowKeydown(event: KeyboardEvent) {
-		if (event.key !== KeyboardKey.ESCAPE || !voice.isActive || event.defaultPrevented) return;
+	// Escape drops a recording, or else stops the reply, wherever the focus is. On the body, so it
+	// runs before the overlays' document listeners: a tooltip closing on Escape does not take the key
+	function handleBodyKeydown(event: KeyboardEvent) {
+		if (event.key !== KeyboardKey.ESCAPE || event.defaultPrevented) return;
+
+		if (document.querySelector(OPEN_OVERLAY_SELECTOR)) return;
+
+		if (voice.isActive) {
+			event.preventDefault();
+			voice.cancel();
+
+			return;
+		}
+
+		// the system message editor and a message edit take Escape in their own window listeners
+		if (!isLoading || systemMode || chatStore.isEditing() || isIMEComposing(event)) return;
 
 		event.preventDefault();
-		voice.cancel();
+		onStop?.();
 	}
 </script>
 
-<svelte:window onkeydown={handleWindowKeydown} />
+<svelte:body onkeydown={handleBodyKeydown} />
+
+{#snippet systemMessageLeading()}
+	{#if systemMessageAttachment}
+		<ChatFormSystemMessageAttachment content={systemMessageAttachment} {disabled} />
+	{/if}
+{/snippet}
 
 <ChatFormInputFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
@@ -758,6 +841,9 @@
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
 				EXPANDED_SHEET_FILL
 			],
+			// a dashed outline stands in for the card's edge, drawn inside it: the card keeps its size
+			systemMode &&
+				'!bg-muted !outline-2 -outline-offset-2 !outline-dashed !outline-border/50 [--glass-edge-focus:transparent] [--glass-edge:transparent]',
 			disabled && 'cursor-not-allowed opacity-60'
 		]}
 		data-single-row={isSingleRow || undefined}
@@ -779,6 +865,7 @@
 			activeModelId={activeModelId ?? undefined}
 			{attachments}
 			class={isExpanded ? 'py-5 max-md:px-(--chat-form-side-inset)' : 'py-5'}
+			leading={systemMessageAttachment ? systemMessageLeading : undefined}
 			limitToSingleRow
 			onFileRemove={handleFileRemove}
 			style="scroll-padding: 1rem;"
@@ -858,6 +945,7 @@
 						isVoiceRefining={voice.isRefining}
 						micWarning={micUnavailableReason ?? micError}
 						onFileUpload={handleFileUpload}
+						onFilesSelect={handleFileSelect}
 						onMicClick={handleMicClick}
 						{onStop}
 						onSystemPromptClick={() =>
@@ -866,11 +954,11 @@
 							? pickers.handleWorkingDirectoryOpen
 							: undefined}
 						{showAddButton}
-						{showModelSelector}
+						showModelSelector={isModelSelectorShown}
 						voice={{
 							action: voice.label,
 							hint: voice.hint,
-							prepare: () => void voice.prepare(),
+							prepare: voice.prepare,
 							show: voice.showButton,
 							unavailableReason: voice.unavailableReason,
 							unprepare: voice.unprepare
@@ -898,21 +986,33 @@
 		></div>
 	{/if}
 
-	{#if showWorkingDirectory}
-		<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
-		<ChatFormCurrentWorkingDirectory
-			bind:query={pickers.workingDirectoryQuery}
-			class="self-start"
-			customAnchor={activePickerAnchor}
-			directory={cwd}
-			{disabled}
-			isOpen={pickers.isWorkingDirectoryPickerOpen}
-			onChange={handleWorkingDirectoryChange}
-			onClose={pickers.handleWorkingDirectoryClose}
-			onOpen={pickers.handleWorkingDirectoryOpen}
-			showChip={showWorkingDirectoryChip}
-		/>
-	{/if}
+	<!-- The chips sit under the card. On a new chat, where the page centres the form, they
+	     hang below it and take no room: the card stays where it is as they come and go -->
+	<div
+		class="flex flex-wrap items-center gap-x-1 self-start md:group-data-[chat-form-lifted]/chat-form-host:absolute md:group-data-[chat-form-lifted]/chat-form-host:top-full"
+	>
+		{#if showWorkingDirectory}
+			<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
+			<ChatFormCurrentWorkingDirectory
+				bind:query={pickers.workingDirectoryQuery}
+				bind:this={workingDirectoryRef}
+				class="self-start"
+				customAnchor={activePickerAnchor}
+				directory={cwd}
+				{disabled}
+				inline={pickers.isWorkingDirectoryInline}
+				isOpen={pickers.isWorkingDirectoryPickerOpen}
+				onChange={handleWorkingDirectoryChange}
+				onClose={pickers.handleWorkingDirectoryClose}
+				onOpen={pickers.handleWorkingDirectoryOpen}
+				showChip={showWorkingDirectoryChip}
+			/>
+		{/if}
+
+		{#if systemMessageChip}
+			<ChatFormSystemMessageChip content={systemMessageChip} {disabled} />
+		{/if}
+	</div>
 </form>
 
 <DialogMcpResourcesBrowser

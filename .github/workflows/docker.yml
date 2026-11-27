@@ -120,9 +120,6 @@ jobs:
             mv build-matrix.json.tmp build-matrix.json
           fi
 
-          jq 'map(select(.tag != "musa"))' build-matrix.json > build-matrix.json.tmp
-          mv build-matrix.json.tmp build-matrix.json
-
           BUILD_MATRIX="$(jq -c . build-matrix.json)"
           MERGE_MATRIX="$(jq -c '
             reduce .[] as $entry ({}; .[$entry.tag] |= (
@@ -272,6 +269,7 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.build_date.outputs.date }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            VITE_PUBLIC_HUGGING_FACE=true
             APP_REVISION=${{ steps.checkout.outputs.commit }}
             IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
             IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
@@ -309,6 +307,7 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.build_date.outputs.date }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            VITE_PUBLIC_HUGGING_FACE=true
             APP_REVISION=${{ steps.checkout.outputs.commit }}
             IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
             IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
@@ -346,6 +345,7 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.build_date.outputs.date }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            VITE_PUBLIC_HUGGING_FACE=true
             APP_REVISION=${{ steps.checkout.outputs.commit }}
             IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
             IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}

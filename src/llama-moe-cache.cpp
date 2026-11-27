@@ -350,6 +350,7 @@ struct llama_moe_cache::impl {
         ggml_tensor * cpu_map  = nullptr;   // I32 [1, n_expert] in host memory, if cpu_share > 0
         std::vector<int32_t> cpu_experts;   // experts set in cpu_map
         uint32_t cpu_acc = 0;               // fraction of a miss carried over to the next plan, in 1/65536
+        int32_t n_used = 0;                 // experts selected per token by the graph, set by build_lookup
         std::vector<ggml_tensor *> experts; // host expert tensors, in the order of the banks
     };
 
@@ -789,6 +790,7 @@ struct llama_moe_cache::impl {
 
         // the selected experts must be computed in an earlier split
         // the scheduler starts a new split at the lookup because it reads a host weight, unless the lookup is the first node of its split
+        // if they are selected on another backend (e.g. the loop passes of inkling2_loop), sel is the copy made by the scheduler before this callback
         const ggml_tensor * sel = lookup->src[1];
         for (int i = 0; i < n_nodes; ++i) {
             const ggml_tensor * node = ggml_graph_node(graph, i);
@@ -797,9 +799,11 @@ struct llama_moe_cache::impl {
             }
         }
         GGML_ASSERT(ggml_is_contiguous(sel));
-        GGML_ASSERT(sel->op == GGML_OP_RESHAPE); // of the [n_expert_used, n_tokens] ids, see build_lookup
 
-        const int32_t n_used = (int32_t) sel->src[0]->ne[0];
+        // a copy of the 1D ids has no source to read the shape from
+        const int32_t n_used = l.n_used;
+        GGML_ASSERT(n_used > 0 && ggml_nelements(sel) % n_used == 0);
+        const int64_t n_tokens = ggml_nelements(sel)/n_used;
 
         ids.resize(ggml_nelements(sel));
         ggml_backend_tensor_get_async(backend, sel, ids.data(), 0, ggml_nbytes(sel));
@@ -817,7 +821,7 @@ struct llama_moe_cache::impl {
             return (size_t) (acc >> 16);
         };
         size_t n_hit = 0;
-        if (!g.lru.plan(il, ids.data(), ids.size(), sel->src[0]->ne[1], n_used, n_zero, n_cpu, fills, cpu, n_hit)) {
+        if (!g.lru.plan(il, ids.data(), ids.size(), n_tokens, n_used, n_zero, n_cpu, fills, cpu, n_hit)) {
             GGML_ABORT("the MoE cache is too small for the experts selected in layer %d", il);
         }
         if (has_cpu) {
@@ -932,6 +936,8 @@ llama_moe_cache_lookup llama_moe_cache::build_lookup(const llm_graph_context & g
     }
     ggml_backend_sched_set_tensor_backend(g.sched, slots, pimpl->backend(il));
     g.cb(slots, "ffn_moe_slots", il);
+
+    pimpl->layers[il].n_used = (int32_t) selected_experts->ne[0];
 
     // add the lookup now: the transform of a Hadamard-folded expert reads host weights and would start its split first
     ggml_build_forward_expand(g.gf, slots);

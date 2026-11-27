@@ -1,3 +1,4 @@
+#include "arg.h"
 #include "common.h"
 #include "download.h"
 #include "log.h"
@@ -1497,7 +1498,7 @@ json oaicompat_chat_params_parse(
     auto tools = json_value(body, "tools", json());
     auto has_tools = tools.is_array() && !tools.empty();
     auto stream = json_value(body, "stream", false);
-    auto tool_choice = json_value(body, "tool_choice", std::string("auto"));
+    auto tool_choice = json_value(body, "tool_choice", json("auto"));
 
     if (!opt.use_jinja) {
         if (has_tools) {
@@ -1584,7 +1585,7 @@ json oaicompat_chat_params_parse(
     common_chat_templates_inputs inputs;
     inputs.messages               = common_chat_msgs_parse_oaicompat(messages);
     inputs.tools                  = common_chat_tools_parse_oaicompat(tools);
-    inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice);
+    inputs.tool_choice            = common_chat_tool_choice_parse_oaicompat(tool_choice, inputs.tools);
     inputs.json_schema            = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar                = grammar;
     inputs.use_jinja              = opt.use_jinja;
@@ -2384,6 +2385,22 @@ server_role::~server_role() {
     if (cmd_out) {
         fclose(cmd_out);
     }
+}
+
+std::string server_get_model_name(const common_params & params) {
+    if (!params.model_alias.empty()) {
+        // backward compat: use first alias as model name
+        return *params.model_alias.begin();
+    }
+    if (!params.model.get_name().empty()) {
+        return params.model.get_name();
+    }
+    if (!params.model.url.empty()) {
+        // -mu before the download: the path the model will be stored at
+        return common_get_default_local_path(params.model.url);
+    }
+    // fallback: derive model name from file name
+    return std::filesystem::path(params.model.path).filename().string();
 }
 
 bool server_role::is_managed_by_router() {

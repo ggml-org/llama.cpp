@@ -27,7 +27,8 @@ import {
 	VOICE_CLIP_NAME_PREFIX,
 	VOICE_ELAPSED_TICK_MS,
 	VOICE_MODE_MESSAGE,
-	VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY
+	VOICE_SEPARATE_MODEL_HINT_LOCALSTORAGE_KEY,
+	VOICE_WARMUP_REST_MS
 } from '#lib/constants/index.ts';
 import { BooleanString, ChatFormVoiceState, MimeTypeAudio, VoiceMode } from '#lib/enums/index.ts';
 import { VoiceService } from '#lib/services/voice.service.ts';
@@ -115,6 +116,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	let generation = 0;
 	// the pointer or the focus is on the microphone button, see prepare
 	let preparing = false;
+	// waits for the pointer or the focus to rest on the button, see prepare
+	let restTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const warmup = new MicrophoneWarmup();
 	const dictation = createDictation({
@@ -174,15 +177,27 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 	}
 
 	/**
-	 * Opens the microphone while the pointer or the focus is on its button, if the page may
+	 * Opens the microphone once the pointer or the focus rests on its button, if the page may
 	 * already use it: by the click it has settled, so the first words are not quiet, and the
-	 * recording starts at once. Let go shortly after the pointer leaves (unprepare).
+	 * recording starts at once. Each call (the pointer moving on the button) waits again, so
+	 * a pointer only passing over opens nothing. Let go shortly after it leaves (unprepare).
 	 */
-	async function prepare() {
+	function prepare() {
 		if (!recorder || state !== ChatFormVoiceState.IDLE || resolution.mode === VoiceMode.UNAVAILABLE)
 			return;
 
 		preparing = true;
+		clearTimeout(restTimer);
+		restTimer = setTimeout(() => void openWarm(), VOICE_WARMUP_REST_MS);
+	}
+
+	async function openWarm() {
+		if (
+			!preparing ||
+			state !== ChatFormVoiceState.IDLE ||
+			resolution.mode === VoiceMode.UNAVAILABLE
+		)
+			return;
 
 		const wiring = await wiringFor(resolution.mode, resolution.transcriptionModel);
 
@@ -192,6 +207,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 
 	function unprepare() {
 		preparing = false;
+		clearTimeout(restTimer);
 		warmup.release();
 	}
 
@@ -213,6 +229,8 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 		if (mode === VoiceMode.DICTATION) dictation.begin();
 
 		const run = ++generation;
+
+		clearTimeout(restTimer);
 
 		try {
 			const wiring = await wiringFor(mode, model);
@@ -336,6 +354,7 @@ export function useChatFormVoice(options: UseChatFormVoiceOptions) {
 
 	onDestroy(() => {
 		preparing = false;
+		clearTimeout(restTimer);
 		warmup.drop();
 
 		if (state !== ChatFormVoiceState.IDLE) cancel();

@@ -49,6 +49,9 @@ jobs:
       - name: Build Storybook
         run: npm run build-storybook
         working-directory: ui/apps/chat
+        env:
+          # its stories show the Hugging Face lib
+          VITE_PUBLIC_HUGGING_FACE: "true"
 
       - name: Write the Space card
         run: |

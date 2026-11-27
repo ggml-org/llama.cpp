@@ -112,7 +112,6 @@
         systems = [
           "aarch64-darwin"
           "aarch64-linux"
-          "x86_64-darwin" # x86_64-darwin isn't tested (and likely isn't relevant)
           "x86_64-linux"
         ];
 

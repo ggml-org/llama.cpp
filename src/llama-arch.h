@@ -138,6 +138,7 @@ enum llm_arch {
     LLM_ARCH_HUNYUAN_VL,
     LLM_ARCH_HY_V3,
     LLM_ARCH_HY_V4,
+    LLM_ARCH_HY_V4_FLASH,
     LLM_ARCH_SMOLLM3,
     LLM_ARCH_OPENAI_MOE,
     LLM_ARCH_LFM2,
@@ -168,6 +169,7 @@ enum llm_arch {
     LLM_ARCH_KIMI_LINEAR,
     LLM_ARCH_KIMI_K3,
     LLM_ARCH_KIMI_K31,
+    LLM_ARCH_RAON1_MINI,
     LLM_ARCH_GLM5_NEXT,
     LLM_ARCH_TALKIE,
     LLM_ARCH_MELLUM,
@@ -315,6 +317,7 @@ enum llm_kv {
     LLM_KV_ATTENTION_VALUE_LENGTH,
     LLM_KV_ATTENTION_LAYERNORM_EPS,
     LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,
+    LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,
     LLM_KV_ATTENTION_GROUPNORM_EPS,
     LLM_KV_ATTENTION_GROUPNORM_GROUPS,
     LLM_KV_ATTENTION_CAUSAL,
@@ -499,6 +502,8 @@ enum llm_kv {
     LLM_KV_DFLASH_CONV_GROUP_SIZE,
     LLM_KV_DFLASH_SELECTOR_RANK,
     LLM_KV_DFLASH_SELECTOR_TOP_K,
+    LLM_KV_DFLASH_SELECTOR_SOFTCAP_AFTER_CORRECTION,
+    LLM_KV_DFLASH_HAS_MARKOV_CONTEXT,
     LLM_KV_LILICORR_HIDDEN_SIZE,
     LLM_KV_LILICORR_CANDIDATE_TOPK,
     LLM_KV_LILICORR_NUM_HEADS,
@@ -670,8 +675,6 @@ enum llm_tensor {
     LLM_TENSOR_LAYER_OUT_NORM,
     LLM_TENSOR_LAYER_OUT_SCALE,
     LLM_TENSOR_ATTN_VRES_LAMBDA,
-    LLM_TENSOR_POST_ATTN_NORM,
-    LLM_TENSOR_POST_MLP_NORM,
     LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
     LLM_TENSOR_PER_LAYER_MODEL_PROJ, // gemma3n
     LLM_TENSOR_PER_LAYER_INP_GATE,   // gemma3n
@@ -709,6 +712,7 @@ enum llm_tensor {
     LLM_TENSOR_SSM_F_A,             // kimi: forget gate projection A
     LLM_TENSOR_SSM_F_B,             // kimi: forget gate projection B
     LLM_TENSOR_SSM_BETA,            // kimi: beta mixing coefficient and qwen3.5
+    LLM_TENSOR_SSM_RDA,             // raon1_mini: write gate offset
     LLM_TENSOR_SSM_G_A,             // kimi: output gate projection A
     LLM_TENSOR_SSM_G_B,             // kimi: output gate projection B
     LLM_TENSOR_SSM_G,               // kimi-k3: full-rank KDA gate
@@ -897,6 +901,7 @@ enum llm_tensor {
     LLM_TENSOR_INDEXER_COMPRESSOR_NORM,
     LLM_TENSOR_INDEXER_KPOOL_GATE,   // glm5-next: k-pool gate scores
     LLM_TENSOR_INDEXER_KPOOL_APE,    // glm5-next: k-pool position bias
+    LLM_TENSOR_INDEXER_KPOOL_VALUE,  // hy_v4_flash: what the k-pool actually pools
     LLM_TENSOR_FFN_GATE_TID2EID,
     LLM_TENSOR_NEXTN_PROJ_PRE,
     LLM_TENSOR_NEXTN_PROJ_POST,
@@ -919,8 +924,14 @@ enum llm_tensor {
     LLM_TENSOR_DSPARK_CONF_PROJ,
     LLM_TENSOR_DSPARK_JOINT_PROJ,
     LLM_TENSOR_DSPARK_MASK_EMBD,
+    LLM_TENSOR_DSPARK_MARKOV_CTX_MIX,
+    LLM_TENSOR_DSPARK_MARKOV_CTX_NORM,
     LLM_TENSOR_ENGRAM_KV,
     LLM_TENSOR_ENGRAM_GATE,
+    LLM_TENSOR_ENGRAM_KV_B,          // hy_v4_flash: bias on the fused key/value projections
+    LLM_TENSOR_ENGRAM_LOOKUP_NORM,   // hy_v4_flash: per-head RMSNorm of the looked-up rows
+    LLM_TENSOR_ENGRAM_PRE_GAMMA,     // hy_v4_flash: scales the normed value before the gate
+    LLM_TENSOR_ENGRAM_HC_SCALE,      // hy_v4_flash: per-hc per-channel additive gate offset
     LLM_TENSOR_DFLASH_ATTN_CONV_BASE,
     LLM_TENSOR_DFLASH_ATTN_CONV_PROJ,
     LLM_TENSOR_DFLASH_FFN_CONV_BASE,
@@ -928,6 +939,11 @@ enum llm_tensor {
     LLM_TENSOR_DFLASH_SELECTOR_PREV,
     LLM_TENSOR_DFLASH_SELECTOR_NEXT,
     LLM_TENSOR_DFLASH_SELECTOR_HIDDEN,
+    LLM_TENSOR_DFLASH_CTX_MIX,
+    LLM_TENSOR_DFLASH_CTX_NORM,
+    LLM_TENSOR_DFLASH_ATTN_K_CTX,
+    LLM_TENSOR_DFLASH_ATTN_V_CTX,
+    LLM_TENSOR_DFLASH_ATTN_K_CTX_NORM,
     LLM_TENSOR_LILICORR_TOKEN_PROJ,
     LLM_TENSOR_LILICORR_PASS_HIDDEN_PROJ,
     LLM_TENSOR_LILICORR_SLOT_EMBD,
@@ -1038,3 +1054,4 @@ bool llm_arch_is_diffusion      (const llm_arch & arch);
 bool llm_arch_supports_sm_tensor(const llm_arch & arch);
 bool llm_arch_supports_rs_rollback(const llm_arch & arch);
 bool llm_arch_supports_mixed_batch(const llm_arch & arch);
+bool llm_arch_mmid_down_bf16(const llm_arch & arch);

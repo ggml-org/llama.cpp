@@ -16,17 +16,24 @@ set(HF_VERSION        "" CACHE STRING "Version to download (empty = resolve from
 set(HF_ENABLED        "" CACHE STRING "Whether to allow HF Bucket download (ON/OFF)")
 set(BUILD_UI          "" CACHE STRING "Build UI via npm (ON/OFF)")
 set(LLAMA_UI_GZIP     "" CACHE STRING "Apply gzip compress to assets to save bandwidth")
+# OFF unless it is turned on: a UI built here has sharing conversations to Hugging Face in it
+# only when asked for (the prebuilt one, which releases are made of, has it)
+set(LLAMA_UI_HUGGING_FACE OFF CACHE STRING "Whether the UI built here has sharing to Hugging Face (ON/OFF)")
 
 set(DIST_DIR     "${UI_BINARY_DIR}/dist")
 set(SRC_DIST_DIR "${UI_SOURCE_DIR}/dist")
 # The stage keeps the layout of ui/: the app in apps/chat, with the sources of
 # Llama UI that it compiles next to it in lib/ui (see ui/apps/chat/scripts/llama-ui.js),
-# and those of Llama Voice in lib/voice (see ui/apps/chat/vite.config.ts).
+# and those of Llama Voice, the harness and Llama Hugging Face in lib/voice, lib/harness and
+# lib/huggingface (see ui/apps/chat/vite.config.ts).
 set(STAGE_DIR    "${UI_BINARY_DIR}/ui-src")
 set(WORK_DIR     "${STAGE_DIR}/apps/chat")
 set(UI_LIB_DIR   "${UI_SOURCE_DIR}/../../lib/ui")
 set(UI_VOICE_DIR "${UI_SOURCE_DIR}/../../lib/voice")
+set(HARNESS_DIR  "${UI_SOURCE_DIR}/../../lib/harness")
+set(UI_HUGGINGFACE_DIR "${UI_SOURCE_DIR}/../../lib/huggingface")
 set(STAMP_FILE   "${UI_BINARY_DIR}/.ui-stamp")
+set(BUILD_OPTIONS_STAMP "${UI_BINARY_DIR}/.ui-build-options")
 set(EMBED_STAMP  "${UI_BINARY_DIR}/.ui-embed.sha256")
 set(UI_CPP       "${UI_BINARY_DIR}/ui.cpp")
 set(UI_H         "${UI_BINARY_DIR}/ui.h")
@@ -67,14 +74,8 @@ function(mime_from_ext name out_var)
     set(${out_var} "${m}" PARENT_SCOPE)
 endfunction()
 
-# Fail when a dist tree is present but is missing files the UI needs at
-# runtime; catches truncated/stale asset trees early with a useful message.
-function(ui_validate_assets files in_dir)
-    list(LENGTH files n_assets)
-    if(n_assets EQUAL 0)
-        return()
-    endif()
-
+# List the files the UI needs at runtime that are not in ${files}.
+function(ui_missing_assets files out_var)
     set(found_index FALSE)
     set(found_manifest FALSE)
     set(found_sw FALSE)
@@ -136,6 +137,18 @@ function(ui_validate_assets files in_dir)
         list(APPEND missing "_app/immutable/assets/[name][hash].css (or bundle[hash].css)")
     endif()
 
+    set(${out_var} "${missing}" PARENT_SCOPE)
+endfunction()
+
+# Fail when a dist tree is present but is missing files the UI needs at
+# runtime; catches truncated/stale asset trees early with a useful message.
+function(ui_validate_assets files in_dir)
+    list(LENGTH files n_assets)
+    if(n_assets EQUAL 0)
+        return()
+    endif()
+
+    ui_missing_assets("${files}" missing)
     if(missing)
         set(listing "")
         foreach(f ${files})
@@ -223,7 +236,10 @@ function(emit_files dist_dir)
             set(gzip_dir  "${gzip_root}/_gzip")
             file(REMOVE_RECURSE "${gzip_root}")
             foreach(f IN LISTS assets)
-                get_filename_component(asset_path "${dist_dir}/${f}" REALPATH)
+                get_filename_component(asset_path "${dist_dir}/${f}" ABSOLUTE)
+                if(IS_SYMLINK "${asset_path}")
+                    get_filename_component(asset_path "${asset_path}" REALPATH)
+                endif()
                 get_filename_component(dst_dir "${gzip_dir}/${f}" DIRECTORY)
                 file(MAKE_DIRECTORY "${dst_dir}")
                 file(ARCHIVE_CREATE
@@ -284,6 +300,16 @@ function(emit_files dist_dir)
     message(STATUS "UI: embedded ${n_assets} assets")
 endfunction()
 
+# What the npm build is told, as environment variables (see ui/apps/chat/vite.config.ts).
+# They are set either way, so the build does not depend on the environment it runs in.
+function(ui_build_options out_var)
+    if(LLAMA_UI_HUGGING_FACE)
+        set(${out_var} "VITE_PUBLIC_HUGGING_FACE=true" PARENT_SCOPE)
+    else()
+        set(${out_var} "VITE_PUBLIC_HUGGING_FACE=false" PARENT_SCOPE)
+    endif()
+endfunction()
+
 function(npm_build_should_skip out_var)
     set(${out_var} FALSE PARENT_SCOPE)
 
@@ -292,6 +318,18 @@ function(npm_build_should_skip out_var)
     endif()
 
     if(EXISTS "${STAMP_FILE}")
+        return()
+    endif()
+
+    # an output built with other options is out of date, whatever its sources;
+    # one from before the options has none of the opt-in features
+    ui_build_options(options)
+    set(built_with "VITE_PUBLIC_HUGGING_FACE=false")
+    if(EXISTS "${BUILD_OPTIONS_STAMP}")
+        file(READ "${BUILD_OPTIONS_STAMP}" built_with)
+        string(STRIP "${built_with}" built_with)
+    endif()
+    if(NOT built_with STREQUAL options)
         return()
     endif()
 
@@ -325,7 +363,7 @@ function(npm_build_should_skip out_var)
 endfunction()
 
 function(stage_sources)
-    # everything but the app goes: the library, restaged below, and what a stage
+    # everything but the app goes: the packages, restaged below, and what a stage
     # from before this layout left at the top, its node_modules included
     if(EXISTS "${STAGE_DIR}")
         file(GLOB staged RELATIVE "${STAGE_DIR}" "${STAGE_DIR}/*")
@@ -349,7 +387,8 @@ function(stage_sources)
         PATTERN "node_modules" EXCLUDE
     )
 
-    # what the app reads of the library: its sources and the dependency list
+    # what the app reads of the packages: Llama UI's sources and dependency list,
+    # and the harness's sources
     file(COPY "${UI_LIB_DIR}/package.json"
         DESTINATION "${STAGE_DIR}/lib/ui"
         NO_SOURCE_PERMISSIONS
@@ -362,6 +401,16 @@ function(stage_sources)
     # and of Llama Voice, its sources only: they import nothing from outside them
     file(COPY "${UI_VOICE_DIR}/src"
         DESTINATION "${STAGE_DIR}/lib/voice"
+        NO_SOURCE_PERMISSIONS
+    )
+    file(COPY "${HARNESS_DIR}/src"
+        DESTINATION "${STAGE_DIR}/lib/harness"
+        NO_SOURCE_PERMISSIONS
+    )
+
+    # and of Llama Hugging Face, its sources only too
+    file(COPY "${UI_HUGGINGFACE_DIR}/src"
+        DESTINATION "${STAGE_DIR}/lib/huggingface"
         NO_SOURCE_PERMISSIONS
     )
 endfunction()
@@ -424,9 +473,11 @@ function(npm_build out_var)
 
     file(MAKE_DIRECTORY "${DIST_DIR}")
 
-    message(STATUS "UI: running npm run build, output -> ${DIST_DIR}")
+    ui_build_options(options)
+
+    message(STATUS "UI: running npm run build (${options}), output -> ${DIST_DIR}")
     execute_process(
-        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}" "LLAMA_UI_VERSION=${HF_VERSION}" "LLAMA_BUILD_NUMBER=${LLAMA_BUILD_NUMBER}"
+        COMMAND ${CMAKE_COMMAND} -E env "LLAMA_UI_OUT_DIR=${DIST_DIR}" "LLAMA_UI_VERSION=${HF_VERSION}" "LLAMA_BUILD_NUMBER=${LLAMA_BUILD_NUMBER}" "${options}"
                 ${NPM_EXECUTABLE} run build
         WORKING_DIRECTORY "${WORK_DIR}"
         RESULT_VARIABLE rc
@@ -445,6 +496,7 @@ function(npm_build out_var)
 
     message(STATUS "UI: npm build succeeded")
     file(REMOVE "${STAMP_FILE}")
+    file(WRITE "${BUILD_OPTIONS_STAMP}" "${options}")
     set(${out_var} TRUE PARENT_SCOPE)
 endfunction()
 
@@ -482,6 +534,7 @@ function(hf_download version out_var out_resolved)
         list(APPEND candidates "${version}")
     endif()
     list(APPEND candidates "latest")
+    list(REMOVE_DUPLICATES candidates)
 
     foreach(resolved ${candidates})
         set(base "https://huggingface.co/buckets/${HF_BUCKET}/resolve/${resolved}")
@@ -542,8 +595,13 @@ function(hf_download version out_var out_resolved)
 
         file(ARCHIVE_EXTRACT INPUT "${archive}" DESTINATION "${DIST_DIR}")
 
-        if(NOT EXISTS "${DIST_DIR}/index.html")
-            message(STATUS "UI: archive from ${resolved} is missing required assets")
+        # 'latest' can be from a newer build with a file layout this checkout does not know
+        file(GLOB_RECURSE extracted LIST_DIRECTORIES false RELATIVE "${DIST_DIR}" "${DIST_DIR}/*")
+        ui_missing_assets("${extracted}" missing)
+        if(missing)
+            string(REPLACE ";" ", " missing "${missing}")
+            message(STATUS "UI: archive from ${resolved} is missing required assets: ${missing}")
+            file(REMOVE_RECURSE "${DIST_DIR}")
             continue()
         endif()
 

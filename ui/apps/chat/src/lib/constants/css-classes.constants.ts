@@ -43,12 +43,10 @@ export const DROPDOWN_MENU_CONTENT_SEARCH_SELECTOR = '[data-slot="dropdown-menu-
 
 /**
  * Sticky offset of a model-list group heading under the dropdown's search block:
- * the search header exposes its height as `--dropdown-sticky-height`, and one
- * section-header row (`py-2` over `text-body-sm` line height) minus the header's
- * bottom border stacks the two sticky rows without a gap or an overlap.
+ * the search header exposes its height as `--dropdown-sticky-height`, and the
+ * heading overlaps the header's bottom border, so the two stack without a gap.
  */
-export const SELECTOR_GROUP_STICKY_OFFSET =
-	'top: calc(var(--dropdown-sticky-height, 0px) + 2.25rem - 1px)';
+export const SELECTOR_GROUP_STICKY_OFFSET = 'top: calc(var(--dropdown-sticky-height, 0px) - 1px)';
 
 /** Column grid shared by every row of the models manager table. Below md the context,
  *  status and actions columns are dropped, so a phone gives the whole width to the
@@ -66,6 +64,3 @@ export const ICON_CLASS_SM = 'size-icon-sm';
 
 /** Extra-small Tailwind size class for inline icons. */
 export const ICON_CLASS_XS = 'size-icon-xs';
-
-/** Icon size + spinning animation; used for live-streaming tool indicators. */
-export const ICON_CLASS_SPIN = 'size-icon-md animate-spin';

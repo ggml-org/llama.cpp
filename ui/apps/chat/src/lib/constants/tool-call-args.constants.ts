@@ -13,11 +13,3 @@ export const JSON_OBJECT_OPEN = '{';
 
 /** Opening character of a JSON array; successful sandbox output is one. */
 export const JSON_ARRAY_OPEN = '[';
-
-/**
- * Matches `"<key>": "<value>"` in a JSON args blob ( whitespace between
- * tokens allowed ), capturing the raw string literal so only that literal
- * gets decoded; escaped quotes stay inside the value group. `{key}` is
- * replaced with the field name before use.
- */
-export const TOOL_ARG_STRING_FIELD_PATTERN_TEMPLATE = '"{key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"';

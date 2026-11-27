@@ -6,8 +6,15 @@
 		ScrollCarousel
 	} from '#lib/components/app/index.ts';
 	import { ScrollCarouselVariant } from '#lib/enums/index.ts';
+	import { mediaGalleryStore } from '#lib/stores/index.ts';
 	import type { DatabaseMessageExtraMcpResource } from '#lib/types/index.ts';
-	import { getAttachmentDisplayItems, isMcpPrompt, isMcpResource } from '#lib/utils/index.ts';
+	import {
+		getAttachmentDisplayItems,
+		isMcpPrompt,
+		isMcpResource,
+		isMediaExtra
+	} from '#lib/utils/index.ts';
+	import type { Snippet } from 'svelte';
 
 	interface Props {
 		class?: string;
@@ -26,16 +33,22 @@
 		limitToSingleRow?: boolean;
 		// For vision modality check
 		activeModelId?: string;
+		/** A message's attachments: media opens the conversation's slideshow at it */
+		conversationGallery?: boolean;
+		/** Rendered before the attachments, e.g. the chat form's system message */
+		leading?: Snippet;
 	}
 
 	let {
 		activeModelId,
 		attachments = [],
 		class: className = '',
+		conversationGallery = false,
 		// Default to small size for form previews
 		imageClass = '',
 		imageHeight = 'h-24',
 		imageWidth = 'w-auto',
+		leading,
 		limitToSingleRow = false,
 		onFileRemove,
 		readonly = false,
@@ -54,6 +67,12 @@
 	function openPreview(item: ChatAttachmentDisplayItem, event?: MouseEvent) {
 		event?.stopPropagation();
 		event?.preventDefault();
+
+		if (conversationGallery && item.attachment && isMediaExtra(item.attachment)) {
+			mediaGalleryStore.show(item.attachment);
+
+			return;
+		}
 
 		// Find the index of the clicked item among non-MCP attachments
 		const nonMcpItems = displayItems.filter((i) => !isMcpPrompt(i) && !isMcpResource(i));
@@ -89,16 +108,20 @@
 	/>
 {/snippet}
 
-{#if displayItems.length > 0}
+{#if displayItems.length > 0 || leading}
 	<div class={className} {style}>
 		{#if limitToSingleRow}
 			<ScrollCarousel bind:this={carouselRef} variant={ScrollCarouselVariant.CENTER}>
+				{@render leading?.()}
+
 				{#each displayItems as item (item.id)}
 					{@render attachmentitem(item)}
 				{/each}
 			</ScrollCarousel>
 		{:else}
 			<div class="flex flex-wrap items-start justify-end gap-3">
+				{@render leading?.()}
+
 				{#each displayItems as item (item.id)}
 					{@render attachmentitem(item)}
 				{/each}

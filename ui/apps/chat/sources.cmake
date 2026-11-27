@@ -3,10 +3,13 @@
 set(UI_SOURCE_GLOBS
     src/*
     static/*
-    # Llama UI, which the app compiles from source
+    # Llama UI and the harness, which the app compiles from source
     ../../lib/ui/src/lib/*
     # Llama Voice, also compiled from source
     ../../lib/voice/src/*
+    ../../lib/harness/src/*
+    # and Llama Hugging Face
+    ../../lib/huggingface/src/*
 )
 
 set(UI_SOURCE_FILES

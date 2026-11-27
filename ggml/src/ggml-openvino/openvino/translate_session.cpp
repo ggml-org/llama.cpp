@@ -15,11 +15,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
-#include <set>
 #include <openvino/core/node.hpp>
 #include <openvino/core/preprocess/pre_post_process.hpp>
 #include <openvino/core/shape.hpp>
@@ -53,6 +51,7 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
+#include <set>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -225,42 +224,12 @@ void add_position_mask_stateful_swa(TensorMap & tensor_map) {
     tensor_map["KQ_mask_swa_sliced"] = mask->output(0);
 }
 
-void add_rope_sin_cos(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
-    // When ROPE ops in the graph have divergent op_params (e.g. gemma4's mixed
-    // SWA/non-SWA layers with different n_dims or freq_base), a shared sin/cos
-    // precompute cannot broadcast across every ROPE use. Skip it here and let
-    // translate_rope() build sin/cos per-op from its own op_params.
-    if (ggml_model_decoder.has_mixed_rope_params()) {
-        return;
-    }
-    int32_t * rope_params = ggml_model_decoder.get_rope_params();
-    if (tensor_map.find("inp_pos") == tensor_map.end() || rope_params == nullptr) {
-        return;
-    }
-    auto inp_pos = tensor_map.at("inp_pos").get_node_shared_ptr();
-    std::shared_ptr<ov::Node> rope_freqs_weight;
-    if (tensor_map.find("rope_freqs.weight") != tensor_map.end()) {
-        rope_freqs_weight = tensor_map.at("rope_freqs.weight").get_node_shared_ptr();
-    }
-
-    auto sin_cos = make_sin_cos(rope_params, inp_pos, rope_freqs_weight);
-    auto sin_theta = sin_cos.first;
-    auto cos_theta = sin_cos.second;
-
-    cos_theta.get_node_shared_ptr()->set_friendly_name("rope_cos");
-    sin_theta.get_node_shared_ptr()->set_friendly_name("rope_sin");
-    tensor_map.insert({"rope_cos", cos_theta});
-    tensor_map.insert({"rope_sin", sin_theta});
-}
-
 // Create common patterns
 void preprocess(TensorMap & tensor_map, GgmlDecoder & ggml_model_decoder) {
     if (ggml_model_decoder.is_stateful()) {
         add_sliced_mask_stateful(tensor_map, ggml_model_decoder.get_rope_params()[2] == GGML_ROPE_TYPE_IMROPE);
         add_position_mask_stateful_swa(tensor_map);
     }
-    // This optimization is error-prone
-    // add_rope_sin_cos(tensor_map, ggml_model_decoder);
 }
 
 }  // namespace
@@ -355,7 +324,7 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         auto it = m_translator_map.find(operation_type);
         FRONT_END_OP_CONVERSION_CHECK(it != m_translator_map.end(), "Translation for operation type ", operation_type,
                                       " is not implemented.");
-        NodeContext node_context(decoder, tensor_map, node_idx, this);
+        NodeContext node_context(decoder, tensor_map, node_idx);
         ov::OutputVector converted_outputs;
 #ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
         converted_outputs = recurrent_fusion.translate(node_idx, node_context);
@@ -481,9 +450,6 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
             used_params.push_back(param);
         }
     }
-    // if (auto diff = params.size() - used_params.size()) {
-    //     GGML_LOG_INFO("%zu parameters are not used in the model.", diff);
-    // }
     resulting_model = std::make_shared<Model>(results, used_params);
 
     apply_transformations(resulting_model);

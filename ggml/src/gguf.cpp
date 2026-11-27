@@ -322,24 +322,6 @@ struct gguf_reader {
         return true;
     }
 
-    bool read(enum ggml_type & dst) const {
-        int32_t tmp = -1;
-        if (!read(tmp)) {
-            return false;
-        }
-        dst = ggml_type(tmp);
-        return true;
-    }
-
-    bool read(enum gguf_type & dst) const {
-        int32_t tmp = -1;
-        if (!read(tmp)) {
-            return false;
-        }
-        dst = gguf_type(tmp);
-        return true;
-    }
-
     bool read(std::string & dst) const {
         uint64_t size = 0;
         if (!read(size)) {
@@ -555,7 +537,7 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
         for (int64_t i = 0; ok && i < n_kv; ++i) {
             std::string key;
-            gguf_type   type     = gguf_type(-1);
+            int32_t     type     = -1;
             bool        is_array = false;
             uint64_t    n        = 1;
 
@@ -724,15 +706,20 @@ static struct gguf_context * gguf_init_from_reader(const struct gguf_reader & gr
 
         // tensor type
         {
-            ok = ok && gr.read(info.t.type);
+            int32_t type = -1;
+            ok = ok && gr.read(type);
+            if (!ok) {
+                break;
+            }
 
             // check that tensor type is within defined range
-            if (info.t.type < 0 || info.t.type >= GGML_TYPE_COUNT) {
+            if (type < 0 || type >= GGML_TYPE_COUNT) {
                 GGML_LOG_ERROR("%s: tensor '%s' has invalid ggml type %d. should be in [0, %d)\n",
-                    __func__, info.t.name, info.t.type, GGML_TYPE_COUNT);
+                    __func__, info.t.name, type, GGML_TYPE_COUNT);
                 ok = false;
                 break;
             }
+            info.t.type = ggml_type(type);
             const size_t  type_size = ggml_type_size(info.t.type);
             const int64_t blck_size = ggml_blck_size(info.t.type);
 

@@ -11,6 +11,8 @@
 		onClose?: () => void;
 		onKeyDown?: (event: KeyboardEvent) => void;
 		class?: string;
+		/** Classes of the input itself, e.g. to drop its field look inside a surface of the wrapper's. */
+		inputClass?: string;
 		/** Input height, matching the small size of the other controls. */
 		size?: 'sm' | 'default';
 		id?: string;
@@ -22,6 +24,7 @@
 		autofocus,
 		class: className,
 		id,
+		inputClass = '',
 		isCancelAlwaysVisible = false,
 		onClose,
 		onInput,
@@ -63,7 +66,7 @@
 		{autofocus}
 		class="max-md:h-10 pl-9 {showClearButton ? 'pr-9' : ''} {size === 'sm'
 			? 'h-8'
-			: ''} [&::-webkit-search-cancel-button]:hidden"
+			: ''} [&::-webkit-search-cancel-button]:hidden {inputClass}"
 		{id}
 		oninput={handleInput}
 		onkeydown={onKeyDown}

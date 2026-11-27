@@ -3,7 +3,9 @@
  * Handles PDF text extraction and image conversion in the browser
  */
 
+import { PDF_RENDERING } from '#lib/constants/index.ts';
 import { MimeTypeApplication, MimeTypeImage } from '#lib/enums/index.ts';
+import { clampPdfDpi, pdfDpiToScale } from '#lib/utils/pdf-dpi.ts';
 import { browser } from '$app/env';
 import pdfWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 
@@ -87,10 +89,13 @@ export async function convertPDFToText(file: File): Promise<string> {
 /**
  * Convert PDF pages to PNG images as data URLs
  * @param file - The PDF file to convert
- * @param scale - Rendering scale factor (default: 1.5)
+ * @param dpi - Rendering DPI (default: 108, the scale the app shipped with)
  * @returns Promise resolving to array of PNG data URLs
  */
-export async function convertPDFToImage(file: File, scale: number = 1.5): Promise<string[]> {
+export async function convertPDFToImage(
+	file: File,
+	dpi: number = PDF_RENDERING.DEFAULT_DPI
+): Promise<string[]> {
 	if (!browser) {
 		throw new Error('PDF processing is only available in the browser');
 	}
@@ -99,6 +104,7 @@ export async function convertPDFToImage(file: File, scale: number = 1.5): Promis
 		const [pdfjs, buffer] = await Promise.all([loadPdfjs(), getFileAsBuffer(file)]);
 		const doc = await pdfjs.getDocument({ data: buffer }).promise;
 		const pages: Promise<string>[] = [];
+		const scale = pdfDpiToScale(clampPdfDpi(dpi));
 
 		for (let i = 1; i <= doc.numPages; i++) {
 			const page = await doc.getPage(i);

@@ -6,15 +6,13 @@
  * mixed from another semantic token by a fixed rule and so follows it through every theme. The rules:
  * soft text is the text colour at 70%; a hover fill is the fill at 90%; a status surface is its fill mixed
  * into the page and a status line its fill mixed into the default line; a dark shadow is the light one,
- * --elevation-strength times as dense. Derivations are declared once, in :root: .dark and .theme-matte sit
- * on the same element, so they resolve from that theme's picks.
+ * --elevation-strength times as dense. Derivations are declared once, in :root: .dark sits on the
+ * same element, so they resolve from that theme's picks.
  *
- * Light mode comes in two surface themes that share everything else (colours, buttons, fields,
- * shadows): Paper, the default, puts white panels, fields and keys on a faint grey page; Matte
- * (the theme-matte class on <html>) puts grey glass on a white page.
+ * The light surfaces are paper: white panels, fields and keys on a faint grey page.
  */
 :root {
-	/* surfaces: what a region of the page sits on. Paper: the page a faint grey, so glass, fields
+	/* surfaces: what a region of the page sits on. The page a faint grey, so glass, fields
 	   and keys, white, sit lighter than it */
 	--surface-page: var(--neutral-25);
 	--surface-muted: var(--neutral-100);
@@ -131,14 +129,6 @@
 	--elevation-ring: var(--black-a5);
 	--blur-surface: 1.5rem;
 	--blur-control: 0.75rem;
-}
-
-/* Matte, the alternative light theme: grey glass on a white page, fields on the page colour */
-.theme-matte:not(.dark) {
-	--surface-page: var(--neutral-0);
-	--surface-glass: color-mix(in oklch, var(--neutral-100) 60%, transparent);
-	--surface-code: var(--neutral-50);
-	--field-background: var(--surface-page);
 }
 
 .dark {

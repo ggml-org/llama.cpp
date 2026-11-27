@@ -13,41 +13,7 @@ namespace ov {
 namespace frontend {
 namespace ggml {
 
-std::string getCurrentTime();
-
 void num_inputs_check(const NodeContext & context, size_t min_inputs, size_t max_inputs);
-
-int non_cont_dim(std::vector<size_t> ne, std::vector<size_t> nb);
-
-template <typename T> std::vector<int> argsort_descend(const std::vector<T> & v) {
-    std::vector<int> idx(v.size());
-    std::iota(idx.begin(), idx.end(), 0);
-    std::sort(idx.begin(), idx.end(), [&v](int i1, int i2) { return v[i1] > v[i2]; });
-    return idx;
-}
-
-template <typename T> std::vector<T> sorted_descend(std::vector<T> v) {
-    std::sort(v.begin(), v.end(), [](T a, T b) { return a > b; });
-    return v;
-}
-
-template <typename T> bool is_permuted(const std::vector<T> & strides) {
-    for (size_t i = 0; i < strides.size() - 1; ++i) {
-        if (strides[i] < strides[i + 1]) {
-            return true;
-        }
-    }
-    return false;
-}
-
-template <typename T> std::vector<T> permute(const std::vector<T> & x, const std::vector<int> & perm) {
-    std::vector<T> result;
-    result.reserve(perm.size());
-    for (int i : perm) {
-        result.push_back(x[i]);
-    }
-    return result;
-}
 
 std::shared_ptr<ov::Node> get_dimensions(const std::shared_ptr<ov::op::v3::ShapeOf> & shape,
                                          const std::vector<int> & dims);
@@ -82,6 +48,9 @@ OutputVector translate_recurrent_cache_reset(const NodeContext & context);
 // A KQ mask input. Stateful execution reads the mask parameters through the masks rebuilt from the positions (see
 // add_sliced_mask_stateful); any other input, e.g. the mask rows gemma-4 gathers for its KV-shared layers, as is.
 ov::Output<ov::Node> get_kq_mask_input(const NodeContext & context, size_t input_index);
+
+// The mask of gemma-4's KV-shared layers, whose rows get_kq_mask_input() gathers from an input mask
+bool is_pruned_mask_name(const std::string & name);
 
 // A stateless KV cache in the [1, ctx, n_heads_kv, head_size] layout (GgmlOvDecoder::is_kvcache_4d), as opposed to
 // [1, n_seq, ctx, n_heads_kv * head_size]
