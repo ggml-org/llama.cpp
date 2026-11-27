@@ -27,6 +27,31 @@ def test_responses_with_openai_library():
     assert res.output[0].id.startswith("msg_")
     assert match_regex("(Suddenly)+", res.output_text)
 
+def test_responses_named_tool_choice():
+    server.chat_template_file = "../../../models/templates/meta-llama-Llama-3.3-70B-Instruct.jinja"
+    server.jinja = True
+    server.n_ctx = 2048
+    server.n_slots = 1
+    server.n_predict = 128
+    server.start()
+
+    # Bias the tiny model to start a JSON call. The grammar selects the function name.
+    tokens = server.make_request("POST", "/tokenize", data={"content": "{"}).body["tokens"]
+    names = ["get_time", "get_weather"]
+    parameters = {"type": "object", "properties": {}, "additionalProperties": False}
+    tools = [{"type": "function", "name": name, "parameters": parameters} for name in names]
+    for name in names:
+        res = server.make_request("POST", "/v1/responses", data={
+            "input": "What time is it?",
+            "tools": tools,
+            "tool_choice": {"type": "function", "name": name},
+            "parallel_tool_calls": False,
+            "temperature": 0,
+            "logit_bias": {str(tokens[-1]): 100},
+        })
+        assert res.status_code == 200, res.body
+        assert [item["name"] for item in res.body["output"] if item["type"] == "function_call"] == [name]
+
 def test_responses_stream_with_openai_library():
     global server
     server.start()
