@@ -116,22 +116,20 @@ if (CUDAToolkit_FOUND)
     list(APPEND GGML_HEADERS_CUDA "../../include/ggml-cuda.h")
 
     file(GLOB   GGML_SOURCES_CUDA "*.cu")
-    file(GLOB   SRCS "template-instances/fattn-tile*.cu")
-    list(APPEND GGML_SOURCES_CUDA ${SRCS})
-    file(GLOB   SRCS "template-instances/fattn-mma*.cu")
-    list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/mmq*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
     file(GLOB   SRCS "template-instances/mmf*.cu")
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
-    ggml_cuda_fattn_vec_instances(${CMAKE_CURRENT_SOURCE_DIR} SRCS)
+    ggml_cuda_fattn_instances(${CMAKE_CURRENT_SOURCE_DIR} SRCS)
     list(APPEND GGML_SOURCES_CUDA ${SRCS})
 
     ggml_add_backend_library(ggml-cuda
                              ${GGML_HEADERS_CUDA}
                              ${GGML_SOURCES_CUDA}
                             )
+
+    target_link_libraries(ggml-cuda PRIVATE ${CMAKE_DL_LIBS})
 
     if (GGML_CUDA_GRAPHS)
         add_compile_definitions(GGML_CUDA_USE_GRAPHS)

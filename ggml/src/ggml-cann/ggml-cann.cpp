@@ -2449,10 +2449,12 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 switch (op->src[0]->type) {
 #ifndef ASCEND_310P
                     case GGML_TYPE_BF16:
+                        return true;
 #endif
                     case GGML_TYPE_F16:
                     case GGML_TYPE_F32:
-                        return true;
+                        // src1 goes to aclnn as is: a BF16 src1 with F16/F32 weights is not verified
+                        return op->src[1]->type != GGML_TYPE_BF16;
                     case GGML_TYPE_Q8_0:
                     case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
@@ -2470,7 +2472,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             switch (op->src[0]->type) {
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
-                    return true;
+                    // src1 goes to aclnn as is: a BF16 src1 with F16/F32 weights is not verified
+                    return op->src[1]->type != GGML_TYPE_BF16;
                 case GGML_TYPE_Q8_0:
                 case GGML_TYPE_Q4_0:
 #ifdef ASCEND_310P
@@ -2501,6 +2504,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             break;
         case GGML_OP_SET_ROWS:
             {
+                if (op->src[0]->type == GGML_TYPE_BF16) {
+                    return false;
+                }
                 switch (op->type) {
                     case GGML_TYPE_F32:
                     case GGML_TYPE_F16:
@@ -2552,6 +2558,9 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 }
                 if (((const int32_t *) op->op_params)[15] != 0) {
                     return false; // FIXME: support ggml_rope_set_offset
+                }
+                if (op->src[0]->type != GGML_TYPE_F32 && op->src[0]->type != GGML_TYPE_F16) {
+                    return false;
                 }
                 if (op->src[0]->ne[0] > 896) {
                     return false;
@@ -2673,8 +2682,8 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             return true;
         case GGML_OP_FLASH_ATTN_EXT:
             {
-                // K/V row lists (ggml_flash_attn_ext_rows) are not supported
-                if (op->src[5] != nullptr) {
+                // K/V row lists and indexed bias are not supported
+                if (op->src[5] != nullptr || ggml_flash_attn_ext_has_indexed_bias(op)) {
                     return false;
                 }
 #ifdef ASCEND_310P
@@ -2841,6 +2850,7 @@ static void ggml_backend_cann_device_get_props(ggml_backend_dev_t dev, ggml_back
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ true,
         /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 

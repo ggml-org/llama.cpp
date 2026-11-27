@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cinttypes>
+#include <climits>
 #include <vector>
 
 //#define MTMD_AUDIO_DEBUG
@@ -939,6 +940,54 @@ static void mtmd_helper_video_set_id(mtmd_helper_video * vctx, const std::string
     vctx->id = id;
 }
 
+int32_t mtmd_helper_get_media_meta(const unsigned char * buf, size_t len, mtmd_helper_init_opt opt, mtmd_helper_media_meta * out) {
+    *out = {MTMD_HELPER_MEDIA_TYPE_UNKNOWN, 0, 0, 0, -1.0f, -1};
+
+    if (audio_helpers::is_audio_file((const char *) buf, len)) {
+        // zero channels and rate: the source format, so the length comes from the header (or an mp3 frame scan)
+        ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 0, 0);
+        ma_decoder dec;
+        if (ma_decoder_init_memory(buf, len, &cfg, &dec) != MA_SUCCESS) {
+            return 1;
+        }
+        ma_uint64 n = 0;
+        if (ma_decoder_get_length_in_pcm_frames(&dec, &n) == MA_SUCCESS && dec.outputSampleRate > 0) {
+            out->duration = (float) ((double) n / dec.outputSampleRate);
+        }
+        out->type        = MTMD_HELPER_MEDIA_TYPE_AUDIO;
+        out->sample_rate = (int32_t) dec.outputSampleRate;
+        ma_decoder_uninit(&dec);
+        return 0;
+    }
+
+    int nx, ny, nc;
+    if (len <= INT_MAX && stbi_info_from_memory(buf, (int) len, &nx, &ny, &nc)) {
+        out->type   = MTMD_HELPER_MEDIA_TYPE_IMAGE;
+        out->width  = (uint32_t) nx;
+        out->height = (uint32_t) ny;
+        return 0;
+    }
+
+    // webp (not read by stb_image) and video go through the video decoder
+    mtmd_helper_video_init_params params = opt.video_params;
+    const bool is_webp = is_webp_file(buf, len);
+    if (is_webp && video_builtin_decoder()) {
+        params.decoder = nullptr; // see decode_still_image()
+    }
+    mtmd_helper_video_stream_info src;
+    if (!video_open(nullptr, buf, len, params, src)) {
+        return 1;
+    }
+    out->type   = is_webp ? MTMD_HELPER_MEDIA_TYPE_IMAGE : MTMD_HELPER_MEDIA_TYPE_VIDEO;
+    out->width  = src.width;
+    out->height = src.height;
+    if (!is_webp) {
+        out->duration = src.duration;
+        out->n_frames = src.n_frames;
+    }
+    return 0;
+}
+
 mtmd_helper_video_init_params mtmd_helper_video_init_params_default() {
     return {
         /* fps_target             */ 4.0f,
@@ -999,6 +1048,7 @@ mtmd_helper_cap mtmd_helper_get_capabilities(const llama_model * model, const mt
     cap.audio_gen = gen_audio_type != MTMD_GEN_AUDIO_TYPE_NONE;
     cap.audio_gen_spk_ref = gen_audio_type == MTMD_GEN_AUDIO_TYPE_QWEN3TTS
                          || gen_audio_type == MTMD_GEN_AUDIO_TYPE_POCKETTTS;
+    cap.audio_duplex = cap.audio_stream && gen_audio_type == MTMD_GEN_AUDIO_TYPE_MOSHI;
 
     // a tts model without a chat template only outputs audio, it cannot be used for chat
     // neither can a realtime transcription model (e.g. Voxtral Realtime): its text follows the audio by a token delay

@@ -4,6 +4,7 @@
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
 #include "../tools/server/server-schema.h"
+#include "../tools/server/server-slot-sched.h"
 
 #include <algorithm>
 #include <cmath>
@@ -330,6 +331,82 @@ static void test_json_helpers(testing & t) {
     });
 }
 
+//
+// server_prompt
+//
+
+static void test_server_prompt_reuse(testing & t) {
+    // 110 text tokens, the position of a token is its index
+    auto make_prompt = [](std::vector<std::array<llama_pos, 2>> checkpoints) {
+        llama_tokens toks(110);
+        for (size_t i = 0; i < toks.size(); i++) {
+            toks[i] = 100 + (llama_token) i;
+        }
+
+        server_prompt res;
+        res.tokens = server_tokens(toks, false);
+        for (const auto & range : checkpoints) {
+            auto ckpt = std::make_shared<common_prompt_checkpoint>();
+            ckpt->pos_min  = range[0];
+            ckpt->pos_max  = range[1];
+            ckpt->n_tokens = range[1] + 1;
+            res.checkpoints.push_back(std::move(ckpt));
+        }
+        return res;
+    };
+
+    t.test("recurrent", [&](testing & t) {
+        // a recurrent state holds one position: the live state is at 109, n_swa is 0
+        const auto prompt = make_prompt({{95, 95}, {99, 99}, {105, 105}});
+        const llama_pos pos_min = 109;
+
+        auto res = prompt.get_reuse(110, true, 0, pos_min);
+        t.assert_true("new tokens after the prompt, no checkpoint", res.ckpt == nullptr);
+        t.assert_equal("new tokens after the prompt, n_past", 110, res.n_past);
+
+        res = prompt.get_reuse(110, false, 0, pos_min);
+        t.assert_true("same prompt, last checkpoint", res.ckpt && res.ckpt->pos_max == 105);
+        t.assert_equal("same prompt, n_past", 106, res.n_past);
+        t.assert_equal("same prompt, pos_next", 106, res.pos_next);
+
+        // the closest checkpoint before the new tokens is used, the one after them is not
+        res = prompt.get_reuse(104, true, 0, pos_min);
+        t.assert_true("cut at 104, checkpoint", res.ckpt && res.ckpt->pos_max == 99);
+        t.assert_equal("cut at 104, n_past", 100, res.n_past);
+        t.assert_equal("cut at 104, pos_next", 100, res.pos_next);
+
+        // the state at 99 already holds the token at 99, it cannot be used to process it again
+        res = prompt.get_reuse(99, true, 0, pos_min);
+        t.assert_true("cut at 99, checkpoint", res.ckpt && res.ckpt->pos_max == 95);
+        t.assert_equal("cut at 99, n_past", 96, res.n_past);
+
+        res = prompt.get_reuse(50, true, 0, pos_min);
+        t.assert_true("cut at 50, no checkpoint", res.ckpt == nullptr);
+        t.assert_equal("cut at 50, n_past", 0, res.n_past);
+        t.assert_equal("cut at 50, pos_next", 0, res.pos_next);
+    });
+
+    t.test("swa", [&](testing & t) {
+        // n_swa is 8: the live state starts at 102, the checkpoint holds the positions 92 to 99
+        const auto prompt = make_prompt({{92, 99}});
+        const llama_pos pos_min = 102;
+
+        auto res = prompt.get_reuse(110, true, 8, pos_min);
+        t.assert_true("new tokens after the prompt, no checkpoint", res.ckpt == nullptr);
+        t.assert_equal("new tokens after the prompt, n_past", 110, res.n_past);
+
+        // the token at 104 needs the positions 97 to 103, the live state starts too late for a cut at 104
+        res = prompt.get_reuse(104, true, 8, pos_min);
+        t.assert_true("cut at 104, checkpoint", res.ckpt != nullptr);
+        t.assert_equal("cut at 104, n_past", 99, res.n_past);
+        t.assert_equal("cut at 104, pos_next", 99, res.pos_next);
+
+        res = prompt.get_reuse(95, true, 8, pos_min);
+        t.assert_true("cut at 95, no checkpoint", res.ckpt == nullptr);
+        t.assert_equal("cut at 95, n_past", 0, res.n_past);
+    });
+}
+
 static void test_lora_helpers(testing & t) {
     // only pointer identity is used, never dereferenced
     auto * p0 = reinterpret_cast<llama_adapter_lora *>(0x10);
@@ -362,6 +439,13 @@ static void test_lora_helpers(testing & t) {
         t.assert_true("diff scale",   !are_lora_equal({make(p0, 1.0f)}, {make(p0, 0.5f)}));
         t.assert_true("diff ptr",     !are_lora_equal({make(p0, 1.0f)}, {make(p1, 1.0f)}));
         t.assert_true("diff size",    !are_lora_equal({make(p0, 1.0f)}, {}));
+    });
+
+    t.test("lora_should_clear_cache", [&](testing & t) {
+        // the adapter pointer is only read when the configs differ
+        t.assert_true("both empty", !lora_should_clear_cache({}, {}));
+        t.assert_true("same",       !lora_should_clear_cache({make(p0, 1.0f)}, {make(p0, 1.0f)}));
+        t.assert_true("to no lora", lora_should_clear_cache({make(p0, 0.0f)}, {}));
     });
 
     t.test("lora_get_enabled_ids", [&](testing & t) {
@@ -436,7 +520,8 @@ static void test_server_pipe(testing & t) {
         server_pipe<int> p;
         std::thread producer([&]() {
             for (int i = 0; i < n; i++) {
-                p.write(int(i));
+                int x = i;
+                p.write(std::move(x));
             }
             p.close_write();
         });
@@ -615,7 +700,7 @@ static void test_decision_ocr_jev_validation(testing & t) {
     const auto reject_questions = [&](const char * name, const json & body, const std::string & expected) {
         std::string error;
         try {
-            ctx.parse_questions(body);
+            ctx.parse_questions(body, false);
         } catch (const std::invalid_argument & e) {
             error = e.what();
         }
@@ -718,6 +803,41 @@ static void test_dry_sequence_breakers(testing & t) {
     }
 }
 
+static void test_stop_strings(testing & t) {
+    common_params params_base;
+
+    const auto eval = [&](const json & data) {
+        return server_schema::eval_llama_cmpl_schema(nullptr, params_base, {}, data);
+    };
+
+    {
+        json data;
+        data["stop"] = "";
+        t.assert_true("empty string is ignored", eval(data).antiprompt.empty());
+    }
+
+    {
+        json data;
+        data["stop"] = json::array({""});
+        t.assert_true("empty string in array is ignored", eval(data).antiprompt.empty());
+    }
+
+    {
+        json data;
+        data["stop"] = json::array({"", "zzz"});
+        const std::vector<std::string> expected = {"zzz"};
+        t.assert_true("only non-empty strings are kept", eval(data).antiprompt == expected);
+    }
+
+    {
+        params_base.antiprompt = {"User:"};
+        json data;
+        data["stop"] = json::array({""});
+        const std::vector<std::string> expected = {"User:"};
+        t.assert_true("falls back to CLI defaults", eval(data).antiprompt == expected);
+    }
+}
+
 //
 // glob_match
 //
@@ -790,9 +910,9 @@ static void test_speech_convert(testing & t) {
     t.assert_true ("audio streams",     out.at("stream").get<bool>());
     t.assert_true ("rejects sse",       rejected("stream_format", "sse"));
 
-    // speed
-    t.assert_true ("speed 1.0",         !rejected("speed", 1.0));
-    t.assert_true ("rejects speed 1.5", rejected("speed", 1.5));
+    // speed is forwarded, the model decides whether it is supported
+    out = convert_speech_to_tts(with("speed", 1.5));
+    t.assert_equal("speed forwarded",   1.5, out.at("speed").get<double>());
 
     // instructions are ignored
     t.assert_true ("instructions",      !rejected("instructions", "whisper"));
@@ -834,6 +954,7 @@ int main(int argc, char ** argv) {
     t.test("sse",           test_sse);
     t.test("json_helpers",  test_json_helpers);
     t.test("lora_helpers",  test_lora_helpers);
+    t.test("server_prompt_reuse", test_server_prompt_reuse);
     t.test("server_pipe",   test_server_pipe);
     t.test("decision_escape", test_decision_escape);
     t.test("rerank_template", test_rerank_template);
@@ -842,6 +963,7 @@ int main(int argc, char ** argv) {
     t.test("decision_depth",  test_decision_depth);
     t.test("glob_match",      test_glob_match);
     t.test("dry_sequence_breakers", test_dry_sequence_breakers);
+    t.test("stop_strings",    test_stop_strings);
     t.test("speech_convert",  test_speech_convert);
     t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
 

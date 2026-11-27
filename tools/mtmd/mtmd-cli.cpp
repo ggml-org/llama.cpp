@@ -120,6 +120,10 @@ struct mtmd_cli_context {
         init_vision_context(params);
 
         mtmd_cap = mtmd_helper_get_capabilities(model, ctx_vision.get());
+        if (mtmd_cap.audio_duplex) {
+            LOG_ERR("Full duplex models only run in llama-server, see the /v1/realtime endpoint\n");
+            exit(1);
+        }
         // a realtime transcription model has no chat, it streams the audio below
         if (!mtmd_cap.chat && !mtmd_cap.audio_stream) {
             LOG_ERR("Model does not support chat mode\n");

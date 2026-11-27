@@ -17,7 +17,11 @@ on:
     paths: [
       '.github/workflows/ui-self-hosted.yml',
       '.github/workflows/ui-build-self-hosted.yml',
-      'tools/ui/**.*',
+      'ui/apps/chat/**.*',
+      'ui/lib/ui/**.*',
+      'ui/lib/voice/**.*',
+      'ui/lib/harness/**.*',
+      'ui/lib/huggingface/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
@@ -25,7 +29,11 @@ on:
     paths: [
       '.github/workflows/ui-self-hosted.yml',
       '.github/workflows/ui-build-self-hosted.yml',
-      'tools/ui/**.*',
+      'ui/apps/chat/**.*',
+      'ui/lib/ui/**.*',
+      'ui/lib/voice/**.*',
+      'ui/lib/harness/**.*',
+      'ui/lib/huggingface/**.*',
       'tools/server/tests/**.*'
     ]
 
@@ -67,33 +75,33 @@ jobs:
       - name: Install dependencies
         id: setup
         run: npm ci
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
         with:
           name: llama-ui.zip
-          path: tools/ui/dist/
+          path: ui/apps/chat/dist/
 
       - name: Run type checking
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run check
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run linting
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run lint
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run Client tests
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run test:client
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run Unit tests
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run test:unit
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
   e2e-tests:
     name: E2E Tests
@@ -109,25 +117,28 @@ jobs:
       - name: Install dependencies
         id: setup
         run: npm ci
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Download built UI artifacts
         uses: actions/download-artifact@v6
         with:
           name: llama-ui.zip
-          path: tools/ui/dist/
+          path: ui/apps/chat/dist/
 
       - name: Build Storybook
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run build-storybook
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
+        env:
+          # its stories show the Hugging Face lib
+          VITE_PUBLIC_HUGGING_FACE: "true"
 
       - name: Run UI tests
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run test:ui -- --testTimeout=60000
-        working-directory: tools/ui
+        working-directory: ui/apps/chat
 
       - name: Run E2E tests
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run test:e2e
-        working-directory: tools/ui
+        working-directory: ui/apps/chat

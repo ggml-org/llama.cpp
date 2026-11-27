@@ -23,6 +23,9 @@ struct ModelExtraInputInfo {
     Shape shape;
     int64_t value;
     bool is_parameter;
+    // when set, the value is read from dimension shape_axis of this model input instead of a Parameter
+    std::string shape_source;
+    int64_t shape_axis = -1;
 };
 
 class GgmlDecoder : public DecoderBase {
@@ -108,10 +111,13 @@ public:
     virtual const std::map<std::string, ModelExtraInputInfo> & get_model_extra_inputs() const = 0;
     virtual const std::map<std::string, std::shared_ptr<ov::Node>> & get_model_weights() const = 0;
     virtual std::set<std::string> get_model_output_names() const = 0;
+    // KV-only prefill (GGML_OPENVINO_KV_ONLY_PREFILL): the model keeps only the cache outputs, see
+    // pass::KeepCacheResults.
+    virtual bool is_kv_only_outputs() const { return false; }
+    // The outputs that write a KV or recurrent cache.
+    virtual std::set<std::string> get_cache_output_names() const { return {}; }
 
     virtual int32_t * get_rope_params() const = 0;
-
-    virtual bool has_mixed_rope_params() const = 0;
 
     virtual int get_ssm_state_size() const = 0;
 
@@ -120,6 +126,8 @@ public:
     virtual bool is_static() const = 0;
 
     virtual bool is_stateful() const = 0;
+
+    virtual bool is_prefill() const = 0;
 
     virtual bool is_splited_model() const = 0;
 

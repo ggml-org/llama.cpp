@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 from .base import ModelBase, SentencePieceTokenTypes, TextModel, gguf, jinja_str_or_json, logger
 
 
-@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel", "BertForSequenceClassification")
+@ModelBase.register("BertModel", "BertForMaskedLM", "CamembertModel")
 @ModelBase.example("BAAI/bge-small-en-v1.5", "dangvantuan/sentence-camembert-base")
 class BertModel(TextModel):
     model_arch = gguf.MODEL_ARCH.BERT
@@ -239,6 +239,30 @@ class BertModel(TextModel):
 
         special_vocab = gguf.SpecialVocab(self.dir_model, n_vocab=len(tokens))
         special_vocab.add_to_gguf(self.gguf_writer)
+
+
+@ModelBase.register("BertForSequenceClassification")
+@ModelBase.example("cross-encoder/ms-marco-MiniLM-L-12-v2")
+class BertForSequenceClassification(BertModel):
+    model_arch = gguf.MODEL_ARCH.BERT
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.cls_out_labels is None:
+            self.cls_out_labels = self.hparams.get("id2label")
+
+    @classmethod
+    def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        name, gen = item
+
+        name = name.replace("pooler.dense", "classifier.dense")
+
+        return super().filter_tensors((name, gen))
+
+    def set_gguf_parameters(self):
+        if "classifier.dense.weight" in self.model_tensors:
+            self.hparams.setdefault("classifier_activation", "tanh")
+        super().set_gguf_parameters()
 
 
 @ModelBase.register("DistilBertModel", "DistilBertForMaskedLM", "DistilBertForSequenceClassification")

@@ -177,6 +177,10 @@ static void build_dflash2_selector(llm_graph_context & g, const llama_model & mo
         }
         ggml_tensor * unary_bcast = ggml_reshape_4d(ctx0, unary_run, top_k, 1, n_pos, n_blocks);
         score = ggml_add(ctx0, score, ggml_repeat(ctx0, unary_bcast, score));
+        if (hparams.dflash_softcap_post && hparams.f_final_logit_softcapping > 0.0f) {
+            const float cap = hparams.f_final_logit_softcapping;
+            score = ggml_scale(ctx0, ggml_tanh(ctx0, ggml_scale(ctx0, score, 1.0f / cap)), cap);
+        }
 
         ggml_tensor * row = ggml_concat(ctx0,
                 ggml_cast(ctx0, cand_run, GGML_TYPE_F32),

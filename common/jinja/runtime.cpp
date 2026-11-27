@@ -191,11 +191,30 @@ static value exec_binary_op(context & ctx, const token & op, value left_val, val
             if (is_float) {
                 return mk_val<value_float>(res);
             } else {
-                return mk_val<value_int>(static_cast<int64_t>(res));
+                return mk_val<value_int>(float_to_int(res));
             }
         } else if (op.value == "/") {
             JJ_DEBUG("Division operation: %f / %f", a, b);
             return mk_val<value_float>(a / b);
+        } else if (op.value == "//") {
+            // python semantics: round toward -inf
+            if (is_val<value_int>(left_val) && is_val<value_int>(right_val)) {
+                const int64_t x = left_val->as_int();
+                const int64_t y = right_val->as_int();
+                if (y == 0) {
+                    throw std::runtime_error("integer division by zero");
+                }
+                if (y == -1) {
+                    // INT64_MIN / -1 is UB, wrap around instead
+                    return mk_val<value_int>((int64_t) (0 - (uint64_t) x));
+                }
+                int64_t q = x / y;
+                if (x % y != 0 && (x < 0) != (y < 0)) {
+                    q -= 1;
+                }
+                return mk_val<value_int>(q);
+            }
+            return mk_val<value_float>(std::floor(a / b));
         } else if (op.value == "%") {
             double rem = std::fmod(a, b);
             JJ_DEBUG("Modulo operation: %f %% %f = %f", a, b, rem);
@@ -203,7 +222,7 @@ static value exec_binary_op(context & ctx, const token & op, value left_val, val
             if (is_float) {
                 return mk_val<value_float>(rem);
             } else {
-                return mk_val<value_int>(static_cast<int64_t>(rem));
+                return mk_val<value_int>(float_to_int(rem));
             }
         } else if (op.value == "<") {
             JJ_DEBUG("Comparison operation: %f < %f is %d", a, b, a < b);
@@ -274,12 +293,17 @@ static value exec_binary_op(context & ctx, const token & op, value left_val, val
     // String membership
     if (is_val<value_string>(left_val) && is_val<value_string>(right_val)) {
         // case: "a" in "abc"
-        bool member = test_is_in();
-        if (op.value == "in") {
-            return mk_val<value_bool>(member);
-        } else if (op.value == "not in") {
-            return mk_val<value_bool>(!member);
+        if (op.value == "in" || op.value == "not in") {
+            bool member = test_is_in();
+            return mk_val<value_bool>(op.value == "in" ? member : !member);
         }
+        // case: "a" < "b"; UTF-8 byte order is the same as codepoint order, like python
+        const std::string a = left_val->as_string().str();
+        const std::string b = right_val->as_string().str();
+        if (op.value == "<")  { return mk_val<value_bool>(a <  b); }
+        if (op.value == ">")  { return mk_val<value_bool>(a >  b); }
+        if (op.value == "<=") { return mk_val<value_bool>(a <= b); }
+        if (op.value == ">=") { return mk_val<value_bool>(a >= b); }
     }
 
     // Value key in object
@@ -787,13 +811,14 @@ value call_statement::execute_impl(context & ctx) const {
     }
     auto * callee_func = cast_val<value_func>(callee_val);
 
-    context caller_ctx(ctx); // new scope for caller execution
+    // caller() can be saved and called after this scope ended, it owns a snapshot of the variables
+    auto caller_ctx = std::make_shared<context>(ctx.snapshot());
 
-    const func_handler func = [this, caller_ctx = std::move(caller_ctx)](const func_args & args) -> value {
+    const func_handler func = [this, caller_ctx](const func_args & args) -> value {
         if (args.ctx.macro_depth >= JINJA_RECURSIVE_LIMIT) {
             throw std::runtime_error("macro calls are nested more than " + std::to_string(JINJA_RECURSIVE_LIMIT) + " levels deep");
         }
-        context block_ctx(caller_ctx); // new scope for block execution
+        context block_ctx(*caller_ctx); // new scope for block execution
         block_ctx.macro_depth = args.ctx.macro_depth + 1;
 
         bind_parameters("caller", this->caller_args, args, block_ctx);

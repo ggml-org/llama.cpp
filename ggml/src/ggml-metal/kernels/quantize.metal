@@ -146,6 +146,7 @@ template [[host_name("kernel_cpy_q4_1_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<
 template [[host_name("kernel_cpy_q5_0_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_q5_0, 2, dequantize_q5_0>;
 template [[host_name("kernel_cpy_q5_1_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_q5_1, 2, dequantize_q5_1>;
 template [[host_name("kernel_cpy_q8_0_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_q8_0, 2, dequantize_q8_0>;
+template [[host_name("kernel_cpy_nvfp4_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_nvfp4, 4, dequantize_nvfp4>;
 
 template [[host_name("kernel_cpy_tq2_0_f32")]] kernel cpy_q_f_t kernel_cpy_q_f32<float4x4, block_tq2_0, QK_NL, dequantize_tq2_0>;
 
@@ -156,8 +157,50 @@ template [[host_name("kernel_cpy_q4_1_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<
 template [[host_name("kernel_cpy_q5_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q5_0, 2, dequantize_q5_0>;
 template [[host_name("kernel_cpy_q5_1_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q5_1, 2, dequantize_q5_1>;
 template [[host_name("kernel_cpy_q8_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_q8_0, 2, dequantize_q8_0>;
+template [[host_name("kernel_cpy_nvfp4_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_nvfp4, 4, dequantize_nvfp4>;
 
 template [[host_name("kernel_cpy_tq2_0_f16")]] kernel cpy_q_f_t kernel_cpy_q_f32<half4x4, block_tq2_0, QK_NL, dequantize_tq2_0>;
+
+template<typename T>
+static void concat_copy(device const char * src, device char * dst, const int n, const int tid, const int nth) {
+    if (n <= 0) {
+        return;
+    }
+
+    constexpr int N = 16/sizeof(T);
+    typedef vec<T, N> T16;
+
+    device const T * x = (device const T *)src;
+    device       T * y = (device       T *)dst;
+
+    const size_t rx = (size_t)x % 16;
+
+    if (rx != (size_t)y % 16 || rx % sizeof(T) != 0) {
+        for (int i = tid; i < n; i += nth) {
+            y[i] = x[i];
+        }
+
+        return;
+    }
+
+    const int np  = min((int)(((16 - rx) % 16)/sizeof(T)), n);
+    const int n16 = (n - np)/N;
+
+    for (int i = tid; i < np; i += nth) {
+        y[i] = x[i];
+    }
+
+    device const T16 * x16 = (device const T16 *)(x + np);
+    device       T16 * y16 = (device       T16 *)(y + np);
+
+    for (int i = tid; i < n16; i += nth) {
+        y16[i] = x16[i];
+    }
+
+    for (int i = np + n16*N + tid; i < n; i += nth) {
+        y[i] = x[i];
+    }
+}
 
 template<typename T>
 kernel void kernel_concat(
@@ -178,20 +221,39 @@ kernel void kernel_concat(
         return;
     }
 
-    int o[4] = {0, 0, 0, 0};
-    o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
+    const int o0 = args.dim == 0 ? args.ne00 : 0;
+    const int o1 = args.dim == 1 ? args.ne01 : 0;
+    const int o2 = args.dim == 2 ? args.ne02 : 0;
+    const int o3 = args.dim == 3 ? args.ne03 : 0;
 
     // chunk ic of nc0 along the row
     const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
-    const int i0e = min(args.ne0, (ic + 1)*n0);
+    const int i0b = ntg.y == 1 ? ic*n0 : 0;
+    const int i0e = ntg.y == 1 ? min(args.ne0, (ic + 1)*n0) : args.ne0;
 
-    for (int i0 = ic*n0 + tpitg.x; i0 < i0e; i0 += ntg.x) {
+    if (args.nb0 == sizeof(T) && args.nb00 == sizeof(T) && args.nb10 == sizeof(T)) {
+        const bool in0 = i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03;
+
+        const int na = in0 ? min(i0e - i0b, max(0, args.ne00 - i0b)) : 0;
+        const int nb = i0e - i0b - na;
+
+        device const char * r0 = src0 + i3*args.nb03 + i2*args.nb02 + i1*args.nb01;
+        device const char * r1 = src1 + (i3 - o3)*args.nb13 + (i2 - o2)*args.nb12 + (i1 - o1)*args.nb11;
+        device       char * rd = dst  + i3*args.nb3  + i2*args.nb2  + i1*args.nb1;
+
+        concat_copy<T>(r0 + i0b*sizeof(T), rd + i0b*sizeof(T), na, tpitg.x, ntg.x);
+        concat_copy<T>(r1 + (i0b + na - o0)*sizeof(T), rd + (i0b + na)*sizeof(T), nb, tpitg.x, ntg.x);
+
+        return;
+    }
+
+    for (int i0 = i0b + tpitg.x; i0 < i0e; i0 += ntg.x) {
         device const T * x;
 
         if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
             x = (device const T *)(src0 + (i3       )*args.nb03 + (i2       )*args.nb02 + (i1       )*args.nb01 + (i0       )*args.nb00);
         } else {
-            x = (device const T *)(src1 + (i3 - o[3])*args.nb13 + (i2 - o[2])*args.nb12 + (i1 - o[1])*args.nb11 + (i0 - o[0])*args.nb10);
+            x = (device const T *)(src1 + (i3 - o3)*args.nb13 + (i2 - o2)*args.nb12 + (i1 - o1)*args.nb11 + (i0 - o0)*args.nb10);
         }
 
         device T * y = (device T *)(dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1 + i0*args.nb0);
@@ -232,8 +294,10 @@ kernel void kernel_concat_q(
         return;
     }
 
-    int o[4] = {0, 0, 0, 0};
-    o[args.dim] = args.dim == 0 ? args.ne00 : (args.dim == 1 ? args.ne01 : (args.dim == 2 ? args.ne02 : args.ne03));
+    const int o0 = args.dim == 0 ? args.ne00 : 0;
+    const int o1 = args.dim == 1 ? args.ne01 : 0;
+    const int o2 = args.dim == 2 ? args.ne02 : 0;
+    const int o3 = args.dim == 3 ? args.ne03 : 0;
 
     // chunk ic of nc0 along the row
     const int n0  = (args.ne0 + args.nc0 - 1)/args.nc0;
@@ -245,7 +309,7 @@ kernel void kernel_concat_q(
         if (i0 < args.ne00 && i1 < args.ne01 && i2 < args.ne02 && i3 < args.ne03) {
             x = (device const block_q *)(src0 + (i3       )*args.nb03 + (i2       )*args.nb02 + (i1       )*args.nb01 + (i0       )*args.nb00);
         } else {
-            x = (device const block_q *)(src1 + (i3 - o[3])*args.nb13 + (i2 - o[2])*args.nb12 + (i1 - o[1])*args.nb11 + (i0 - o[0])*args.nb10);
+            x = (device const block_q *)(src1 + (i3 - o3)*args.nb13 + (i2 - o2)*args.nb12 + (i1 - o1)*args.nb11 + (i0 - o0)*args.nb10);
         }
 
         device block_q * y = (device block_q *)(dst + i3*args.nb3 + i2*args.nb2 + i1*args.nb1 + i0*args.nb0);
@@ -341,6 +405,7 @@ template [[host_name("kernel_get_rows_q5_0")]]    kernel get_rows_q_t kernel_get
 template [[host_name("kernel_get_rows_q5_1")]]    kernel get_rows_q_t kernel_get_rows_q<block_q5_1,    2, dequantize_q5_1>;
 template [[host_name("kernel_get_rows_q8_0")]]    kernel get_rows_q_t kernel_get_rows_q<block_q8_0,    2, dequantize_q8_0>;
 template [[host_name("kernel_get_rows_mxfp4")]]   kernel get_rows_q_t kernel_get_rows_q<block_mxfp4,   2, dequantize_mxfp4>;
+template [[host_name("kernel_get_rows_nvfp4")]]   kernel get_rows_q_t kernel_get_rows_q<block_nvfp4,   4, dequantize_nvfp4>;
 template [[host_name("kernel_get_rows_q2_K")]]    kernel get_rows_q_t kernel_get_rows_q<block_q2_K,    QK_NL, dequantize_q2_K>;
 template [[host_name("kernel_get_rows_q3_K")]]    kernel get_rows_q_t kernel_get_rows_q<block_q3_K,    QK_NL, dequantize_q3_K>;
 template [[host_name("kernel_get_rows_q4_K")]]    kernel get_rows_q_t kernel_get_rows_q<block_q4_K,    QK_NL, dequantize_q4_K>;

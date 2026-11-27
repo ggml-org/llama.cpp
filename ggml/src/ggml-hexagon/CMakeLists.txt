@@ -59,6 +59,8 @@ ggml_add_backend_library(${TARGET_NAME}
     htp-opnode.h
     htp-fusion.cpp
     htp-fusion.h
+    htp-lower.cpp
+    htp-lower.h
     htp-repack.cpp
     htp-repack.h
     htp-drv.cpp

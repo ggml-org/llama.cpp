@@ -28,7 +28,11 @@ struct htp_binary_kernel_params {
 
     uint8_t  n_srcs;
     uint8_t  is_scalar;
-    uint8_t  pad[2];
+    uint8_t  src0_elem_size;
+    uint8_t  src1_elem_size;
+
+    uint8_t  dst_elem_size;
+    uint8_t  pad[3];
 
     uint32_t n_hvx;
     uint32_t rows_per_buffer;
@@ -61,16 +65,18 @@ static inline bool htp_binary_strides_safe(
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * dst,
-    size_t elem_size
+    size_t src0_elem_size,
+    size_t src1_elem_size,
+    size_t dst_elem_size
 ) {
-    if ((src0->ne[0] != 1 && src0->nb[0] != elem_size) ||
-        (src1->ne[0] != 1 && src1->nb[0] != elem_size) ||
-        (dst->ne[0]  != 1 && dst->nb[0]  != elem_size)) {
+    (void) src1;
+    (void) src1_elem_size;
+    if ((src0->ne[0] != 1 && src0->nb[0] != src0_elem_size) ||
+        (dst->ne[0]  != 1 && dst->nb[0]  != dst_elem_size)) {
         return false;
     }
-    if ((src0->ne[1] > 1 && src0->nb[1] < src0->ne[0] * elem_size) ||
-        (src1->ne[1] > 1 && src1->nb[1] < src1->ne[0] * elem_size) ||
-        (dst->ne[1]  > 1 && dst->nb[1]  < dst->ne[0]  * elem_size)) {
+    if ((src0->ne[1] > 1 && src0->nb[1] < src0->ne[0] * src0_elem_size) ||
+        (dst->ne[1]  > 1 && dst->nb[1]  < dst->ne[0]  * dst_elem_size)) {
         return false;
     }
     return true;
@@ -114,18 +120,20 @@ static inline void htp_binary_vtcm_layout_build(
     const uint32_t n_srcs = kparams->n_srcs > 2 ? kparams->n_srcs : 2;
 
     if (kparams->kernel_type == HTP_BINARY_KERNEL_CHUNKED) {
-        const size_t chunk_bytes = kparams->chunk_bytes;
-        if (chunk_bytes == 0) {
+        const size_t src0_chunk_bytes = hex_round_up((size_t) kparams->chunk_size * kparams->src0_elem_size, 128);
+        const size_t src1_chunk_bytes = hex_round_up((size_t) kparams->chunk_size * kparams->src1_elem_size, 128);
+        const size_t dst_chunk_bytes  = hex_round_up((size_t) kparams->chunk_size * kparams->dst_elem_size, 128);
+        if (src0_chunk_bytes == 0 || src1_chunk_bytes == 0 || dst_chunk_bytes == 0) {
             return;
         }
 
-        L->src0_bytes_per_hvx = 2 * chunk_bytes;
-        L->src1_bytes_per_hvx = kparams->is_scalar ? 0 : (2 * (n_srcs - 1) * chunk_bytes);
-        L->dst_bytes_per_hvx  = 2 * chunk_bytes;
+        L->src0_bytes_per_hvx = 2 * src0_chunk_bytes;
+        L->src1_bytes_per_hvx = kparams->is_scalar ? 0 : (2 * (n_srcs - 1) * src1_chunk_bytes);
+        L->dst_bytes_per_hvx  = 2 * dst_chunk_bytes;
 
-        L->src0_spad_half_size = chunk_bytes;
-        L->src1_spad_half_size = kparams->is_scalar ? 0 : chunk_bytes;
-        L->dst_spad_half_size  = chunk_bytes;
+        L->src0_spad_half_size = src0_chunk_bytes;
+        L->src1_spad_half_size = kparams->is_scalar ? 0 : src1_chunk_bytes;
+        L->dst_spad_half_size  = dst_chunk_bytes;
 
         L->rows_per_buffer = 1;
         L->src1_size = 0;
@@ -199,13 +207,18 @@ static inline bool htp_binary_solve_chunked(
     struct htp_binary_vtcm_layout * L,
     struct htp_binary_kernel_params * kparams,
     uint32_t total_elems,
-    uint32_t elem_size,
+    uint32_t src0_elem_size,
+    uint32_t src1_elem_size,
+    uint32_t dst_elem_size,
     uint32_t max_hvx,
     uint32_t n_srcs,
     bool is_scalar,
     size_t vtcm_size
 ) {
     const size_t n_bufs = is_scalar ? 2 : (size_t) n_srcs + 1;
+    const uint32_t elem_size = src0_elem_size > src1_elem_size ?
+        (src0_elem_size > dst_elem_size ? src0_elem_size : dst_elem_size) :
+        (src1_elem_size > dst_elem_size ? src1_elem_size : dst_elem_size);
     const size_t scalar_bytes = is_scalar ? 128 : 0;
     const size_t budget_per_buf = (max_hvx > 0 && vtcm_size > scalar_bytes)
         ? hex_align_down((vtcm_size - scalar_bytes) / (2 * max_hvx * n_bufs), 128)
@@ -230,6 +243,9 @@ static inline bool htp_binary_solve_chunked(
     kparams->n_srcs                = (uint8_t) n_srcs;
     kparams->rows_per_buffer       = 1;
     kparams->src1_row_size_aligned = is_scalar ? 0 : kparams->src0_row_size_aligned;
+    kparams->src0_elem_size        = (uint8_t) src0_elem_size;
+    kparams->src1_elem_size        = (uint8_t) src1_elem_size;
+    kparams->dst_elem_size         = (uint8_t) dst_elem_size;
     kparams->src1_size             = 0;
     kparams->chunk_size            = chunk_size;
     kparams->chunk_bytes           = chunk_bytes;

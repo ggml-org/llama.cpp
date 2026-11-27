@@ -1,7 +1,3 @@
-#pragma clang diagnostic ignored "-Wunused-variable"
-#pragma clang diagnostic ignored "-Wunused-function"
-#pragma clang diagnostic ignored "-Wunused-but-set-variable"
-
 #include <HAP_farf.h>
 #include <hexagon_protos.h>
 #include <hexagon_types.h>
@@ -935,7 +931,7 @@ int op_im2col(struct htp_ops_context * octx) {
     uint32_t nrows    = kparams->total_rows;
     if (octx->ctx->mdev.count > 1) {
         const struct htp_tensor_mdev_range range =
-            htp_tensor_mdev_partition(kparams->total_rows, htp_tensor_mdev_data_aligned(dst) ? kparams->rows_per_chunk : 0,
+            htp_tensor_mdev_partition(kparams->total_rows, 1,
                                       octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_base = range.start;
         nrows    = range.count;
@@ -1039,7 +1035,7 @@ int op_im2col_3d(struct htp_ops_context * octx) {
     uint32_t nrows    = kparams->total_rows;
     if (octx->ctx->mdev.count > 1) {
         const struct htp_tensor_mdev_range range =
-            htp_tensor_mdev_partition(kparams->total_rows, htp_tensor_mdev_data_aligned(dst) ? kparams->rows_per_chunk : 0,
+            htp_tensor_mdev_partition(kparams->total_rows, 1,
                                       octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_base = range.start;
         nrows    = range.count;

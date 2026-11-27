@@ -3,11 +3,11 @@ ARG OPENVINO_VERSION_FULL=2026.4.1.22982.07f9c262b05
 ARG UBUNTU_VERSION=24.04
 
 # Intel GPU driver versions. https://github.com/intel/compute-runtime/releases
-ARG IGC_VERSION=v2.41.5
-ARG IGC_VERSION_FULL=2_2.41.5+22716
-ARG COMPUTE_RUNTIME_VERSION=26.35.39758.10
-ARG COMPUTE_RUNTIME_VERSION_FULL=26.35.39758.10-0
-ARG IGDGMM_VERSION=22.10.0
+ARG IGC_VERSION=v2.42.6
+ARG IGC_VERSION_FULL=2_2.42.6+23070
+ARG COMPUTE_RUNTIME_VERSION=26.40.40196.8
+ARG COMPUTE_RUNTIME_VERSION_FULL=26.40.40196.8-0
+ARG IGDGMM_VERSION=22.10.2
 
 # Intel NPU driver versions. https://github.com/intel/linux-npu-driver/releases
 ARG NPU_DRIVER_VERSION=v1.38.0
@@ -27,13 +27,21 @@ ARG NODE_VERSION=24
 FROM docker.io/node:$NODE_VERSION AS web
 
 ARG APP_VERSION
+# true builds the UI with sharing conversations to Hugging Face, as the llama-server images do
+ARG VITE_PUBLIC_HUGGING_FACE=false
 
-WORKDIR /app/tools/ui
+WORKDIR /app/ui/apps/chat
 
-COPY tools/ui/package.json tools/ui/package-lock.json ./
+COPY ui/apps/chat/package.json ui/apps/chat/package-lock.json ./
 RUN npm ci
 
-COPY tools/ui/ ./
+COPY ui/apps/chat/ ./
+# the app compiles Llama UI, Llama Voice, the harness and Llama Hugging Face from their sources next to it
+COPY ui/lib/ui/package.json /app/ui/lib/ui/package.json
+COPY ui/lib/ui/src/lib/ /app/ui/lib/ui/src/lib/
+COPY ui/lib/voice/src/ /app/ui/lib/voice/src/
+COPY ui/lib/harness/src/ /app/ui/lib/harness/src/
+COPY ui/lib/huggingface/src/ /app/ui/lib/huggingface/src/
 RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 ## Build Image
@@ -83,7 +91,7 @@ WORKDIR /app
 
 COPY . .
 
-COPY --from=web /app/tools/ui/dist tools/ui/dist
+COPY --from=web /app/ui/apps/chat/dist ui/apps/chat/dist
 
 # Build Stage
 RUN bash -c "source ${OpenVINO_DIR}/setupvars.sh && \

@@ -1,0 +1,186 @@
+name: UI Chat Publish
+
+# Publishes Llama Chat to npm: @ggml-org/llama-chat (ui/apps/chat, the app and its CLI) and
+# llama-chat (ui/apps/chat/alias, the short name for npx), always at the same version.
+#
+# The version in ui/apps/chat/package.json is the release, set by hand, as for @ggml-org/llama-ui
+# in ui-lib-publish.yml. A commit that reaches master with a version npm does not have builds the
+# app and publishes both packages; any other commit publishes nothing. Bump both package.json
+# files in the PR that should ship.
+#
+# Auth: no npm token is stored here. The job exchanges its OIDC identity for one (npm trusted
+# publishing) and signs the tarballs with provenance. One-time setup, before this can publish: on
+# each of the two packages, Publishing settings, Trusted Publisher, GitHub Actions, with
+# organization ggml-org, repository llama.cpp, workflow file ui-chat-publish.yml and Environment
+# left blank. Until then the publish step fails on master; re-running the job publishes it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and pack, but do not publish'
+        required: false
+        type: boolean
+        default: false
+  push:
+    branches:
+      - master
+    paths: [
+      '.github/workflows/ui-chat-publish.yml',
+      'ui/apps/chat/package.json',
+      'ui/apps/chat/alias/package.json'
+    ]
+  # a dry run for PRs that change what goes into the packages
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: [
+      '.github/workflows/ui-chat-publish.yml',
+      'ui/apps/chat/package.json',
+      'ui/apps/chat/alias/**',
+      'ui/apps/chat/bin/**',
+      'ui/apps/chat/cli/**'
+    ]
+
+cache-mode: none
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # never cancel a run mid-publish: a version half-published cannot be taken back
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+env:
+  APP_DIR: ui/apps/chat
+  ALIAS_DIR: ui/apps/chat/alias
+  VERSION_CHECK: ui/lib/ui/scripts/npm-version-check.mjs
+
+jobs:
+  publish:
+    name: Publish @ggml-org/llama-chat and llama-chat
+    if: github.repository == 'ggml-org/llama.cpp'
+    runs-on: ubuntu-26.04-arm
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+
+      - name: Check npm can publish with an OIDC token
+        run: |
+          node -e '
+            const v = process.argv[1];
+            const [major, minor] = v.split(".").map(Number);
+            if (major < 11 || (major === 11 && minor < 5)) {
+              console.error(`npm ${v} cannot publish with trusted publishing: 11.5.1 or newer is needed`);
+              process.exit(1);
+            }
+          ' "$(npm -v)"
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{ env.APP_DIR }}
+
+      - name: Build the app
+        # the same build.json version as the UI that llama-server embeds, for the app's update check.
+        # This folder's .npmrc sets ignore-scripts, so npm never builds it: this step does.
+        run: LLAMA_BUILD_NUMBER="b$(git rev-list --count HEAD)" npm run build
+        working-directory: ${{ env.APP_DIR }}
+        env:
+          # the same app as the UI llama-server embeds, with the Hugging Face lib
+          VITE_PUBLIC_HUGGING_FACE: "true"
+
+      - name: Test the CLI and the alias version
+        run: npx vitest --project=unit --run tests/unit/cli.test.ts
+        working-directory: ${{ env.APP_DIR }}
+
+      - name: Check what goes into the package
+        run: |
+          npm pack --dry-run --json > "$RUNNER_TEMP/pack.json"
+          node -e '
+            const [{ files }] = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+            const paths = files.map((file) => file.path);
+            const maps = paths.filter((path) => path.endsWith(".map"));
+            if (!paths.includes("dist/index.html")) {
+              console.error("dist/index.html is not in the package: nothing would be served");
+              process.exit(1);
+            }
+            if (maps.length > 0) {
+              console.error(`source maps in the package: ${maps.join(", ")}`);
+              process.exit(1);
+            }
+            console.log(`${paths.length} files, no source maps`);
+          ' "$RUNNER_TEMP/pack.json"
+        working-directory: ${{ env.APP_DIR }}
+
+      - name: Compare @ggml-org/llama-chat with npm
+        id: app
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: node "$VERSION_CHECK" "$APP_DIR"
+
+      - name: Compare llama-chat with npm
+        id: alias
+        continue-on-error: ${{ github.event_name == 'pull_request' }}
+        run: node "$VERSION_CHECK" "$ALIAS_DIR"
+
+      # master only: npm's trusted publisher matches the repository and the workflow file, not the
+      # branch, so this condition is what keeps a manual run on a PR branch from publishing.
+      # The app goes first, since the alias depends on it at the same version.
+      - name: Publish @ggml-org/llama-chat
+        if: github.ref == 'refs/heads/master' && steps.app.outputs.should_publish == 'true' && inputs.dry_run != true
+        env:
+          TAG: ${{ steps.app.outputs.tag }}
+        run: npm publish --access public --provenance --ignore-scripts --tag "$TAG"
+        working-directory: ${{ env.APP_DIR }}
+
+      - name: Publish llama-chat
+        if: github.ref == 'refs/heads/master' && steps.alias.outputs.should_publish == 'true' && inputs.dry_run != true
+        env:
+          TAG: ${{ steps.alias.outputs.tag }}
+        run: npm publish --access public --provenance --ignore-scripts --tag "$TAG"
+        working-directory: ${{ env.ALIAS_DIR }}
+
+      - name: Report
+        if: always()
+        # values reach the shell through env, so a name from a PR's package.json cannot inject here
+        env:
+          APP: ${{ steps.app.outputs.name }}@${{ steps.app.outputs.version }}
+          APP_VERDICT: ${{ steps.app.outputs.verdict || 'not reached' }}
+          APP_NOTE: ${{ steps.app.outputs.note }}
+          ALIAS: ${{ steps.alias.outputs.name }}@${{ steps.alias.outputs.version }}
+          ALIAS_VERDICT: ${{ steps.alias.outputs.verdict || 'not reached' }}
+          ALIAS_NOTE: ${{ steps.alias.outputs.note }}
+          DRY: ${{ inputs.dry_run }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          {
+            echo "### Llama Chat on npm"
+            echo
+            echo "| package | verdict | note |"
+            echo "| --- | --- | --- |"
+            echo "| \`$APP\` | \`$APP_VERDICT\` | $APP_NOTE |"
+            echo "| \`$ALIAS\` | \`$ALIAS_VERDICT\` | $ALIAS_NOTE |"
+            echo
+            if [ "$EVENT" = "pull_request" ] || [ "$DRY" = "true" ]; then echo "Dry run: nothing was published."; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Mind the verdict
+        # a version going backwards is a mistake; an unchanged version is a package.json edit that
+        # is not a release, such as a dependency update
+        if: always() && github.event_name != 'pull_request'
+        env:
+          VERDICTS: ${{ steps.app.outputs.verdict }} ${{ steps.alias.outputs.verdict }}
+        run: |
+          case " $VERDICTS " in
+            *" stale "*)
+              echo "::error::a version in package.json is older than the one on npm"
+              exit 1 ;;
+          esac
