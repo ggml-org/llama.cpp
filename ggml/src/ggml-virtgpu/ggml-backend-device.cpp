@@ -30,7 +30,7 @@ static void ggml_backend_remoting_device_get_memory(ggml_backend_dev_t dev, size
 }
 
 static bool ggml_backend_remoting_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    if (ggml_flash_attn_ext_has_indexed_bias(op)) {
+    if (ggml_flash_attn_ext_has_bias(op)) {
         return false;
     }
 

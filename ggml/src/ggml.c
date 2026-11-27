@@ -5632,41 +5632,79 @@ void ggml_flash_attn_ext_add_sinks(
 }
 
 bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
-    return a->op == GGML_OP_FLASH_ATTN_EXT && ggml_get_op_params_i32(a, 5) != 0;
+    return ggml_flash_attn_ext_bias_is_indexed(a);
 }
 
-static bool ggml_validate_flash_attn_ext_indexed_bias(const struct ggml_tensor * a) {
+static bool ggml_validate_flash_attn_ext_bias_indexed(const struct ggml_tensor * a) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-    const struct ggml_tensor * table   = a->src[6];
-    const struct ggml_tensor * indices = a->src[7];
-    if (!ggml_flash_attn_ext_has_indexed_bias(a)) {
-        return !table && !indices;
+
+    if (!ggml_flash_attn_ext_has_bias(a)) {
+        return a->src[7] == NULL;
     }
 
-    const struct ggml_tensor * q    = a->src[0];
-    const struct ggml_tensor * k    = a->src[1];
-    const struct ggml_tensor * mask = a->src[3];
-    const struct ggml_tensor * rows = a->src[5];
-    return q && k && a->src[2] && mask && table && indices &&
-        mask->type == GGML_TYPE_F16 && ggml_is_contiguous(mask) &&
-        mask->ne[0] == (rows ? rows->ne[0] : k->ne[1]) && mask->ne[1] == q->ne[1] &&
-        mask->ne[2] == 1 && mask->ne[3] == q->ne[3] &&
-        (!rows || (rows->type == GGML_TYPE_I32 && ggml_is_contiguous(rows) && ggml_is_matrix(rows) && rows->ne[1] == q->ne[3])) &&
-        table->type == GGML_TYPE_F32 && ggml_is_contiguous(table) && table->ne[0] > 0 && table->ne[1] == q->ne[2] &&
-        (q->ne[1] == 0 || q->ne[3] <= INT64_MAX/q->ne[1]) && table->ne[2] == q->ne[1]*q->ne[3] && table->ne[3] == 1 &&
-        indices->type == GGML_TYPE_I32 && ggml_is_contiguous(indices) && ggml_is_matrix(indices) &&
-        indices->ne[0] == mask->ne[0] && indices->ne[1] == table->ne[2];
+    if (!ggml_flash_attn_ext_bias_is_indexed(a)) {
+        return false;
+    }
+
+    const struct ggml_tensor * table   = a->src[6];
+    const struct ggml_tensor * indices = a->src[7];
+    const struct ggml_tensor * q       = a->src[0];
+    const struct ggml_tensor * k       = a->src[1];
+    const struct ggml_tensor * mask    = a->src[3];
+    const struct ggml_tensor * rows    = a->src[5];
+
+    if (!q || !k || !a->src[2] || !mask) {
+        return false;
+    }
+    if (mask->type != GGML_TYPE_F16 || !ggml_is_contiguous(mask)) {
+        return false;
+    }
+    if (mask->ne[0] != (rows ? rows->ne[0] : k->ne[1]) || mask->ne[1] != q->ne[1]) {
+        return false;
+    }
+    if (mask->ne[2] != 1 || mask->ne[3] != q->ne[3]) {
+        return false;
+    }
+    if (rows && (rows->type != GGML_TYPE_I32 || !ggml_is_contiguous(rows) ||
+                !ggml_is_matrix(rows) || rows->ne[1] != q->ne[3])) {
+        return false;
+    }
+    if (table->type != GGML_TYPE_F32 || !ggml_is_contiguous(table) || table->ne[0] == 0) {
+        return false;
+    }
+    if (table->ne[1] != q->ne[2] || table->ne[3] != 1) {
+        return false;
+    }
+    if (q->ne[1] != 0 && q->ne[3] > INT64_MAX/q->ne[1]) {
+        return false;
+    }
+    if (table->ne[2] != q->ne[1]*q->ne[3]) {
+        return false;
+    }
+    if (indices->type != GGML_TYPE_I32 || !ggml_is_contiguous(indices) || !ggml_is_matrix(indices)) {
+        return false;
+    }
+    if (indices->ne[0] != mask->ne[0] || indices->ne[1] != table->ne[2]) {
+        return false;
+    }
+    return true;
 }
 
-void ggml_flash_attn_ext_add_indexed_bias(
+void ggml_flash_attn_ext_add_bias_indexed(
         struct ggml_tensor * a,
         struct ggml_tensor * table,
         struct ggml_tensor * indices) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
     a->src[6] = table;
     a->src[7] = indices;
-    ggml_set_op_params_i32(a, 5, table != NULL);
-    GGML_ASSERT(ggml_validate_flash_attn_ext_indexed_bias(a));
+    GGML_ASSERT(ggml_validate_flash_attn_ext_bias_indexed(a));
+}
+
+void ggml_flash_attn_ext_add_indexed_bias(
+        struct ggml_tensor * a,
+        struct ggml_tensor * table,
+        struct ggml_tensor * indices) {
+    ggml_flash_attn_ext_add_bias_indexed(a, table, indices);
 }
 
 // ggml_flash_attn_back

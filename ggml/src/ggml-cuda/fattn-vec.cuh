@@ -16,7 +16,7 @@ static constexpr __device__ int ggml_cuda_fattn_vec_get_nthreads_device() {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wpass-failed"
 #endif // __clang__
-template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool indexed_bias, bool use_kv_rows> // D == head size
+template<int D, int ncols, ggml_type type_K, ggml_type type_V, bool use_logit_softcap, bool bias_indexed, bool use_kv_rows> // D == head size
 __launch_bounds__(ggml_cuda_fattn_vec_get_nthreads_device(), 1)
 static __global__ void flash_attn_ext_vec(
         const float2 * Q_ptr,
@@ -41,7 +41,7 @@ static __global__ void flash_attn_ext_vec(
                             const int32_t s21,  const int32_t s22,  const int64_t s23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t s31,  const int64_t s32,  const int64_t s33,
-        const fattn_indexed_bias bias) {
+        const fattn_bias_indexed bias) {
     ggml_cuda_pdl_lc();
 #ifdef FLASH_ATTN_AVAILABLE
     const float2 * GGML_CUDA_RESTRICT Q        = Q_ptr;
@@ -75,7 +75,7 @@ static __global__ void flash_attn_ext_vec(
 
 #ifdef GGML_USE_HIP
 #ifdef RDNA
-    constexpr int nthreads_KQ_q = indexed_bias && type_K == GGML_TYPE_F8_E4M3 ? 16 : 2;
+    constexpr int nthreads_KQ_q = bias_indexed && type_K == GGML_TYPE_F8_E4M3 ? 16 : 2;
 #else
     constexpr int nthreads_KQ_q = type_K == GGML_TYPE_F8_E4M3 && D == 256 && ncols == 2 ? 16 : 4;
 #endif // RDNA
@@ -107,13 +107,13 @@ static __global__ void flash_attn_ext_vec(
 
     const int sequence = blockIdx.z / ne02;
     const int head = blockIdx.z - sequence*ne02;
-    const fattn_indexed_bias head_bias = indexed_bias ? bias.for_head(int64_t(sequence)*ne01.z, head) : bias;
+    const fattn_bias_indexed head_bias = bias_indexed ? bias.for_head(int64_t(sequence)*ne01.z, head) : bias;
     const int gqa_ratio = ne02 / ne12; // With grouped query attention there are > 1 Q matrices per K, V matrix.
     Q += s03*sequence + s02* head              + s01*ic0;
     K += s13*sequence + s12*(head / gqa_ratio);
     V += s23*sequence + s22*(head / gqa_ratio);
 
-    const half * maskh  = indexed_bias || mask ? mask + s33*(sequence % ne33) + s32*(head % ne32) + s31*ic0 : nullptr;
+    const half * maskh  = bias_indexed || mask ? mask + s33*(sequence % ne33) + s32*(head % ne32) + s31*ic0 : nullptr;
 
     const float slope = get_alibi_slope(max_bias, head, n_head_log2, m0, m1);
 
@@ -305,7 +305,7 @@ static __global__ void flash_attn_ext_vec(
                     sum = logit_softcap*tanhf(sum);
                 }
 
-                if constexpr (!indexed_bias) {
+                if constexpr (!bias_indexed) {
                     if (mask && (ncols == 1 || ic0 + j < int(ne01.z))) {
                         sum += slope*__half2float(maskh[j*ne11 + i_KQ]);
                     }
@@ -321,14 +321,14 @@ static __global__ void flash_attn_ext_vec(
 
 #pragma unroll
         for (int j = 0; j < ncols; ++j) {
-            if constexpr (indexed_bias) {
+            if constexpr (bias_indexed) {
                 const int k = k_VKQ_0 + tid;
                 const float m = head_bias.add(__half2float(maskh[j*ne11 + tid]), ic0 + j, k);
                 KQ_reg[j] += slope*m;
                 KQ_max_new[j] = fmaxf(KQ_max[j], KQ_reg[j] + FATTN_KQ_MAX_OFFSET);
             }
 #pragma unroll
-            for (int offset = indexed_bias ? 1 : nthreads_KQ; offset < WARP_SIZE; offset <<= 1) {
+            for (int offset = bias_indexed ? 1 : nthreads_KQ; offset < WARP_SIZE; offset <<= 1) {
                 KQ_max_new[j] = fmaxf(KQ_max_new[j], ggml_cuda_shfl_xor(KQ_max_new[j], offset, WARP_SIZE));
             }
             const float KQ_max_scale = expf(KQ_max[j] - KQ_max_new[j]);
@@ -575,7 +575,7 @@ void ggml_cuda_flash_attn_ext_vec_case_impl(ggml_backend_cuda_context & ctx, ggm
     const int nwarps   = nthreads / WARP_SIZE;
     fattn_kernel_t fattn_kernel = flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, false, false>;
     if constexpr (cols_per_block == 1 && (D == 64 || D == 128) && !use_logit_softcap) {
-        if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
+        if (ggml_flash_attn_ext_bias_is_indexed(dst)) {
             fattn_kernel = dst->src[5] ? flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, true, true>
                                        : flash_attn_ext_vec<D, cols_per_block, type_K, type_V, use_logit_softcap, true, false>;
         }

@@ -9069,10 +9069,10 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const uint32_t nem2 = mask ? mask->ne[2] : 0;
     const uint32_t nem3 = mask ? mask->ne[3] : 0;
 
-    const bool has_bias = ggml_flash_attn_ext_has_indexed_bias(dst);
-    const ggml_tensor * bias_table = has_bias ? dst->src[6] : nullptr;
-    const ggml_tensor * bias_idx   = has_bias ? dst->src[7] : nullptr;
-    const uint32_t bias_bins = has_bias ? (uint32_t)bias_table->ne[0] : 0;
+    const bool bias_indexed = ggml_flash_attn_ext_bias_is_indexed(dst);
+    const ggml_tensor * bias_table = bias_indexed ? dst->src[6] : nullptr;
+    const ggml_tensor * bias_idx   = bias_indexed ? dst->src[7] : nullptr;
+    const uint32_t bias_bins = bias_indexed ? (uint32_t)bias_table->ne[0] : 0;
 
     const uint32_t HSK = nek0;
     const uint32_t HSV = nev0;
@@ -16886,7 +16886,10 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
                 if (op->src[5] != nullptr) {
                     return false;
                 }
-                if (ggml_flash_attn_ext_has_indexed_bias(op) &&
+                if (ggml_flash_attn_ext_has_bias(op) && !ggml_flash_attn_ext_bias_is_indexed(op)) {
+                    return false;
+                }
+                if (ggml_flash_attn_ext_bias_is_indexed(op) &&
                     ((uint64_t)ggml_nelements(op->src[6]) > UINT32_MAX || (uint64_t)ggml_nelements(op->src[7]) > UINT32_MAX)) {
                     return false;
                 }

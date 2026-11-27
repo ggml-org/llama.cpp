@@ -153,7 +153,7 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(ggml_backend_dev_t dev);
 
 static bool ggml_backend_meta_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    if (ggml_flash_attn_ext_has_indexed_bias(op)) {
+    if (ggml_flash_attn_ext_has_bias(op)) {
         return false;
     }
 
