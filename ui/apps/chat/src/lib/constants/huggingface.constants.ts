@@ -5,6 +5,7 @@
  * Reference: https://huggingface.co/docs/huggingface_hub/package_reference/hf_api
  */
 
+import { HF_BASE_URL } from '@ggml-org/llama-huggingface';
 import { GIGABYTE, KILOBYTE, MEGABYTE } from '@ggml-org/llama-ui/models';
 export {
 	BYTE_LABEL,
@@ -19,7 +20,7 @@ export {
 
 // API endpoints
 
-export const HF_BASE_URL = 'https://huggingface.co';
+export { HF_BASE_URL };
 export const HF_API_MODELS_URL = `${HF_BASE_URL}/api/models`;
 
 // Query params

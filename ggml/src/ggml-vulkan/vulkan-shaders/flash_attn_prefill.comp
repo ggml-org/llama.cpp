@@ -24,6 +24,8 @@ layout (binding = 3) readonly buffer MV2 {f16vec2 data_mv2[];};
 layout (binding = 3) readonly buffer MV4 {f16vec4 data_mv4[];};
 layout (binding = 4) readonly buffer S {float data_s[];};
 layout (binding = 5) buffer OV4 {vec4 data_ov4[];};
+layout (binding = 6) readonly buffer BT {float data_bias_table[];};
+layout (binding = 7) readonly buffer BI {int data_bias_idx[];};
 
 layout (push_constant) uniform parameter
 {
@@ -67,6 +69,7 @@ layout (constant_id = 11) const uint acc_count = 1;
 layout (constant_id = 12) const uint Flags = 0;
 layout (constant_id = 13) const uint SubGroupSize = 16;
 layout (constant_id = 14) const uint gqa_fold = 1;
+layout (constant_id = 15) const uint BiasBins = 0;
 
 #define UNALIGNED_SEQ_LEN_BIT (1 << 0)
 #define UNALIGNED_Q_STRIDE_BIT (1 << 1)
@@ -529,6 +532,20 @@ void main() {
                         }
                     }
                     m_offset += step_p / 4;
+                }
+            }
+
+            if (BiasBins != 0) {
+                const uint bias_row = out_r * folded_row_wg + sg_o_r_row * TN + lane_c;
+                if (bias_row < p.neq1) {
+                    const uint bias_q = batch_idx * p.neq1 + bias_row;
+                    const uint bias_t = (bias_q * p.neq2 + head_q_idx * gqa_fold + sg_o_r_h) * BiasBins;
+                    const uint bias_col = loop * step_p + lane_r * softmax_loops;
+                    [[unroll]] for (uint idx = 0; idx < softmax_loops; ++idx) {
+                        if (!seq_boundary_check || bias_col + idx < p.nek1) {
+                            Pf[idx] += data_bias_table[bias_t + data_bias_idx[bias_q * p.nek1 + bias_col + idx]];
+                        }
+                    }
                 }
             }
 

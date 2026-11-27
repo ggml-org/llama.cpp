@@ -9,6 +9,7 @@
 	} from '#lib/components/app/chat/index.ts';
 	import {
 		AGENTIC_TEXT_COPY_SEPARATOR,
+		HUGGING_FACE_ENABLED,
 		REASONING_TAGS,
 		ROUTES,
 		SYSTEM_MESSAGE_PLACEHOLDER
@@ -21,7 +22,7 @@
 		MessageType
 	} from '#lib/enums/index.ts';
 	import { DatabaseService } from '#lib/services/database.service.ts';
-	import { chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
+	import { chatStore, conversationsStore, deviceStore, uiStore } from '#lib/stores/index.ts';
 	import type {
 		ChatMessageActions,
 		ChatMessageDeletionInfo,
@@ -197,6 +198,7 @@
 		setShowForkDialog: (show: boolean) => {
 			showForkDialog = show;
 		},
+		share: HUGGING_FACE_ENABLED ? handleShare : undefined,
 		get showDeleteDialog() {
 			return showDeleteDialog;
 		},
@@ -337,6 +339,14 @@
 
 	function handleForkConversation(options: { name: string; includeAttachments: boolean }) {
 		chatActions.forkConversation(message, options);
+	}
+
+	// an agentic turn renders as one message, so a share from it ends at its last step
+	function handleShare() {
+		uiStore.openConversationShare({
+			conversationId: message.convId,
+			messageId: toolMessages.at(-1)?.id ?? message.id
+		});
 	}
 
 	function handleNavigateToSibling(siblingId: string) {

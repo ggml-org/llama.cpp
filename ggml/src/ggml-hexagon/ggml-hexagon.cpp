@@ -134,7 +134,7 @@ size_t opt_mbuf_dyn    = 512ul * 1024 * 1024;      // max dynamic (compute) buff
 size_t opt_mbuf_static = 1ul * 1024 * 1024 * 1024; // max static (weight/KV) buffer size
 size_t opt_mbuf_total  = 0;                        // total buffer space limit (0 = unconstrained)
 
-int    opt_mm_select     = 3; // 4 = pure W8A8, 3 = hybrid W8A8 + FP16 post-GLU (default), 2 = FP16 HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU
+int    opt_mm_select     = 3; // 3 = W8A8 INT HMX -> FP16 HMX -> HVX -> CPU (default), 2 = FP16 HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU
 int    opt_fa_select     = 3; // 3 = INT HMX W8A8 (default) -> FP16 HMX -> HVX -> CPU, 2 = FP16 HMX -> HVX -> CPU, 1 = HVX -> CPU, 0 = CPU
 int    opt_fa_split      = 1; // 1 = head-split + team-split when n_kv_heads < N_cores (default), 0 = off
 int    opt_li_select     = 2; // 2 = HMX -> HVX, 1 = HVX, 0 = CPU (unsupported)

@@ -706,29 +706,6 @@ static bool htp_matmul_is_hmx_eligible(
     return true;
 }
 
-// Post-GLU/gated projections (e.g. ffn_down, gated attn_output) have sharp channel outliers
-// that degrade W8A8 activation quantization; route them to FP16 HMX under MM_SELECT=3.
-static bool htp_mm_is_post_glu(const struct ggml_tensor * act) {
-    while (act && (act->op == GGML_OP_VIEW || act->op == GGML_OP_RESHAPE || act->op == GGML_OP_CONT || act->op == GGML_OP_CPY)) {
-        act = act->view_src ? act->view_src : act->src[0];
-    }
-    if (!act) {
-        return false;
-    }
-    if (act->op == GGML_OP_GLU) {
-        return true;
-    }
-    if (act->op == GGML_OP_MUL) {
-        const struct ggml_tensor * a0 = act->src[0];
-        const struct ggml_tensor * a1 = act->src[1];
-        if ((a0 && (a0->op == GGML_OP_UNARY || a0->op == GGML_OP_GLU)) ||
-            (a1 && (a1->op == GGML_OP_UNARY || a1->op == GGML_OP_GLU))) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static bool htp_kparams_solve_hmx_mm(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
@@ -748,6 +725,7 @@ static bool htp_kparams_solve_hmx_mm(
     struct htp_mm_kernel_params * kparams,
     bool is_glu = false
 ) {
+    GGML_UNUSED(act);
     const bool     bias_is_2d        = bias && (bias->ne[1] > 1);
     const bool     bias_batched      = bias && (bias->ne[2] > 1 || bias->ne[3] > 1);
     const bool     is_tiled          = ggml_hexagon_tensor_will_tile(src0);
@@ -776,9 +754,7 @@ static bool htp_kparams_solve_hmx_mm(
     const uint8_t  fp16_kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
     uint8_t        kernel_type      = fp16_kernel_type;
     const uint32_t min_k            = htp_int_hmx_min_k((int) wtype);
-    const bool     allow_w8a8       = (opt_mm_select >= 4) ||
-                                      (opt_mm_select == 3 && !htp_mm_is_post_glu(act) &&
-                                       (!dst || ggml_prec_get_acc(dst) != GGML_PREC_F32));
+    const bool     allow_w8a8       = (opt_mm_select >= 3) && (!dst || ggml_prec_get_acc(dst) != GGML_PREC_F32);
     if (is_tiled && htp_is_int_hmx_weight_type((int) wtype) && allow_w8a8 &&
         ne00_padded >= (int) min_k && (ne00_padded % min_k) == 0) {
         kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_W8A8_BATCHED : HTP_MM_KERNEL_HMX_W8A8_2D;

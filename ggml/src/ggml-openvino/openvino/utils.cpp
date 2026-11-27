@@ -496,15 +496,37 @@ std::shared_ptr<ov::Node> gather_compressed_rows(const ov::Output<ov::Node> & we
     return saw_compressed ? gathered : nullptr;
 }
 
+bool is_pruned_mask_name(const std::string & name) {
+    static const std::string suffix = "_pruned";
+    return name.size() > suffix.size() && name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 ov::Output<ov::Node> get_kq_mask_input(const NodeContext & context, size_t input_index) {
-    const auto & name = context.get_input_names()[input_index];
+    const auto & input_name = context.get_input_names()[input_index];
+    const bool pruned = is_pruned_mask_name(input_name);
+    const std::string name = pruned ? input_name.substr(0, input_name.size() - std::string("_pruned").size()) : input_name;
     const std::string sliced = name == "self_kq_mask_swa"                  ? "KQ_mask_swa_sliced" :
                                name == "self_kq_mask" || name == "KQ_mask" ? "KQ_mask_sliced" :
                                                                              std::string();
+    ov::Output<ov::Node> mask;
     if (!sliced.empty() && context.has_input(sliced)) {
-        return context.get_input(sliced);
+        mask = context.get_input(sliced);
+    } else if (pruned) {
+        mask = context.get_input(name);
+    } else {
+        return context.get_input(input_index);
     }
-    return context.get_input(input_index);
+    if (!pruned) {
+        return mask;
+    }
+    // gemma-4's KV-shared layers: the rows of their output tokens, gathered from the input mask (see
+    // ModelParams::pruned_masks)
+    auto ids = std::make_shared<ov::op::v1::Reshape>(context.get_input("inp_prune_ids"),
+                                                     ov::op::v0::Constant::create(ov::element::i64, {1}, {-1}), false);
+    const auto rank = mask.get_partial_shape().rank();
+    FRONT_END_OP_CONVERSION_CHECK(rank.is_static() && rank.get_length() >= 2, "Expected a static mask rank");
+    auto axis = ov::op::v0::Constant::create(ov::element::i64, {}, {rank.get_length() - 2});
+    return std::make_shared<ov::op::v8::Gather>(mask, ids, axis);
 }
 
 ov::Output<ov::Node> process_view_input_new(const NodeContext & context, int input_index) {

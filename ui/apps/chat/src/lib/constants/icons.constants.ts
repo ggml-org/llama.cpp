@@ -18,6 +18,8 @@ import PauseDownloadIcon from '@lucide/svelte/icons/pause';
 import ResumeDownloadIcon from '@lucide/svelte/icons/play';
 import LoadIcon from '@lucide/svelte/icons/power';
 import RetryIcon from '@lucide/svelte/icons/rotate-cw';
+// the box with an arrow leaving it, not the three joined dots
+import ShareIcon from '@lucide/svelte/icons/share';
 import VideoIcon from '@lucide/svelte/icons/video';
 import CancelLoadIcon from '@lucide/svelte/icons/x';
 import { FileTypeCategory, ModelCapability } from '#lib/enums/index.ts';
@@ -43,6 +45,12 @@ export const DEFAULT_FILE_ICON = FileIcon;
 
 /** The mark for a model, wherever one is listed. */
 export const MODEL_ICON = ModelIcon;
+
+/** Sharing something out of the app: every share action, button and dialog uses this one icon. */
+export const SHARE_ICON = ShareIcon;
+
+/** What sharing a conversation looks like as an action, on a message and in every conversation menu. */
+export const SHARE_ACTION = { icon: SHARE_ICON, label: 'Share' } as const;
 
 /** The mark for the Discover Models surface and its entry points. */
 export const DISCOVER_ICON = DiscoverIcon;

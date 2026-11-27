@@ -341,6 +341,12 @@ public:
     // used in view offsets, need to match for valid graph reuse
     uint32_t head;
     int32_t rs_z;
+
+    // the states are read from the cache, see llama_memory_recurrent_context::get_rs_in_place
+    bool rs_in_place;
+
+    // rows to gather, shared by all layers; empty when rs_in_place
+    ggml_tensor * s_copy_rows; // I32 [n_rs] or [0]
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
@@ -1496,6 +1502,7 @@ struct llm_graph_context {
     //       when moving, avoid passing `ggml_cgraph` - only pass `ggml_context`. would likely need to split the
     //         implementation in 2 separate methods. the goal is to avoid calling `ggml_build_forward_expand` in
     //         `llama_memory_recurrent`
+    // note: same rules as the build_rs overload below (readers before the store, one call per state tensor per graph)
     ggml_tensor * build_rs(
             ggml_tensor * s,
             ggml_tensor * state_copy,
@@ -1506,16 +1513,22 @@ struct llm_graph_context {
                uint32_t   rs_head,
                uint32_t   rs_size,
                 int32_t   rs_zero,
-            const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
+            const llm_graph_get_rows_fn & get_state_rows = nullptr,
+                   bool   in_place = false,
+                   bool   from_cache = true) const;
 
     llm_graph_input_rs * build_rs_inp() const;
 
+    // the returned states can be a view of the cache, so callers must follow 2 rules:
+    // - expand every reader of the returned tensor before the store into s (the rwkv token shift gets this only from the expand order)
+    // - call it once per state tensor per graph: a second call would gather rows that the first already moved into [head, head + n_seqs)
     ggml_tensor * build_rs(
             llm_graph_input_rs * inp,
             ggml_tensor * s,
                 int32_t   state_size,
                 int32_t   n_seqs,
-            const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
+            const llm_graph_get_rows_fn & get_state_rows = nullptr,
+                   bool   gathered = false) const; // gathered: always read a copy, never the cache
 
     // store the conv history of the ubatch cells, the last n_cols columns of conv_x {n_cols + n_seq_tokens, channels, n_seqs},
     // at byte offset offs of each row of s, and with n_rs_seq > 0 once per rollback slot of this ubatch

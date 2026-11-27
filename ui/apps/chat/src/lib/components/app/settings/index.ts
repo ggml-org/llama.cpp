@@ -35,6 +35,12 @@ export { default as SettingsChatParameterSourceIndicator } from './SettingsChat/
 export { default as SettingsGroup } from './SettingsGroup.svelte';
 
 /**
+ * The Hugging Face account the app is signed in with, and its Sign out. Shows nothing until
+ * a share has signed the app in.
+ */
+export { default as SettingsHuggingFaceAccount } from './SettingsHuggingFaceAccount.svelte';
+
+/**
  * Sticky footer with the save button for settings panel, shown only when
  * there are unsaved changes. Save commits form state to config store.
  */

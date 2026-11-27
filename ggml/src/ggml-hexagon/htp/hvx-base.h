@@ -218,6 +218,19 @@ static inline HVX_Vector hvx_vec_i16_from_hf_rnd_sat(HVX_Vector vin) {
 #endif
 }
 
+static inline HVX_Vector hvx_vec_i32_from_qf32_rnd(HVX_Vector v_qf) {
+#if __HVX_ARCH__ >= 79
+    HVX_Vector       v_sf   = Q6_Vsf_equals_Vqf32(v_qf);
+    const HVX_Vector v_half = Q6_V_vor_VV(Q6_V_vsplat_R(0x3F000000),
+                                          Q6_V_vand_VV(v_sf, Q6_V_vsplat_R(0x80000000)));
+    return Q6_Vw_equals_Vsf(Q6_Vsf_vadd_VsfVsf(v_sf, v_half));
+#else
+    const HVX_Vector v_half = Q6_V_vor_VV(Q6_V_vsplat_R(0x3F000000),
+                                          Q6_V_vand_VV(v_qf, Q6_V_vsplat_R(0x80000000)));
+    return Q6_Vw_equals_Vsf(Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(v_qf, v_half)));
+#endif
+}
+
 #if __HVX_ARCH__ < 79
 
 static inline HVX_VectorPair hvx_vec_mpy_f32_f16(HVX_Vector x, HVX_Vector y)
