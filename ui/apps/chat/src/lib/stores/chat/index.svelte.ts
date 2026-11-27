@@ -55,6 +55,7 @@ import {
 	filterByLeafNodeId,
 	findMessageById,
 	formatCwdMessage,
+	generateConversationTitle,
 	getConversationModel,
 	isAbortError,
 	normalizeModelName,
@@ -1484,9 +1485,10 @@ class ChatStore implements ChatStreamHost, ChatFlowsHost {
 			.trim();
 
 		if (!cleanTitle || cleanTitle.length < TITLE_GENERATION.MIN_LENGTH) {
-			const firstLine = userContent.split('\n').find((l) => l.trim().length > 0);
+			// the fallback title is the user's own text, so `@`-mentions collapse there too
+			const firstLine = generateConversationTitle(userContent, true);
 
-			cleanTitle = firstLine ? firstLine.trim() : TITLE_GENERATION.FALLBACK;
+			cleanTitle = firstLine || TITLE_GENERATION.FALLBACK;
 		}
 
 		if (cleanTitle && cleanTitle.length >= TITLE_GENERATION.MIN_LENGTH) {

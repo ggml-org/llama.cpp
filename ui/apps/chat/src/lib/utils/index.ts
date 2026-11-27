@@ -295,6 +295,7 @@ export {
 	getMentionBadgeIconPaths,
 	getMentionBadgeLabel,
 	splitMentionSegments,
+	stripMentionLinks,
 	buildMentionInsertion
 } from './mention-badge';
 
