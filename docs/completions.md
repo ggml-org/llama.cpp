@@ -5,7 +5,7 @@ Command-line completion is available for some environments.
 ## Bash Completion
 
 ```bash
-$ build/bin/llama-cli --completion-bash > ~/.llama-completion.bash
+$ build/bin/llama --completion-bash > ~/.llama-completion.bash
 $ source ~/.llama-completion.bash
 ```
 

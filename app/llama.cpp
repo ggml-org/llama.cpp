@@ -1,3 +1,4 @@
+#include "arg.h"
 #include "build-info.h"
 
 #include "llama.h"
@@ -45,6 +46,7 @@ static const char * progname;
 static int help(int argc, char ** argv);
 static int version(int argc, char ** argv);
 static int licenses(int argc, char ** argv);
+static int completion_bash(int argc, char ** argv);
 
 struct command {
     const char * name;
@@ -53,6 +55,7 @@ struct command {
     bool hidden;
     int (*func)(int, char **);
     bool flags = false; // allow --name
+    llama_example example = LLAMA_EXAMPLE_COUNT;
 };
 
 #ifdef LLAMA_INSTALL_BUILD
@@ -62,19 +65,20 @@ struct command {
 #endif
 
 static const command cmds[] = {
-    {"serve",         "HTTP API server",                                    {"server"},   false,         llama_server       },
-    {"cli",           "Command-line interactive interface",                 {"client"},   false,         llama_cli          },
-    {"update",        "Update llama to the latest release",                 {},           UPDATE_HIDDEN, llama_update       },
-    {"download",      "Download a model",                                   {"get"},      false,         llama_download     },
-    {"completion",    "Text completion",                                    {"complete"}, true,          llama_completion   },
-    {"bench",         "Benchmark prompt processing and text generation",    {},           true,          llama_bench        },
-    {"batched-bench", "Benchmark batched decoding performance",             {},           true,          llama_batched_bench},
-    {"fit-params",    "Compute parameters to fit a model in device memory", {},           true,          llama_fit_params   },
-    {"quantize",      "Quantize a model",                                   {},           true,          llama_quantize     },
-    {"perplexity",    "Compute model perplexity and KL divergence",         {},           true,          llama_perplexity   },
-    {"version",       "Show version",                                       {},           false,         version,           true },
-    {"licenses",      "Show third-party licenses",                          {"credits"},  false,         licenses,          true },
-    {"help",          "Show available commands",                            {},           false,         help,              true },
+    {"serve",           "HTTP API server",                                    {"server"},   false,         llama_server,        false, LLAMA_EXAMPLE_SERVER     },
+    {"cli",             "Command-line interactive interface",                 {"client"},   false,         llama_cli,           false, LLAMA_EXAMPLE_CLI        },
+    {"update",          "Update llama to the latest release",                 {},           UPDATE_HIDDEN, llama_update,        false                           },
+    {"download",        "Download a model",                                   {"get"},      false,         llama_download,      false, LLAMA_EXAMPLE_DOWNLOAD   },
+    {"completion",      "Text completion",                                    {"complete"}, true,          llama_completion,    false, LLAMA_EXAMPLE_COMPLETION },
+    {"bench",           "Benchmark prompt processing and text generation",    {},           true,          llama_bench,         false                           },
+    {"batched-bench",   "Benchmark batched decoding performance",             {},           true,          llama_batched_bench, false, LLAMA_EXAMPLE_BENCH      },
+    {"fit-params",      "Compute parameters to fit a model in device memory", {},           true,          llama_fit_params,    false, LLAMA_EXAMPLE_FIT_PARAMS },
+    {"quantize",        "Quantize a model",                                   {},           true,          llama_quantize,      false                           },
+    {"perplexity",      "Compute model perplexity and KL divergence",         {},           true,          llama_perplexity,    false, LLAMA_EXAMPLE_PERPLEXITY },
+    {"version",         "Show version",                                       {},           false,         version,             true                            },
+    {"licenses",        "Show third-party licenses",                          {"credits"},  false,         licenses,            true                            },
+    {"help",            "Show available commands",                            {},           false,         help,                true                            },
+    {"completion-bash", "Print the Bash completion script",                   {},           true,          completion_bash,     true                            },
 };
 
 #undef UPDATE_HIDDEN
@@ -126,8 +130,46 @@ static bool matches(std::string arg, const command & cmd) {
     return false;
 }
 
+static void print_bash_completion() {
+    std::vector<std::string> commands;
+    printf("_llama_app_completions() {\n");
+    printf("    if (( COMP_CWORD > 1 )); then\n");
+    printf("        case \"${COMP_WORDS[1]}\" in\n");
+    for (const auto & cmd : cmds) {
+        auto names = cmd.aliases;
+        names.emplace_back(cmd.name);
+        if (cmd.flags) {
+            for (size_t i = 0, n = names.size(); i < n; ++i) {
+                names.push_back("--" + names[i]);
+            }
+        }
+        commands.insert(commands.end(), names.begin(), names.end());
+        if (cmd.example == LLAMA_EXAMPLE_COUNT) {
+            continue;
+        }
+        printf("            %s) _llama_complete_options '", string_join(names, "|").c_str());
+        common_params params;
+        auto ctx = common_params_parser_init(params, cmd.example);
+        common_params_print_bash_completion_options(ctx);
+        printf("' ;;\n");
+    }
+    printf("            *) COMPREPLY=() ;;\n");
+    printf("        esac\n");
+    printf("    else\n");
+    printf("        _llama_complete_options '%s'\n", string_join(commands, " ").c_str());
+    printf("    fi\n}\n");
+    printf("complete -o default -F _llama_app_completions llama\n");
+}
+
+static int completion_bash(int /*argc*/, char ** /*argv*/) {
+    common_print_bash_completion_helper();
+    print_bash_completion();
+    return 0;
+}
+
 int main(int argc, char ** argv) {
     progname = argv[0];
+    common_set_bash_completion(print_bash_completion);
 
     const std::string arg = argc >= 2 ? argv[1] : "help";
 
