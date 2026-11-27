@@ -4310,8 +4310,9 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_DUP:
                 return true;
         case GGML_OP_ARGMAX:
+            return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_COUNT_EQUAL:
-            return true;
+            return op->src[0]->type == GGML_TYPE_I32 && op->src[1]->type == GGML_TYPE_I32;
         case GGML_OP_REPEAT:
             {
                 // the CUDA REPEAT path only implements F32/F16; other types assert at runtime
@@ -4373,21 +4374,22 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                     ggml_is_contiguous(op);
             }
         case GGML_OP_SILU_BACK:
-            return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32;
+            return ggml_is_contiguous(op->src[0]) && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_NORM:
         case GGML_OP_L2_NORM:
-            return ggml_is_contiguous_rows(op->src[0]);
+            return op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_RMS_NORM:
             return (op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_BF16) && op->type == op->src[0]->type &&
                    ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_RMS_NORM_BACK:
-            return ggml_is_contiguous(op->src[0]);
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
+        case GGML_OP_ADD_ID:
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
         case GGML_OP_VIEW:
         case GGML_OP_PERMUTE:
         case GGML_OP_TRANSPOSE:
-        case GGML_OP_ADD_ID:
         case GGML_OP_SQR:
         case GGML_OP_SQRT:
         case GGML_OP_SIN:
@@ -4411,6 +4413,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                    (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) &&
                    (op->type         == GGML_TYPE_F32 || op->type         == GGML_TYPE_F16);
         case GGML_OP_SSM_SCAN: {
+            // every input except ids is read as F32
+            for (int i = 0; i < 6; ++i) {
+                if (op->src[i]->type != GGML_TYPE_F32) {
+                    return false;
+                }
+            }
             const int32_t K = ggml_get_op_params_i32(op, 0);
 
             if (op->src[3]->ne[0] == 1) {
@@ -4430,16 +4438,16 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         }
         case GGML_OP_SSM_CONV: {
             // assumes d_inner % threads == 0
-            return op->src[0]->ne[1] % 128 == 0;
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32 && op->src[0]->ne[1] % 128 == 0;
         }
         case GGML_OP_CONT:
             return true;
         case GGML_OP_SOFT_MAX:
-            return true;
+            return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_SOFT_MAX_BACK: {
             float max_bias = 0.0f;
             memcpy(&max_bias, (const float *) op->op_params + 1, sizeof(float));
-            return max_bias == 0.0f;
+            return max_bias == 0.0f && op->src[0]->type == GGML_TYPE_F32 && op->src[1]->type == GGML_TYPE_F32;
         }
         case GGML_OP_ROLL:
             if(op->src[0]->type == GGML_TYPE_F32) {
@@ -4454,8 +4462,11 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         }
         case GGML_OP_IM2COL:
         case GGML_OP_IM2COL_3D:
+            return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && op->src[1]->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
         case GGML_OP_CONV_2D:
-            return (ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]));
+            return (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) && op->src[1]->type == GGML_TYPE_F32 &&
+                   ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
         case GGML_OP_CONV_3D:
             return (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
                    op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 &&
@@ -4464,18 +4475,22 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
             return (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) &&
                    op->src[1]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_CONV_TRANSPOSE_2D:
+            return (op->src[0]->type == GGML_TYPE_F16 || op->src[0]->type == GGML_TYPE_F32) && op->src[1]->type == GGML_TYPE_F32;
         case GGML_OP_POOL_1D:
         case GGML_OP_POOL_2D:
-            return true;
+            return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_ACC:
             // TODO: extend support like so:
             //return ggml_is_contiguous_rows(op->src[0]) && ggml_is_contiguous_rows(op->src[1]);
             return ggml_is_contiguous(op->src[0]) && ggml_is_contiguous(op->src[1]);
         case GGML_OP_SUM:
-            return ggml_is_contiguously_allocated(op->src[0]);
+            return op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguously_allocated(op->src[0]);
         case GGML_OP_TOP_K:
-            return op->src[0]->ne[0] <= INT_MAX;
+            return op->src[0]->type == GGML_TYPE_F32 && op->src[0]->ne[0] <= INT_MAX;
         case GGML_OP_ARGSORT:
+            if (op->src[0]->type != GGML_TYPE_F32) {
+                return false;
+            }
 #ifndef GGML_CUDA_USE_CUB
             {
                 // bitonic path: the padded row must fit in shared memory
@@ -4493,19 +4508,29 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
         case GGML_OP_MEAN:
             return op->src[0]->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32 && ggml_is_contiguous_rows(op->src[0]);
         case GGML_OP_GROUP_NORM:
-            return ggml_is_contiguous(op->src[0]);
+            return op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
         case GGML_OP_PAD:
-            return true;
+        case GGML_OP_TIMESTEP_EMBEDDING:
+            return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_UPSCALE:
         case GGML_OP_PAD_REFLECT_1D:
         case GGML_OP_ARANGE:
-        case GGML_OP_TIMESTEP_EMBEDDING:
             return true;
         case GGML_OP_LEAKY_RELU:
             return op->src[0]->type == GGML_TYPE_F32 || op->src[0]->type == GGML_TYPE_F16;
         case GGML_OP_RWKV_WKV6:
         case GGML_OP_GATED_LINEAR_ATTN:
         case GGML_OP_RWKV_WKV7:
+        case GGML_OP_CROSS_ENTROPY_LOSS:
+        case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+        case GGML_OP_OPT_STEP_ADAMW:
+        case GGML_OP_OPT_STEP_SGD:
+            // the kernels read every input as F32
+            for (int i = 0; i < GGML_MAX_SRC && op->src[i]; ++i) {
+                if (op->src[i]->type != GGML_TYPE_F32) {
+                    return false;
+                }
+            }
             return true;
         case GGML_OP_GATED_DELTA_NET:
             return ggml_are_same_stride(op->src[0], op->src[1]);
@@ -4520,11 +4545,8 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 op->src[2]->type == GGML_TYPE_F32 && (op->src[3] == nullptr || op->src[3]->type == GGML_TYPE_F32) &&
                 op->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT:
-            return ggml_cuda_flash_attn_ext_supported(dev_ctx->device, op);
-        case GGML_OP_CROSS_ENTROPY_LOSS:
-        case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
-        case GGML_OP_OPT_STEP_ADAMW:
-        case GGML_OP_OPT_STEP_SGD:
+            // Q is read as F32 (a BF16 Q is not supported yet)
+            return op->src[0]->type == GGML_TYPE_F32 && ggml_cuda_flash_attn_ext_supported(dev_ctx->device, op);
         case GGML_OP_FILL:
         case GGML_OP_CUMSUM:
         case GGML_OP_TRI:

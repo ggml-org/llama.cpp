@@ -9604,6 +9604,8 @@ static void ggml_compute_forward_flash_attn_ext_f16(
     GGML_ASSERT(ne0 == DV);
     GGML_ASSERT(ne2 == N);
 
+    GGML_ASSERT(q->type == GGML_TYPE_F32);
+
     // input tensor rows must be contiguous
     GGML_ASSERT(nbq0 == ggml_type_size(q->type));
     GGML_ASSERT(nbk0 == ggml_type_size(k->type));
@@ -10692,7 +10694,6 @@ void ggml_compute_forward_get_rel_pos(
 
     switch (src0->type) {
         case GGML_TYPE_F16:
-        case GGML_TYPE_BF16:
             {
                 ggml_compute_forward_get_rel_pos_f16(params, dst);
             } break;
