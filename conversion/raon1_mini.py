@@ -15,11 +15,11 @@ def _renamed_key(config: dict[str, Any], new: str, old: str, default: Any = _REQ
     # the HF config accepts the older spellings (kda_layers, mhc_*): null counts as absent, a conflicting pair is an error
     values = [config[key] for key in (new, old) if config.get(key) is not None]
     if len(values) == 2 and values[0] != values[1]:
-        raise ValueError(f"Raon-1 mini config has conflicting {new}={values[0]!r} and {old}={values[1]!r}")
+        raise ValueError(f"Raon-1 config has conflicting {new}={values[0]!r} and {old}={values[1]!r}")
     if values:
         return values[0]
     if default is _REQUIRED:
-        raise KeyError(f"Raon-1 mini config needs {new} (or the older spelling {old})")
+        raise KeyError(f"Raon-1 config needs {new} (or the older spelling {old})")
     return default
 
 

@@ -6,7 +6,8 @@ from typing import Callable, Iterable
 import torch
 from torch import Tensor
 
-from .base import LazyTorchTensor, ModelBase, TextModel, gguf, logger
+from .base import LazyTorchTensor, ModelBase, TextModel, gguf
+from .raon1_mini import _renamed_key
 
 
 @ModelBase.register("Raon1NanoForCausalLM")
@@ -34,17 +35,26 @@ class Raon1NanoModel(TextModel):
         self._parts: dict[tuple[int, str], dict[str, Tensor]] = {}
         # 1-based layer ids, as in the HF config (is_rda_layer: layer_idx + 1 in rda_layers)
         self._rda_layers = set(self.hparams["rda_config"]["rda_layers"])
+        # The published HF config omits the decay rank and uses 128.
+        self._rda_decay_rank = _renamed_key(self.hparams, "rda_decay_rank", "kda_decay_rank", 128)
+        if type(self._rda_decay_rank) is not int or not 0 < self._rda_decay_rank < 2**32:
+            raise ValueError("Raon-1 nano decay rank must be a positive uint32")
+        post_factor = _renamed_key(self.hparams, "raon_mhc_post_factor", "mhc_post_factor", self._HC_POST_MAGNITUDE)
+        if post_factor != self._HC_POST_MAGNITUDE:
+            raise ValueError(f"Raon-1 nano requires mHC post factor {self._HC_POST_MAGNITUDE}")
 
-    def index_tensors(self, remote_hf_model_id: str | None = None) -> dict[str, Callable[[], Tensor]]:
-        tensors = super().index_tensors(remote_hf_model_id=remote_hf_model_id)
-        # MTP is not supported: drop the nextn layers (model.layers.{num_hidden_layers}..) before any data is read
-        n_layer = self.hparams["num_hidden_layers"]
-        mtp = [name for name in tensors if name.startswith("model.layers.") and int(name.split(".")[2]) >= n_layer]
-        if mtp:
-            logger.info(f"Skipping {len(mtp)} MTP tensors from model.layers.{n_layer}; MTP is not supported")
-            for name in mtp:
-                del tensors[name]
-        return tensors
+    def filter_tensors(self, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
+        filtered = super().filter_tensors(item)
+        if filtered is None:
+            return None
+
+        name, _ = filtered
+        if name.startswith("model.layers."):
+            layer = name.split(".", 3)[2]
+            # MTP layers follow the main model layers.
+            if layer.isdecimal() and int(layer) >= self.hparams["num_hidden_layers"]:
+                return None
+        return filtered
 
     def set_gguf_parameters(self):
         hp = self.hparams
@@ -69,7 +79,7 @@ class Raon1NanoModel(TextModel):
         self.gguf_writer.add_head_count([rda_config["num_heads"] if i + 1 in rda else hp["num_attention_heads"] for i in range(n_layer)])
         self.gguf_writer.add_head_count_kv([0 if i + 1 in rda else 1 for i in range(n_layer)])
         self.gguf_writer.add_ssm_conv_kernel(rda_config["conv_kernel_size"])
-        self.gguf_writer.add_ssm_time_step_rank(hp.get("rda_decay_rank", 128))
+        self.gguf_writer.add_ssm_time_step_rank(self._rda_decay_rank)
         self.gguf_writer.add_kda_head_dim(rda_config["head_dim"])
         self.gguf_writer.add_kda_gate_lower_bound(bound)
         self.gguf_writer.add_q_lora_rank(hp["q_lora_rank"])
@@ -79,13 +89,16 @@ class Raon1NanoModel(TextModel):
         self.gguf_writer.add_value_length(hp["kv_lora_rank"])
         self.gguf_writer.add_key_length_mla(hp["qk_nope_head_dim"] + hp["qk_rope_head_dim"])
         self.gguf_writer.add_value_length_mla(hp["v_head_dim"])
-        # q_a_layernorm / kv_a_layernorm use eps 1e-6 in the reference
-        self.gguf_writer.add_latent_norm_rms_eps(1e-6)
+        # Use the HF defaults when the checkpoint omits these keys.
+        latent_eps = hp.get("mla_latent_norm_eps", 1e-6)
+        selector_eps = _renamed_key(hp, "raon_mhc_selector_eps", "mhc_selector_eps", 1e-5)
+        if not all(type(eps) in (int, float) and math.isfinite(eps) and eps > 0 for eps in (latent_eps, selector_eps)):
+            raise ValueError("Raon-1 nano normalization epsilons must be positive and finite")
+        self.gguf_writer.add_latent_norm_rms_eps(latent_eps)
         self.gguf_writer.add_embedding_length_per_layer_input(hp["per_layer_embedding_dim"])
         self.gguf_writer.add_hyper_connection_count(hp["raon_mhc_streams"])
-        # the mHC selector RMS uses a fixed eps of 1e-5; the post factor is folded into the branch outputs,
-        # so the file stores magnitude 1
-        self.gguf_writer.add_hyper_connection_epsilon(1e-5)
+        self.gguf_writer.add_hyper_connection_epsilon(selector_eps)
+        # The post factor is already folded into the branch projections.
         self.gguf_writer.add_hyper_connection_magnitude(1.0)
 
     def prepare_tensors(self):
@@ -128,13 +141,16 @@ class Raon1NanoModel(TextModel):
 
     def _fold_rda(self, p: dict[str, Tensor], bid: int) -> Iterable[tuple[str, Tensor]]:
         heads = self.hparams["rda_config"]["num_heads"]
+        f_a, f_b = p["f_a_proj.weight"], p["f_b_proj.weight"]
+        if f_a.ndim != 2 or f_b.ndim != 2 or f_a.shape[0] != self._rda_decay_rank or f_b.shape[1] != self._rda_decay_rank:
+            raise ValueError(f"Raon-1 nano layer {bid} decay projection shapes {f_a.shape} and {f_b.shape} do not match rank {self._rda_decay_rank}")
         exp_a = torch.exp(p["A_log"].float()).repeat_interleave(self.hparams["rda_config"]["head_dim"])
         b, d = p["b_proj.weight"].float(), p["rda_w_proj.weight"].float()
         assert b.shape[0] == heads
         yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid), torch.cat([p[f"{x}_proj.weight"] for x in "qkvg"])
         yield self.format_tensor_name(gguf.MODEL_TENSOR.SSM_CONV1D, bid), torch.cat([p[f"{x}_conv1d.weight"] for x in "qkv"])
-        yield self.format_tensor_name(gguf.MODEL_TENSOR.SSM_F_A, bid), torch.cat([p["f_a_proj.weight"].float(), b, b + d])
-        yield self.format_tensor_name(gguf.MODEL_TENSOR.SSM_F_B, bid), p["f_b_proj.weight"].float() * exp_a[:, None]
+        yield self.format_tensor_name(gguf.MODEL_TENSOR.SSM_F_A, bid), torch.cat([f_a.float(), b, b + d])
+        yield self.format_tensor_name(gguf.MODEL_TENSOR.SSM_F_B, bid), f_b.float() * exp_a[:, None]
         yield self.format_tensor_name(gguf.MODEL_TENSOR.SSM_DT, bid, ".bias"), p["dt_bias"].float() * exp_a
 
     def _collect(self, key: tuple[int, str], suffix: str, data_torch: Tensor) -> dict[str, Tensor]:

@@ -135,11 +135,6 @@ void llama_model_raon1_nano::load_arch_tensors(llama_model_loader &) {
             layer.wq_a      = create_tensor(tn(LLM_TENSOR_ATTN_Q_A,      "weight", i), {n_embd, q_lora_rank}, 0);
             layer.wq_b      = create_tensor(tn(LLM_TENSOR_ATTN_Q_B,      "weight", i), {q_lora_rank, n_head_l*n_embd_head_k}, 0);
             layer.wkv_a_mqa = create_tensor(tn(LLM_TENSOR_ATTN_KV_A_MQA, "weight", i), {n_embd, kv_lora_rank + qk_rope_head_dim}, 0);
-            // some files also carry an expanded kv_b; it is not used
-            if (ml->get_tensor_meta(tn(LLM_TENSOR_ATTN_KV_B, "weight", i).str().c_str())) {
-                create_tensor(tn(LLM_TENSOR_ATTN_KV_B, "weight", i),
-                        {kv_lora_rank + qk_rope_head_dim, n_head_l*(n_embd_head_k + n_embd_head_v)}, TENSOR_SKIP);
-            }
             layer.wk_b      = create_tensor(tn(LLM_TENSOR_ATTN_K_B,  "weight", i), {qk_nope_head_dim, kv_lora_rank, n_head_l}, 0);
             layer.wv_b      = create_tensor(tn(LLM_TENSOR_ATTN_V_B,  "weight", i), {kv_lora_rank, n_embd_head_v, n_head_l}, 0);
             layer.wqkv_gate = create_tensor(tn(LLM_TENSOR_ATTN_GATE, "weight", i), {n_embd, n_head_l*n_embd_head_v}, 0);
@@ -163,8 +158,7 @@ std::unique_ptr<llm_graph_context> llama_model_raon1_nano::build_arch_graph(cons
 // mHC selector on the folded layout (conversion/raon1_nano.py): fn rows are pre-multiplied by alpha,
 // chart holds K = gamma * (H (x) H) acting on the whole mix vector (zero on pre/post), r = -1 / (gamma * anchor)
 // and c0 = (1 - gamma) I + gamma * anchor. With e' = K mixes = gamma * e:
-// rho = 1 + max(-e / anchor) and comb = I + gamma * (anchor + e / rho - I) = c0 + e' / rho.
-// max(-e / anchor) >= 0 holds without a clamp: every row of e = H z H^T sums to zero.
+// rho = 1 + max(0, max(-e / anchor)) and comb = c0 + e' / rho.
 ggml_tensor * llama_model_raon1_nano::graph::build_hc_pre(
         ggml_tensor * x, ggml_tensor * fn, ggml_tensor * base, ggml_tensor * chart,
         ggml_tensor * norm_w, ggml_tensor ** post, ggml_tensor ** comb, int il) {
@@ -191,7 +185,8 @@ ggml_tensor * llama_model_raon1_nano::graph::build_hc_pre(
 
     ggml_tensor * e   = ggml_mul_mat(ctx0, K, mixes); // [hc*hc, nt] = gamma * e
     ggml_tensor * rho = ggml_pool_1d(ctx0, ggml_mul(ctx0, e, r), GGML_OP_POOL_MAX, hc2, hc2, 0);
-    rho = ggml_reshape_3d(ctx0, ggml_scale_bias(ctx0, rho, 1.0f, 1.0f), 1, 1, nt);
+    rho = ggml_scale_bias(ctx0, ggml_clamp(ctx0, rho, 0.0f, INFINITY), 1.0f, 1.0f);
+    rho = ggml_reshape_3d(ctx0, rho, 1, 1, nt);
     *comb = ggml_add(ctx0, ggml_div(ctx0, ggml_reshape_3d(ctx0, e, hc, hc, nt), rho), c0);
     if (hparams.hc_magnitude != 1.0f) {
         *post = ggml_scale(ctx0, *post, hparams.hc_magnitude);
@@ -405,7 +400,7 @@ llama_model_raon1_nano::graph::graph(const llama_model & model, const llm_graph_
         cur = build_ffn(cur, layer.ffn_up, nullptr, nullptr, nullptr, nullptr, nullptr,
                 nullptr, nullptr, nullptr, nullptr, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
         cur = build_lora_mm(layer.ffn_down, cur);
-        // The last layers can exceed the F16 accumulator range.
+        // Avoid F16 accumulation overflow in the last layers. Use the same minimum precision in all layers.
         ggml_prec_set_acc(cur, GGML_PREC_BF16);
         inp = build_hc_post(inp, cur, post, comb, il);
 
