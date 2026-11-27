@@ -21,6 +21,8 @@ layout (constant_id = 14) const uint32_t FaBlockBytesK = 2;
 layout (constant_id = 15) const uint32_t FaBlockBytesV = 2;
 // Indexed bias: table->ne[0], 0 = no bias
 layout (constant_id = 16) const uint32_t BiasBins = 0;
+// GQA path: query tokens per row tile; 1 = one token per tile
+layout (constant_id = 17) const uint32_t GQA_TOK = 1;
 
 const bool USE_MASK_OPT    = (Flags & 1) != 0;
 const bool MASK_ENABLE     = (Flags & 2) != 0;
@@ -241,6 +243,17 @@ void init_indices()
     }
 }
 
+// GQA_TOK > 1: tile row r holds token gqa_iq1 * GQA_TOK + r / gqa_ratio and head iq2 + r % gqa_ratio
+uint32_t row_tok(const in uint32_t r) {
+    return gqa_iq1 * GQA_TOK + r / p.gqa_ratio;
+}
+uint32_t row_head(const in uint32_t r) {
+    return iq2 + r % p.gqa_ratio;
+}
+bool row_valid(const in uint32_t r) {
+    return r < N && row_tok(r) < p.ne2;
+}
+
 // Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).
 bool fa_kv_index(uint lin, out uint kv_col) {
     if (USE_SPARSE) {
@@ -256,12 +269,13 @@ bool fa_kv_index(uint lin, out uint kv_col) {
     return !KV_bounds_check || lin < KV;
 }
 
-// Flattened query and Q head of tile row r. With GQA collapse rows are heads. False for padding rows.
+// Flattened query and Q head of tile row r. With GQA collapse rows are heads, with GQA_TOK > 1 they are
+// GQA_TOK tokens x gqa_ratio heads (row_tok / row_head). False for padding rows.
 bool fa_bias_row(const in uint32_t r, out uint32_t query, out uint32_t head) {
     if (p.gqa_ratio > 1) {
-        query = iq3 * p.nem1 + gqa_iq1;
-        head  = iq2 + r;
-        return r < N;
+        query = iq3 * p.nem1 + (GQA_TOK > 1 ? row_tok(r) : gqa_iq1);
+        head  = GQA_TOK > 1 ? row_head(r) : iq2 + r;
+        return GQA_TOK > 1 ? row_valid(r) : r < N;
     }
     query = iq3 * p.nem1 + i * Br + r;
     head  = iq2;
