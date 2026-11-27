@@ -205,7 +205,12 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
 
         // the converter pads the table; a model synthesised from metadata has no tensor to ask
         const std::string ple_name = tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight").str();
+        int64_t ple_row_dim = hparams.ple_head_dim;
         if (const auto * ple_w = ml.get_weight(ple_name.c_str())) {
+            if (ple_w->tensor->type == GGML_TYPE_NVFP4) {
+                const int64_t block = ggml_blck_size(GGML_TYPE_NVFP4);
+                ple_row_dim = (ple_row_dim + block - 1) / block * block;
+            }
             if (ple_w->tensor->ne[1] < ple_rows) {
                 throw std::runtime_error(format("%s has %" PRId64 " rows, too few for the PLE head ranges (%" PRId64 ")",
                                                 ple_name.c_str(), ple_w->tensor->ne[1], ple_rows));
@@ -214,8 +219,8 @@ void llama_model_qwen4exp::load_arch_tensors(llama_model_loader & ml) {
         }
 
         per_layer_tok_embd = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "weight"),
-                                           { hparams.ple_head_dim, ple_rows }, TENSOR_READ_LAZY);
-        // an FP8 table keeps its checkpoint bytes, so its per-tensor scale is applied after the gather
+                                           { ple_row_dim, ple_rows }, TENSOR_READ_LAZY);
+        // Packed tables keep their checkpoint scales and apply the per-tensor scale after gathering.
         per_layer_tok_embd_s = create_tensor(tn(LLM_TENSOR_PER_LAYER_TOKEN_EMBD, "scale"), { 1 }, TENSOR_NOT_REQUIRED);
         if (per_layer_tok_embd_s && per_layer_tok_embd_s->type != GGML_TYPE_F32) {
             throw std::runtime_error(format("%s must be F32", per_layer_tok_embd_s->name));
@@ -1421,6 +1426,9 @@ ggml_tensor * llama_model_qwen4exp::graph::build_inp_ple(
 
     // gather then flatten the heads: get_rows lays the head dimension out slowest, as the reference does
     ggml_tensor * emb = ggml_get_rows(ctx0, model.per_layer_tok_embd, rows);
+    if (emb->ne[0] != hparams.ple_head_dim) {
+        emb = ggml_cont(ctx0, ggml_view_2d(ctx0, emb, hparams.ple_head_dim, emb->ne[1], emb->nb[1], 0));
+    }
     if (model.per_layer_tok_embd_s) {
         emb = ggml_scale(ctx0, emb, model.per_layer_tok_embd_scale);
     }

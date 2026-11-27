@@ -155,8 +155,8 @@ class TestModelOptMXFP8Conversion(unittest.TestCase):
             reader = gguf.GGUFReader(path / "out.gguf")
             outputs = {tensor.name: tensor for tensor in reader.tensors}
             ple_name = ple_tests.TestNVFP4PLEConversion.output_name
-            self.assertEqual(outputs[ple_name].tensor_type, gguf.GGMLQuantizationType.F16)
-            np.testing.assert_array_equal(outputs[ple_name].data, ple_expected.astype(np.float16))
+            self.assertEqual(outputs[ple_name].tensor_type, gguf.GGMLQuantizationType.NVFP4)
+            ple_tests.TestNVFP4PLEConversion().assert_native_values(outputs[ple_name].data, ple_expected)
             np.testing.assert_array_equal(outputs["blk.0.ffn_gate_shexp.weight"].data, dense_expected.astype(np.float16))
             expert_output = outputs["blk.0.ffn_down_exps.weight"]
             self.assertEqual(expert_output.tensor_type, gguf.GGMLQuantizationType.NVFP4)

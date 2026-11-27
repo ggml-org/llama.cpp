@@ -645,7 +645,20 @@ llama_model_loader::llama_model_loader(
         // special case for PLE-only GGUFs: no need to follow the exact split numbering (allow flexibility)
         // ref: https://github.com/ggml-org/llama.cpp/pull/31185
         auto is_ple_only = [](const gguf_context * ctx) {
-            return gguf_get_n_tensors(ctx) == 1 && std::strcmp(gguf_get_tensor_name(ctx, 0), "per_layer_token_embd.weight") == 0;
+            const int64_t n = gguf_get_n_tensors(ctx);
+            if (n < 1 || n > 2) {
+                return false;
+            }
+            bool has_weight = false;
+            for (int64_t i = 0; i < n; ++i) {
+                const char * name = gguf_get_tensor_name(ctx, i);
+                if (std::strcmp(name, "per_layer_token_embd.weight") == 0) {
+                    has_weight = true;
+                } else if (std::strcmp(name, "per_layer_token_embd.scale") != 0) {
+                    return false;
+                }
+            }
+            return has_weight;
         };
         bool skip_shard_order_validation = false;
         for (size_t idx = n_backbone; idx < paths.size(); idx++) {

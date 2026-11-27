@@ -2,6 +2,16 @@
 #include "dequantize.cuh"
 #include "convert.cuh"
 
+static __device__ __forceinline__ void dequantize_nvfp4_get_rows(const void * vx, const int64_t ib, const int iqs, float2 & v) {
+    const block_nvfp4 & block = ((const block_nvfp4 *) vx)[ib];
+    const int group = iqs / QK_NVFP4_SUB;
+    const int j = iqs % QK_NVFP4_SUB;
+    const int shift = j < QK_NVFP4_SUB / 2 ? 0 : 4;
+    const int q = group * (QK_NVFP4_SUB / 2) + j % (QK_NVFP4_SUB / 2);
+    v.x = ggml_cuda_ue4m3_to_fp32(block.d[group]) * kvalues_mxfp4[(block.qs[q] >> shift) & 15];
+    v.y = ggml_cuda_ue4m3_to_fp32(block.d[group + 2]) * kvalues_mxfp4[(block.qs[q + QK_NVFP4 / 4] >> shift) & 15];
+}
+
 template<int qk, int qr, dequantize_kernel_t dequantize_kernel, typename dst_t>
 static __global__ void k_get_rows(
         const void * __restrict__ src0, const int32_t * __restrict__ src1, dst_t * __restrict__ dst,
@@ -406,6 +416,10 @@ static void ggml_cuda_get_rows_switch_src0_type(
             break;
         case GGML_TYPE_MXFP4:
             get_rows_cuda_kq<32, dst_t, dequantize_mxfp4<dst_t>>(src0_d, src1_d, dst_d,
+                ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
+            break;
+        case GGML_TYPE_NVFP4:
+            get_rows_cuda_q<QK_NVFP4, 2, dequantize_nvfp4_get_rows>(src0_d, src1_d, dst_d,
                 ne00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb1, nb2, nb3, stream);
             break;
         default:

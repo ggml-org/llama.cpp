@@ -1,4 +1,4 @@
-"""Test NVFP4 PLE fallback with small checkpoints; no GPU or model downloads required."""
+"""Test padded NVFP4 PLE conversion with small checkpoints; no GPU or model downloads required."""
 
 from __future__ import annotations
 
@@ -20,36 +20,71 @@ class TestNVFP4PLEConversion(unittest.TestCase):
     prefix = "model.language_model.layers.1.ple.ple_embedding.ngram_embedding."
     output_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + ".weight"
 
-    def fixture(self, rows=(130, 3), scale2=3.324236240587197e-05):
+    def fixture(self, rows=(130, 3), scale2=3.324236240587197e-05, width=160):
         tensors = {self.prefix + "weight_scale_2": torch.tensor([scale2])}
         expected = []
         levels = [0., 0.5, 1., 1.5, 2., 3., 4., 6., -0., -0.5, -1., -1.5, -2., -3., -4., -6.]
         for index, count in enumerate(rows):
-            codes = (np.arange(count * 160).reshape(count, 160) + index * 3) % 16
-            scales = np.array([[0.25, 0.5, 1., 2.][(r + c + index) % 4] for r in range(count) for c in range(10)], dtype=np.float32).reshape(count, 10)
+            codes = (np.arange(count * width).reshape(count, width) + index * 3) % 16
+            scales = np.array([[0.25, 0.5, 1., 2.][(r + c + index) % 4] for r in range(count) for c in range(width // 16)], dtype=np.float32).reshape(count, width // 16)
             packed = (codes[:, 0::2] | (codes[:, 1::2] << 4)).astype(np.uint8)
             name = self.prefix + f"shard_{index}.weight"
             tensors[name] = torch.from_numpy(packed)
             tensors[name + "_scale"] = torch.from_numpy(scales).to(torch.float8_e4m3fn)
-            reference = np.array([[levels[int(codes[r, c])] * float(scales[r, c // 16]) for c in range(160)] for r in range(count)], dtype=np.float32)
+            reference = np.array([[levels[int(codes[r, c])] * float(scales[r, c // 16]) for c in range(width)] for r in range(count)], dtype=np.float32)
             with np.errstate(invalid="ignore"):
                 reference *= np.float32(scale2)
             expected.append(reference)
         # Registration order must not determine the final table's row order.
         return dict(reversed(list(tensors.items()))), np.concatenate(expected)
 
-    def prepare(self, path, tensors, *, eager=False, ftype=gguf.LlamaFileType.GUESSED, parts=2):
+    def prepare(self, path, tensors, *, eager=False, ftype=gguf.LlamaFileType.GUESSED, parts=2, **kwargs):
         hp = {"model_type": "qwen4exp", "architectures": ["Qwen4ExpForCausalLM"],
               "num_hidden_layers": 2, "mtp_num_hidden_layers": 1, "split_ngram_parts": parts,
               "quantization_config": {"quant_method": "modelopt", "quant_algo": "NVFP4"}}
         (path / "config.json").write_text(json.dumps(hp))
         save_file(tensors, str(path / "model.safetensors"))
-        model = Qwen4ExpTextModel(path, ftype, path / "out.gguf", hparams=hp, eager=eager)
+        model = Qwen4ExpTextModel(path, ftype, path / "out.gguf", hparams=hp, eager=eager, **kwargs)
         with patch("conversion.qwen4exp._NVFP4_PLE_CHUNK_ROWS", 128):
             model.prepare_tensors()
         return model
 
-    def test_f16_table_round_trip_and_both_scale_levels(self):
+    def assert_native_values(self, raw, expected, scale2=3.324236240587197e-05):
+        decoded = gguf.dequantize(raw, gguf.GGMLQuantizationType.NVFP4)
+        width = expected.shape[1]
+        self.assertEqual(decoded.shape[1], (width + 63) // 64 * 64)
+        np.testing.assert_array_equal(decoded[:, width:], 0)
+        np.testing.assert_array_equal(decoded[:, :width] * np.float32(scale2), expected)
+
+    def test_padding_widths_and_mixed_shard_fallback(self):
+        for width in (64, 80, 96, 144, 160, 192):
+            with self.subTest(width=width), tempfile.TemporaryDirectory() as directory:
+                tensors, expected = self.fixture(rows=(2,), width=width, scale2=0.25)
+                model = self.prepare(Path(directory), tensors, parts=1)
+                raw = model.gguf_writer.tensors[0][self.output_name].tensor._chunks[0]()
+                self.assert_native_values(raw, expected, scale2=0.25)
+        for dtype in (torch.float32, torch.float8_e4m3fn):
+            with self.subTest(dtype=dtype), tempfile.TemporaryDirectory() as directory:
+                tensors, expected = self.fixture(rows=(2,))
+                plain = np.ones((1, 160), dtype=np.float32)
+                tensors[self.prefix + "shard_1.weight"] = torch.from_numpy(plain).to(dtype)
+                model = self.prepare(Path(directory), tensors)
+                info = model.gguf_writer.tensors[0][self.output_name]
+                self.assertEqual(info.dtype, gguf.GGMLQuantizationType.F16)
+                output = Path(directory) / "table.bin"
+                with output.open("wb") as f:
+                    info.tensor.tofile(f)
+                actual = np.fromfile(output, dtype=np.float16).reshape(3, 160)
+                np.testing.assert_array_equal(actual, np.concatenate((expected, plain)).astype(np.float16))
+
+    def test_split_table_keeps_its_global_scale(self):
+        for kwargs, count in (({"ple_only": True}, 2), ({"no_ple": True}, 0)):
+            with self.subTest(**kwargs), tempfile.TemporaryDirectory() as directory:
+                tensors, _ = self.fixture(rows=(2,))
+                model = self.prepare(Path(directory), tensors, parts=1, **kwargs)
+                self.assertEqual(len(model.gguf_writer.tensors[0]), count)
+
+    def test_padded_table_round_trip_and_both_scale_levels(self):
         for eager in (False, True):
             for ftype in (gguf.LlamaFileType.GUESSED, gguf.LlamaFileType.MOSTLY_Q8_0, gguf.LlamaFileType.MOSTLY_BF16):
                 with self.subTest(eager=eager, ftype=ftype), tempfile.TemporaryDirectory() as directory:
@@ -57,12 +92,12 @@ class TestNVFP4PLEConversion(unittest.TestCase):
                     tensors, expected = self.fixture()
                     model = self.prepare(path, tensors, eager=eager, ftype=ftype)
                     self.assertEqual(model._ple_row_dim, 160)
-                    self.assertEqual(set(model.gguf_writer.tensors[0]), {self.output_name})
+                    self.assertEqual(set(model.gguf_writer.tensors[0]), {self.output_name, self.output_name.removesuffix(".weight") + ".scale"})
                     info = model.gguf_writer.tensors[0][self.output_name]
-                    self.assertEqual(info.dtype, gguf.GGMLQuantizationType.F16)
+                    self.assertEqual(info.dtype, gguf.GGMLQuantizationType.NVFP4)
                     self.assertIsInstance(info.tensor, gguf.LazyChunkedTensor)
-                    self.assertEqual(info.tensor.shape, (133, 160))
-                    self.assertEqual(info.tensor.dtype, np.float16)
+                    self.assertEqual(info.tensor.shape, (133, 108))
+                    self.assertEqual(info.tensor.dtype, np.uint8)
                     self.assertEqual(len(info.tensor._chunks), 3)
                     self.assertFalse(any(name.endswith(("_scale", "_scale_2")) for name in model.model_tensors))
                     model.gguf_writer.add_embedding_length_per_layer_input(model._ple_row_dim)
@@ -72,9 +107,10 @@ class TestNVFP4PLEConversion(unittest.TestCase):
                     model.gguf_writer.close()
                     reader = gguf.GGUFReader(path / "out.gguf")
                     tensor = reader.tensors[0]
-                    self.assertEqual(tensor.tensor_type, gguf.GGMLQuantizationType.F16)
-                    np.testing.assert_array_equal(tensor.shape, [160, 133])
-                    np.testing.assert_array_equal(tensor.data.view(np.uint16), expected.astype(np.float16).view(np.uint16))
+                    self.assertEqual(tensor.tensor_type, gguf.GGMLQuantizationType.NVFP4)
+                    np.testing.assert_array_equal(tensor.shape, [192, 133])
+                    np.testing.assert_array_equal(reader.tensors[1].data, [np.float32(3.324236240587197e-05)])
+                    self.assert_native_values(tensor.data, expected)
                     del tensor, reader, info, model
 
     def test_preparation_does_not_materialize_shards(self):
@@ -87,8 +123,8 @@ class TestNVFP4PLEConversion(unittest.TestCase):
             for name in ("first.bin", "second.bin"):
                 with (Path(directory) / name).open("wb") as output:
                     table.tofile(output)
-                actual = np.fromfile(Path(directory) / name, dtype=np.float16).reshape(expected.shape)
-                np.testing.assert_array_equal(actual.view(np.uint16), expected.astype(np.float16).view(np.uint16))
+                actual = np.fromfile(Path(directory) / name, dtype=np.uint8).reshape(expected.shape[0], 108)
+                self.assert_native_values(actual, expected)
             self.assertTrue(all(name.endswith(".weight") for name in model.model_tensors))
             del table, model, materialize
 
@@ -140,7 +176,7 @@ class TestNVFP4PLEConversion(unittest.TestCase):
             tensors[dense + "_scale_2"] = torch.tensor([0.5])
             model = self.prepare(Path(directory), tensors, parts=1)
             self.assertEqual(model.gguf_writer.tensors[0]["blk.0.attn_q.weight"].dtype, gguf.GGMLQuantizationType.NVFP4)
-            self.assertEqual(model.gguf_writer.tensors[0][self.output_name].dtype, gguf.GGMLQuantizationType.F16)
+            self.assertEqual(model.gguf_writer.tensors[0][self.output_name].dtype, gguf.GGMLQuantizationType.NVFP4)
             del model
         with tempfile.TemporaryDirectory() as directory:
             name = self.prefix + "shard_0.weight"
@@ -188,8 +224,8 @@ class TestNVFP4PLEConversion(unittest.TestCase):
                         output_path = path / f"table-{repeat}.bin"
                         with output_path.open("wb") as output:
                             table.tofile(output)
-                        actual = np.fromfile(output_path, dtype=np.float16).reshape(expected.shape)
-                        np.testing.assert_array_equal(actual.view(np.uint16), expected.astype(np.float16).view(np.uint16))
+                        actual = np.fromfile(output_path, dtype=np.uint8).reshape(expected.shape[0], 108)
+                        self.assert_native_values(actual, expected)
                         for name, source in sources.items():
                             if name.endswith("weight_scale_2"):
                                 continue
@@ -218,8 +254,8 @@ class TestNVFP4PLEConversion(unittest.TestCase):
                     output_path = path / f"table-{repeat}.bin"
                     with output_path.open("wb") as output:
                         table.tofile(output)
-                    actual = np.fromfile(output_path, dtype=np.float16).reshape(expected.shape)
-                    np.testing.assert_array_equal(actual.view(np.uint16), expected.astype(np.float16).view(np.uint16))
+                    actual = np.fromfile(output_path, dtype=np.uint8).reshape(expected.shape[0], 108)
+                    self.assert_native_values(actual, expected)
                     for name, source in sources.items():
                         if name.endswith("weight_scale_2"):
                             continue

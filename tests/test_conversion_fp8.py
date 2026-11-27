@@ -744,8 +744,8 @@ class TestQwen4ExpPleScale(unittest.TestCase):
         for kwargs, names in (
             ({}, {self.TABLE, self.SCALE}),
             ({"quant_method": "fp8"}, {self.TABLE, self.SCALE}),
-            ({"ple_only": True}, {self.TABLE}),
-            ({"no_ple": True}, {self.SCALE}),
+            ({"ple_only": True}, {self.TABLE, self.SCALE}),
+            ({"no_ple": True}, set()),
         ):
             with self.subTest(**kwargs):
                 result = self.convert(**kwargs)

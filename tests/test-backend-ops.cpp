@@ -11320,6 +11320,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_get_rows(GGML_TYPE_F8_E4M3, n, 5, 3, 1, 1, false));
     }
     // many rows of a wide table, as a per-layer embedding lookup does
+    for (int n : {64, 128, 192, 320}) {
+        for (int b : {1, 3}) {
+            for (bool view : {false, true}) {
+                test_cases.emplace_back(new test_get_rows(GGML_TYPE_NVFP4, n, 7, 5, b, 1, false, view));
+            }
+        }
+    }
     test_cases.emplace_back(new test_get_rows(GGML_TYPE_F8_E4M3, 160, 100000, 32768, 1, 1, false));
     // past the fused dequant GEMM's column limit the reordered weight goes through the conversion kernels
     for (ggml_type type : {GGML_TYPE_IQ4_NL, GGML_TYPE_IQ4_XS}) {

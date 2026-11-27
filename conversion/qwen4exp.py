@@ -47,6 +47,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
         self._nvfp4_ple_shards: dict[str, tuple[Callable[[], Tensor], Callable[[], Tensor], Callable[[], Tensor]]] = {}
         self._mtp_fc: dict[str, Tensor] = {}
         self._ple_scale: float | None = None
+        self._ple_native_nvfp4 = False
 
     def dequant_model(self):
         # FP8 checkpoints: all n-gram shards share one scale, stored under the parent module name
@@ -244,18 +245,26 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
     def tensor_force_quant(self, name, new_name, bid, n_dims):
         if self._nvfp4_ple_shards and new_name == gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + ".weight":
-            return gguf.GGMLQuantizationType.F16
+            return gguf.GGMLQuantizationType.NVFP4 if self._ple_native_nvfp4 else gguf.GGMLQuantizationType.F16
         return super().tensor_force_quant(name, new_name, bid, n_dims)
 
-    def _load_nvfp4_ple_shard(self, name: str, rows: slice):
+    def _load_nvfp4_ple_shard(self, name: str, rows: slice, native: bool = False):
         weight_gen, scale_gen, scale2_gen = self._nvfp4_ple_shards[name]
 
         def load() -> np.ndarray:
             packed = LazyTorchTensor.read_rows(weight_gen(), rows).numpy()
-            scales = LazyTorchTensor.read_rows(scale_gen(), rows).float().numpy()
+            scale_tensor = LazyTorchTensor.read_rows(scale_gen(), rows)
+            scales = scale_tensor.float().numpy()
             scale2 = float(LazyTorchTensor.to_eager(scale2_gen()).float().item())
             if not np.isfinite(scale2) or scale2 < 0 or not np.isfinite(scales).all() or np.any(scales < 0):
                 raise ValueError(f"NVFP4 PLE shard {name!r} has invalid scales")
+            if native:
+                width = packed.shape[1] * 2
+                padded_width = (width + 63) // 64 * 64
+                padded_weight = np.pad(packed, ((0, 0), (0, (padded_width - width) // 2)))
+                padded_scale = np.pad(scale_tensor.view(torch.uint8).numpy(), ((0, 0), (0, (padded_width - width) // 16)))
+                raw, _ = self._nvfp4_pack(torch.from_numpy(padded_weight), torch.from_numpy(padded_scale).view(torch.float8_e4m3fn))
+                return raw
             levels = np.array([0, 0.5, 1, 1.5, 2, 3, 4, 6, -0.0, -0.5, -1, -1.5, -2, -3, -4, -6], dtype=np.float32)
             values = np.empty((packed.shape[0], packed.shape[1] * 2), dtype=np.float32)
             values[:, 0::2] = levels[packed & 15]
@@ -268,8 +277,7 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 
         return load
 
-    # the shards concatenate into a tensor of well over 100 GB
-    # use LazyChunkedTensor here, a single shard resident at a time
+    # Stream row ranges so the complete table and source shards are never retained.
     def _place_ple_shard(self, data_torch: Tensor, name: str) -> Iterable[tuple[str, Tensor]]:
 
         idx = int(name.rpartition(".shard_")[2].partition(".")[0])
@@ -294,23 +302,31 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                     f"PLE shard {shard} has row dim {row_dim}, expected {self._ple_row_dim}")
             rows += int(shape[0])
 
-        # an FP8 table keeps its bytes and gets a scale tensor, any other type has the scale folded in
-        keep_fp8 = name in self._fp8_e4m3_preserved
+        # Mixed source types use floating output; packed tables retain their scale separately.
+        keep_fp8 = not self._nvfp4_ple_shards and name in self._fp8_e4m3_preserved
+        self._ple_native_nvfp4 = all(shard in self._nvfp4_ple_shards for shard in shards)
+        scale2_gen = None
+        if self._ple_native_nvfp4:
+            scale2_gen = self._nvfp4_ple_shards[shards[0]][2]
+            self._ple_native_nvfp4 = all(self._nvfp4_ple_shards[shard][2] is scale2_gen for shard in shards)
         chunks = []
         for shard in shards:
             if shard in self._nvfp4_ple_shards:
                 # Match the bounded row decoding used by packed expert conversion.
-                chunks.extend(self._load_nvfp4_ple_shard(shard, slice(start, start + _NVFP4_PLE_CHUNK_ROWS)) for start in range(0, int(self.model_tensors[shard]().shape[0]), _NVFP4_PLE_CHUNK_ROWS))
+                chunks.extend(self._load_nvfp4_ple_shard(shard, slice(start, start + _NVFP4_PLE_CHUNK_ROWS), self._ple_native_nvfp4) for start in range(0, int(self.model_tensors[shard]().shape[0]), _NVFP4_PLE_CHUNK_ROWS))
             else:
                 chunks.append(self._load_ple_shard(shard, keep_fp8))
         table = gguf.LazyChunkedTensor(
             chunks,
-            shape=(rows, self._ple_row_dim),
-            dtype=np.uint8 if keep_fp8 else np.float32,
+            shape=(rows, (self._ple_row_dim + 63) // 64 * 36 if self._ple_native_nvfp4 else self._ple_row_dim),
+            dtype=np.uint8 if keep_fp8 or self._ple_native_nvfp4 else np.float32,
         )
         gguf_name = gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD]
         out = [(gguf_name + ".weight", cast(Tensor, table))]
-        if keep_fp8 and self._ple_scale is not None:
+        if self._ple_native_nvfp4:
+            assert scale2_gen is not None
+            out.append((gguf_name + ".scale", scale2_gen().float().reshape(1)))
+        elif keep_fp8 and self._ple_scale is not None:
             out.append((gguf_name + ".scale", torch.tensor([self._ple_scale], dtype=torch.float32)))
         return out
 

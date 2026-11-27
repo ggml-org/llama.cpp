@@ -1541,7 +1541,7 @@ class ModelBase:
         del experts, merged
 
     def _include_ple_tensor(self, name: str) -> bool:
-        is_ple = name == gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + ".weight"
+        is_ple = name in (gguf.TENSOR_NAMES[gguf.MODEL_TENSOR.PER_LAYER_TOKEN_EMBD] + suffix for suffix in (".weight", ".scale"))
         self._has_ple |= is_ple
         return is_ple if self.ple_only else not is_ple
 
@@ -1742,7 +1742,7 @@ class ModelBase:
                 quantize = data.quantize if isinstance(data, gguf.LazyChunkedTensor) else (
                     lambda qtype, d=data: gguf.quants.quantize(d, qtype))
 
-                if not (data_qtype == gguf.GGMLQuantizationType.F8_E4M3 and data.dtype == np.uint8):
+                if not (data_qtype in (gguf.GGMLQuantizationType.F8_E4M3, gguf.GGMLQuantizationType.NVFP4) and data.dtype == np.uint8):
                     try:
                         data = quantize(data_qtype)
                     except gguf.QuantError as e:
