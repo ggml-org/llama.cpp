@@ -5631,6 +5631,7 @@ void ggml_flash_attn_ext_add_sinks(
     a->src[4] = sinks;
 }
 
+// deprecated
 bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
     return ggml_flash_attn_ext_bias_is_indexed(a);
 }
@@ -5700,6 +5701,7 @@ void ggml_flash_attn_ext_add_bias_indexed(
     GGML_ASSERT(ggml_flash_attn_ext_add_bias_indexed_validate(a));
 }
 
+// deprecated
 void ggml_flash_attn_ext_add_indexed_bias(
         struct ggml_tensor * a,
         struct ggml_tensor * table,
