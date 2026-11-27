@@ -1123,7 +1123,8 @@ float * llama_context::get_logits() {
 
     for (size_t row = 0; row < logits_deferred.size(); ++row) {
         if (!logits_fetch_deferred(row)) {
-            GGML_ABORT("deferred logits row %zu is no longer available", row);
+            LLAMA_LOG_ERROR("%s: deferred logits row %zu is no longer available\n", __func__, row);
+            return nullptr;
         }
     }
 
