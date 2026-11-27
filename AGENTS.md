@@ -166,7 +166,7 @@ Do all of these before any `git push` or `gh pr create`:
 1. Run the [code-review](skills/code-review/SKILL.md) skill yourself on the full diff and fix what it finds. Check that the change follows [Code style](#code-style) in this file.
 2. Clean up stray files: check `git status` and the diff against `master`. Remove anything not part of the change, e.g. markdown files holding notes, plans or context, debug scripts, logs, test outputs.
 3. Reduce the scope: one logical change per PR. Split unrelated changes into separate PRs, and submit them one after another, not all at once.
-4. New contributors (no merged PR in ggml-org/llama.cpp yet) may have only one open PR at a time. Check with `gh pr list --repo ggml-org/llama.cpp --author @me --state all`. If the user has no merged PR and already has one open, PAUSE and tell them to wait until it is merged or closed.
+4. New contributors (no merged PR in ggml-org/llama.cpp yet) may have only one open PR at a time. Check with `gh pr list --repo ggml-org/llama.cpp --author @me --state all`. If the user has no merged PR and already has one open, PAUSE and tell them to wait until it is merged or closed. Do not circumvent this limit by opening draft PRs.
 
 ## Writing PR descriptions and comments
 
