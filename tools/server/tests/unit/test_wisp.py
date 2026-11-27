@@ -4,6 +4,7 @@ import threading
 import pytest
 from websockets.exceptions import InvalidStatus
 from websockets.sync.client import connect, ClientConnection
+from websockets.sync.connection import Connection
 from utils import *
 
 server = ServerPreset.tinyllama2()
@@ -30,18 +31,18 @@ def wisp_connect(query: str = "") -> ClientConnection:
     return ws
 
 
-def send(ws: ClientConnection, packet_type: int, stream_id: int, payload: bytes):
+def send(ws: Connection, packet_type: int, stream_id: int, payload: bytes):
     ws.send(struct.pack("<BI", packet_type, stream_id) + payload)
 
 
-def recv(ws: ClientConnection) -> tuple[int, int, bytes]:
+def recv(ws: Connection) -> tuple[int, int, bytes]:
     msg = ws.recv(timeout=10)
     assert isinstance(msg, bytes)
     packet_type, stream_id = struct.unpack("<BI", msg[:5])
     return packet_type, stream_id, msg[5:]
 
 
-def open_stream(ws: ClientConnection, stream_id: int, host: str, port: int):
+def open_stream(ws: Connection, stream_id: int, host: str, port: int):
     send(ws, WISP_CONNECT, stream_id, struct.pack("<BH", 0x01, port) + host.encode())
 
 
