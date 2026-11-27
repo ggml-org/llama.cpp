@@ -1259,6 +1259,7 @@ extern "C" {
     LLAMA_API uint32_t      llama_get_sampled_candidates_count_ith(struct llama_context * ctx, int32_t i);
 
     // Full-vocabulary logits for the ith token, also when a backend sampler ran for it. Valid until the next decode.
+    // Returns NULL for invalid ids, and may return NULL for a backend-sampled row not read before a later llama_set_sampler() call.
     LLAMA_API float * llama_get_raw_logits_ith(struct llama_context * ctx, int32_t i);
 
     //

@@ -1122,21 +1122,25 @@ float * llama_context::get_logits() {
     output_reorder();
 
     for (size_t row = 0; row < logits_deferred.size(); ++row) {
-        logits_fetch_deferred(row);
+        if (!logits_fetch_deferred(row)) {
+            GGML_ABORT("deferred logits row %zu is no longer available", row);
+        }
     }
 
     return logits.data;
 }
 
-void llama_context::logits_fetch_deferred(int64_t row) {
+bool llama_context::logits_fetch_deferred(int64_t row) {
     if ((size_t) row >= logits_deferred.size() || logits_deferred[row] < 0) {
-        return;
+        return true;
     }
 
-    // a graph reset or reserve since the decode drops the graph that holds the rows
+    // The deferred rows are in the latest decode's logits tensor. If the graph
+    // has been reset or re-reserved, or a new sampler has been set, since that
+    // decode (gf_res_prev_active is null), the row cannot be fetched.
     ggml_tensor * t_logits = gf_res_prev_active ? gf_res_prev_active->get_logits() : nullptr;
     if (t_logits == nullptr) {
-        return;
+        return false;
     }
 
     const int64_t n_vocab = model.vocab.n_tokens();
@@ -1144,6 +1148,8 @@ void llama_context::logits_fetch_deferred(int64_t row) {
     ggml_backend_tensor_get(t_logits, logits.data + row*n_vocab, logits_deferred[row]*t_logits->nb[1], n_vocab*sizeof(float));
 
     logits_deferred[row] = -1;
+
+    return true;
 }
 
 int64_t llama_context::output_resolve_row(int32_t i) const {
@@ -1184,7 +1190,9 @@ float * llama_context::get_logits_ith(int32_t i) {
         }
 
         const int64_t j = output_resolve_row(i);
-        logits_fetch_deferred(j);
+        if (!logits_fetch_deferred(j)) {
+            throw std::runtime_error("deferred logits row is no longer available");
+        }
         return logits.data + j*model.vocab.n_tokens();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: invalid logits id %d, reason: %s\n", __func__, i, err.what());
