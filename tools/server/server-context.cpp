@@ -3380,6 +3380,7 @@ private:
             if (slot.is_processing()) {
                 send_error(slot, reason, ERROR_TYPE_SERVER);
                 slot.release();
+                slot.prompt_clear();
             }
         }
     }
