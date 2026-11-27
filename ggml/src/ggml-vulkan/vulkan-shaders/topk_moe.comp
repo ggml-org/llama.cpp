@@ -89,6 +89,93 @@ void softmax_warp_inplace(inout float vals[experts_per_thread], const uint limit
     }
 }
 
+bool expert_precedes(const uvec3 a, const uvec3 b) {
+    const float score_a = uintBitsToFloat(a.x);
+    const float score_b = uintBitsToFloat(b.x);
+    return score_a > score_b || (score_a == score_b && a.z < b.z);
+}
+
+uvec3 merge_expert_lanes(uvec3 a, const uint stride, const bool descending, const uint lane) {
+    [[unroll]]
+    for (uint mask = stride; mask > 0; mask /= 2) {
+        const uvec3 b = subgroupShuffleXor(a, mask);
+        const bool keep_first = descending == ((lane & mask) == 0);
+        a = expert_precedes(b, a) == keep_first ? b : a;
+    }
+    return a;
+}
+
+shared uvec3 candidates[gl_WorkGroupSize.y * WARP_SIZE];
+
+uvec3 sort_expert_lanes(uvec3 expert, const uint lane) {
+    [[unroll]]
+    for (uint size = 2; size <= WARP_SIZE; size *= 2) {
+        expert = merge_expert_lanes(expert, size / 2, (lane & size) == 0, lane);
+    }
+    return expert;
+}
+
+bool sort_top_k(const float selection_probs[experts_per_thread], const float probs[experts_per_thread],
+                const uint lane, const uint ids_offset, out float output_weights[experts_per_thread], inout float wt_sum) {
+    const uvec3 empty = uvec3(floatBitsToUint(-INFINITY), 0, 0xffffffffu);
+    uvec3 best = empty;
+    uint nonfinite = 0;
+    [[unroll]]
+    for (uint i = 0; i < experts_per_thread; ++i) {
+        const uint expert = i * WARP_SIZE + lane;
+        if (expert < n_experts) {
+            const float score = selection_probs[i];
+            nonfinite |= uint(isnan(score) || isinf(score));
+            const uvec3 candidate = uvec3(floatBitsToUint(score), 0, expert);
+            if (expert_precedes(candidate, best)) {
+                best = candidate;
+            }
+        }
+    }
+    if (subgroupOr(nonfinite) != 0) {
+        return false;
+    }
+
+    // The Kth lane maximum is a lower bound for the Kth expert.
+    best = sort_expert_lanes(best, lane);
+    const uvec3 cutoff = subgroupShuffle(best, n_expert_used - 1);
+    bool keep[experts_per_thread];
+    uint count = 0;
+    [[unroll]]
+    for (uint i = 0; i < experts_per_thread; ++i) {
+        const uint expert = i * WARP_SIZE + lane;
+        const uvec3 candidate = uvec3(floatBitsToUint(selection_probs[i]), 0, expert);
+        keep[i] = expert < n_experts && !expert_precedes(cutoff, candidate);
+        count += uint(keep[i]);
+    }
+    const uint total = subgroupAdd(count);
+    if (total > WARP_SIZE || total < n_expert_used) {
+        return false;
+    }
+
+    const uint offset = gl_SubgroupID * WARP_SIZE;
+    uint slot = offset + subgroupExclusiveAdd(count);
+    [[unroll]]
+    for (uint i = 0; i < experts_per_thread; ++i) {
+        if (keep[i]) {
+            candidates[slot++] = uvec3(floatBitsToUint(selection_probs[i]), floatBitsToUint(probs[i]), i * WARP_SIZE + lane);
+        }
+    }
+    subgroupBarrier();
+
+    const uvec3 expert = sort_expert_lanes(lane < total ? candidates[offset + lane] : empty, lane);
+    output_weights[0] = lane < n_expert_used ? uintBitsToFloat(expert.y) : 0.f;
+    [[unroll]]
+    for (uint i = 1; i < experts_per_thread; ++i) {
+        output_weights[i] = 0.f;
+    }
+    if (lane < n_expert_used) {
+        ids[ids_offset + lane] = expert.z;
+    }
+    wt_sum = output_weights[0];
+    return true;
+}
+
 void main() {
     const uint row = gl_WorkGroupID.x * gl_WorkGroupSize.y + gl_SubgroupID;
     if (row >= n_rows) {
@@ -103,39 +190,38 @@ void main() {
 
     float probs[experts_per_thread];
     [[unroll]]
-    for (int i = 0; i < experts_per_thread; i++) {
-        probs[i] = -INFINITY;
-    }
-
-    [[unroll]]
-    for (uint i = 0; i < n_experts; i += WARP_SIZE) {
-        const uint expert = i + lane;
-        probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? logits[logits_offset + expert] : -INFINITY;
+    for (uint i = 0; i < experts_per_thread; ++i) {
+        const uint expert = i * WARP_SIZE + lane;
+        probs[i] = expert < n_experts ? logits[logits_offset + expert] : -INFINITY;
     }
 
     if (gating_func == GATING_FUNC_SOFTMAX) {
         softmax_warp_inplace(probs, n_experts, lane, nexperts_use_push);
     } else if (gating_func == GATING_FUNC_SIGMOID) {
         [[unroll]]
-        for (uint i = 0; i < n_experts; i += WARP_SIZE) {
-            const uint expert = i + lane;
-            probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? 1.f / (1.f + exp(-probs[i / WARP_SIZE])) : -INFINITY;
+        for (uint i = 0; i < experts_per_thread; ++i) {
+            const uint expert = i * WARP_SIZE + lane;
+            if (expert < n_experts) {
+                probs[i] = 1.f / (1.f + exp(-probs[i]));
+            }
         }
     } else if (gating_func == GATING_FUNC_SQRT_SOFTPLUS) {
         [[unroll]]
-        for (uint i = 0; i < n_experts; i += WARP_SIZE) {
-            const uint expert = i + lane;
-            const float val = probs[i / WARP_SIZE];
-            probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? sqrt(val > 20.0f ? val : log(1.0f + exp(val))) : -INFINITY;
+        for (uint i = 0; i < experts_per_thread; ++i) {
+            const uint expert = i * WARP_SIZE + lane;
+            if (expert < n_experts) {
+                const float val = probs[i];
+                probs[i] = sqrt(val > 20.0f ? val : log(1.0f + exp(val)));
+            }
         }
     }
 
     float selection_probs[experts_per_thread];
     if (has_bias != 0) {
         [[unroll]]
-        for (uint i = 0; i < n_experts; i += WARP_SIZE) {
-            const uint expert = i + lane;
-            selection_probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? probs[i / WARP_SIZE] + bias[bias_offset + expert] : -INFINITY;
+        for (uint i = 0; i < experts_per_thread; ++i) {
+            const uint expert = i * WARP_SIZE + lane;
+            selection_probs[i] = expert < n_experts ? probs[i] + bias[bias_offset + expert] : -INFINITY;
         }
     } else {
         [[unroll]]
@@ -144,55 +230,68 @@ void main() {
         }
     }
 
-    // at this point, each thread holds a portion of softmax,
-    // we do the argmax reduce over n_expert_used, each time marking
-    // the expert weight as -inf to exclude from the next iteration
-
     float wt_sum = 0.f;
 
     float output_weights[experts_per_thread];
 
-    [[unroll]]
-    for (int i = 0; i < experts_per_thread; i++) {
-        output_weights[i] = 0.f;
+    bool sorted = false;
+    if (WARP_SIZE == 32 && n_experts_spec <= 1024 && n_expert_used >= WARP_SIZE / 4 && n_expert_used <= WARP_SIZE / 2) {
+        sorted = sort_top_k(selection_probs, probs, lane, ids_offset, output_weights, wt_sum);
+    }
+    if (!sorted) {
+        [[unroll]]
+        for (int i = 0; i < experts_per_thread; i++) {
+            output_weights[i] = 0.f;
+        }
     }
 
-    for (int k = 0; k < n_expert_used; k++) {
+    const uint n_rounds = sorted ? 0u : n_expert_used;
+    for (uint k = 0; k < n_rounds; ++k) {
         float max_val    = probs[0];
         float max_val_s  = selection_probs[0];
         uint   max_expert = lane;
 
         [[unroll]]
-        for (uint i = WARP_SIZE; i < n_experts; i += WARP_SIZE) {
-            const uint expert = i + lane;
-            if ((n_experts % WARP_SIZE == 0 || expert < n_experts) && selection_probs[i / WARP_SIZE] > max_val_s) {
-                max_val    = probs[i / WARP_SIZE];
-                max_val_s  = selection_probs[i / WARP_SIZE];
+        for (uint i = 1; i < experts_per_thread; ++i) {
+            const uint expert = i * WARP_SIZE + lane;
+            if (expert < n_experts && selection_probs[i] > max_val_s) {
+                max_val    = probs[i];
+                max_val_s  = selection_probs[i];
                 max_expert = expert;
             }
         }
 
         [[unroll]]
         for (uint mask = WARP_SIZE / 2; mask > 0; mask /= 2) {
-            const float val    = subgroupShuffleXor(max_val, mask);
             const float val_s  = subgroupShuffleXor(max_val_s, mask);
             const uint  expert = subgroupShuffleXor(max_expert, mask);
             if (val_s > max_val_s || (val_s == max_val_s && expert < max_expert)) {
-                max_val    = val;
                 max_val_s  = val_s;
                 max_expert = expert;
             }
         }
 
-        if ((k & (WARP_SIZE - 1)) == lane) {
-            output_weights[k / WARP_SIZE] = max_val;
+        const uint winner_lane = max_expert & (WARP_SIZE - 1);
+        max_val = subgroupShuffle(max_val, winner_lane);
+
+        // Static array indices let the compiler keep the values in registers.
+        [[unroll]]
+        for (uint i = 0; i < experts_per_thread; ++i) {
+            if (k / WARP_SIZE == i && (k & (WARP_SIZE - 1)) == lane) {
+                output_weights[i] = max_val;
+            }
         }
 
-        if ((max_expert & (WARP_SIZE - 1)) == lane) {
-            selection_probs[max_expert / WARP_SIZE] = -INFINITY;
-
+        if (lane == winner_lane) {
             ids[ids_offset + k] = max_expert;
             wt_sum += max_val;
+
+            [[unroll]]
+            for (uint i = 0; i < experts_per_thread; ++i) {
+                if (max_expert == i * WARP_SIZE + lane) {
+                    selection_probs[i] = -INFINITY;
+                }
+            }
         }
     }
 
