@@ -14176,6 +14176,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
     }
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4, 37, 2, 3}, true, true, GGML_TYPE_F16, {2, 3}, 0.1f, 8.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4, 300000, 1, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     for (bool mask : {false, true}) {
         for (bool sinks : {false, true}) {
