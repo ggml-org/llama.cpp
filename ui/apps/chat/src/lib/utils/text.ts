@@ -1,3 +1,4 @@
+import { stripMentionLinks } from './mention-badge';
 import { NEWLINE } from '#lib/constants/index.ts';
 
 /**
@@ -11,13 +12,18 @@ export function getPreviewText(content: string, max = 150): string {
 /**
  * Generates a single-line title from a potentially multi-line prompt.
  * Uses the first non-empty line if `useFirstLine` is true.
+ *
+ * `@`-mentions travel as `[name](file://path)` links, which would otherwise
+ * dominate a short title, so each one collapses to its `name`.
  */
 export function generateConversationTitle(content: string, useFirstLine: boolean = false): string {
-	if (useFirstLine) {
-		const firstLine = content.split(NEWLINE).find((line) => line.trim().length > 0);
+	const stripped = stripMentionLinks(content);
 
-		return firstLine ? firstLine.trim() : content.trim();
+	if (useFirstLine) {
+		const firstLine = stripped.split(NEWLINE).find((line) => line.trim().length > 0);
+
+		return firstLine ? firstLine.trim() : stripped.trim();
 	}
 
-	return content.trim();
+	return stripped.trim();
 }
