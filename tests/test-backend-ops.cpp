@@ -10466,11 +10466,13 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
     const ggml_type type_KV;
     const float logit_softcap;
     const bool mask_row;    // query 0 of each stream sees no key
+    const float table_offset; // added to every table value: cancels in the softmax, needs the bias in FP32
+    const bool view_offset;   // the mask and the indices are views at a one-element offset
 
     std::vector<int32_t> rows;
 
     std::string vars() override {
-        return VARS_TO_STR12(hs, nh, gqa, kv, nb, n_stream, n_bins, kv_rows, sinks, type_KV, logit_softcap, mask_row);
+        return VARS_TO_STR14(hs, nh, gqa, kv, nb, n_stream, n_bins, kv_rows, sinks, type_KV, logit_softcap, mask_row, table_offset, view_offset);
     }
 
     double max_nmse_err() override {
@@ -10479,9 +10481,9 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
 
     test_flash_attn_ext_indexed_bias(int64_t hs = 128, int64_t nh = 2, int64_t gqa = 3, int64_t kv = 768, int64_t nb = 7, int64_t n_stream = 2,
                                      int64_t n_bins = 17, bool kv_rows = false, bool sinks = true, ggml_type type_KV = GGML_TYPE_F16,
-                                     float logit_softcap = 0.0f, bool mask_row = false)
+                                     float logit_softcap = 0.0f, bool mask_row = false, float table_offset = 0.0f, bool view_offset = false)
         : hs(hs), nh(nh), gqa(gqa), kv(kv), nb(nb), n_stream(n_stream), n_bins(n_bins), kv_rows(kv_rows), sinks(sinks), type_KV(type_KV),
-          logit_softcap(logit_softcap), mask_row(mask_row) {}
+          logit_softcap(logit_softcap), mask_row(mask_row), table_offset(table_offset), view_offset(view_offset) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hs, nb, nh*gqa, n_stream);
@@ -10492,7 +10494,15 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
         ggml_set_name(k, "k");
         ggml_set_name(v, "v");
 
-        ggml_tensor * m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, n_stream);
+        ggml_tensor * m = nullptr;
+        if (view_offset) {
+            ggml_tensor * m_base = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, kv*nb*n_stream + 1);
+            ggml_set_name(m_base, "m_base");
+            m = ggml_view_4d(ctx, m_base, kv, nb, 1, n_stream, kv*ggml_element_size(m_base), kv*nb*ggml_element_size(m_base),
+                             kv*nb*ggml_element_size(m_base), ggml_element_size(m_base));
+        } else {
+            m = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, kv, nb, 1, n_stream);
+        }
         ggml_set_name(m, "m");
 
         ggml_tensor * r = nullptr;
@@ -10504,7 +10514,14 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
         ggml_tensor * table = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_bins, nh*gqa, nb*n_stream);
         ggml_set_name(table, "table");
 
-        ggml_tensor * indices = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kv, nb*n_stream);
+        ggml_tensor * indices = nullptr;
+        if (view_offset) {
+            ggml_tensor * indices_base = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, kv*nb*n_stream + 1);
+            ggml_set_name(indices_base, "indices_base");
+            indices = ggml_view_2d(ctx, indices_base, kv, nb*n_stream, kv*ggml_element_size(indices_base), ggml_element_size(indices_base));
+        } else {
+            indices = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kv, nb*n_stream);
+        }
         ggml_set_name(indices, "indices");
 
         ggml_tensor * out = ggml_flash_attn_ext_rows(ctx, q, k, v, m, r, 1.0f/sqrtf(hs), 0.0f, logit_softcap);
@@ -10564,7 +10581,11 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
                 }
                 ggml_backend_tensor_set(t, idx.data(), 0, idx.size()*sizeof(int32_t));
             } else if (strcmp(t->name, "table") == 0) {
-                init_tensor_uniform(t, -4.0f, 4.0f);
+                init_tensor_uniform(t, table_offset - 4.0f, table_offset + 4.0f);
+            } else if (strcmp(t->name, "m_base") == 0 || strcmp(t->name, "indices_base") == 0) {
+                // the element before the view: zero, the view is set by its own name
+                std::vector<uint8_t> zero(ggml_nbytes(t), 0);
+                ggml_backend_tensor_set(t, zero.data(), 0, zero.size());
             } else if (strcmp(t->name, "s") == 0) {
                 init_tensor_uniform(t, -10.0f, 10.0f);
             } else {
@@ -14854,7 +14875,18 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             }
         }
         test_cases.emplace_back(new test_flash_attn_ext_indexed_bias( 64, 2, 3, 768,  7, 2,   17, kv_rows, false));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias( 64, 2, 3, 768, 65, 1,   17, kv_rows, false));
+        for (int64_t gqa : {2, 4, 8}) {
+            test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, gqa, 768, 65, 1, 1025, kv_rows));
+        }
         test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 8, 3, 512, 65, 1, 1025, kv_rows));
+        // the bias is added in FP32: a large constant per table row must cancel
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 65, 1, 1025, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, 1000.0f));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias( 64, 2, 3, 768, 65, 1,   17, kv_rows, false, GGML_TYPE_F16, 0.0f, false, 1000.0f));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768,  7, 2,   17, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, 1000.0f));
+        // the mask and the indices with only element alignment
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 65, 1, 1025, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, 0.0f, true));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 4, 768, 65, 2,   17, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, 0.0f, true));
         test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 1, 1, 17, kv_rows, true, GGML_TYPE_F8_E4M3));
         for (ggml_type type : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
             test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 1, 1, 17, kv_rows, true, type));
