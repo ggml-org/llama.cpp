@@ -4154,13 +4154,14 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
         const to_fp16_sycl_t to_fp16_sycl = ggml_get_to_fp16_sycl(src1->type, dst);
         GGML_ASSERT(to_fp16_sycl != nullptr);
         to_fp16_sycl(src1_f16, src1_f16_alloc.get(), ne_src1, queue);
+        // same element layout as src1, so s11, s12, s13 still apply (also for oneMKL when oneDNN is disabled at runtime)
+        src1_f16 = src1_f16_alloc.get();
 # else
         const int64_t ne_src1 = ggml_nelements(src1);
         src1_f16_alloc.alloc(ne_src1);
         const to_fp16_nc_sycl_t to_fp16_nc_sycl = ggml_get_to_fp16_nc_sycl(src1->type);
         GGML_ASSERT(to_fp16_nc_sycl != nullptr);
         to_fp16_nc_sycl(src1_f16, src1_f16_alloc.get(), ne10, ne11, ne12, ne13, s11, s12, s13, queue);
-#endif
 
         src1_f16 = src1_f16_alloc.get();
         s11      = ne10;
@@ -4168,6 +4169,7 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
         s13      = ne12 * s12;
 
         is_src1_cont_2 = true;
+#endif
     }
 
     ggml_sycl_pool_alloc<sycl::half> dst_f16(ctx.pool());
