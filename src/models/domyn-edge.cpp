@@ -113,7 +113,7 @@ llama_model_domyn_edge::graph::graph(const llm_graph_params & params)
         cb(Kcur, "Kcur_rope", il);
 
         cur = build_attn(inp_attn,
-                layer.wo, NULL, layer.wo_s,
+                layer.wo, NULL,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
         cb(cur, "attn_out", il);
 
@@ -135,9 +135,9 @@ llama_model_domyn_edge::graph::graph(const llm_graph_params & params)
 
         // SwiGLU FFN
         cur = build_ffn(cur,
-                layer.ffn_up,   NULL, NULL,
-                layer.ffn_gate, NULL, NULL,
-                layer.ffn_down, NULL, NULL, NULL,
+                layer.ffn_up,   NULL,
+                layer.ffn_gate, NULL,
+                layer.ffn_down, NULL, NULL,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
 
@@ -154,7 +154,7 @@ llama_model_domyn_edge::graph::graph(const llm_graph_params & params)
     cb(cur, "result_norm", -1);
     res->t_embd = cur;
 
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

@@ -366,7 +366,7 @@ ggml_tensor * llama_model_raon1_mini::graph::build_mla_layer(
     q = ggml_concat(ctx0, q_nope, q_extra, 0);
     latent = ggml_reshape_3d(ctx0, latent, rank, 1, n_tokens);
     ggml_tensor * k = ggml_concat(ctx0, latent, extra, 0);
-    ggml_tensor * out = build_attn(inp_attn_k, nullptr, nullptr, nullptr, q, k, latent,
+    ggml_tensor * out = build_attn(inp_attn_k, nullptr, nullptr, q, k, latent,
             nullptr, nullptr, layer.wv_b, 1.0f/sqrtf(nk), il);
     out = ggml_mul(ctx0, out, ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, cur)));
     cb(out, "mla_gated", il);

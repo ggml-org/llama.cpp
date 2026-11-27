@@ -27,6 +27,12 @@ import { goto } from '$app/navigation';
 import { page } from '$app/state';
 import { SvelteSet } from 'svelte/reactivity';
 
+interface ConversationShareOptions {
+	conversationId: string;
+	/** The message a share can end at, when it was started from one. */
+	messageId?: string;
+}
+
 interface GroupDialogOptions {
 	/** Group to rename; without it the dialog creates a new one. */
 	groupId?: string;
@@ -74,6 +80,15 @@ class UiStore {
 	collapsedSidebarSections = loadCollapsedSidebarSections();
 	/** Set when a flow outside the chat wants the composer focused once it can take it. */
 	composerFocusRequested = $state(false);
+
+	/** Conversation the delete dialog asks about, `null` while closed. */
+	conversationDeleteId = $state<string | null>(null);
+
+	/** Conversation the rename dialog edits, `null` while closed. */
+	conversationRenameId = $state<string | null>(null);
+
+	/** The share the share dialog is open for, `null` while closed. */
+	conversationShare = $state<ConversationShareOptions | null>(null);
 
 	/** Repo the Discover dialog selects when it opens, set by a model row. */
 	discoverModelFocus = $state<string | null>(null);
@@ -191,6 +206,21 @@ class UiStore {
 
 	isSidebarSectionOpen(id: string): boolean {
 		return !this.collapsedSidebarSections.has(id);
+	}
+
+	/** Ask to delete a conversation, from any of its menus. */
+	openConversationDelete(conversationId: string): void {
+		this.conversationDeleteId = conversationId;
+	}
+
+	/** Rename a conversation, from any of its menus. */
+	openConversationRename(conversationId: string): void {
+		this.conversationRenameId = conversationId;
+	}
+
+	/** Share a conversation to Hugging Face, from any of its menus or from a message. */
+	openConversationShare(options: ConversationShareOptions): void {
+		this.conversationShare = options;
 	}
 
 	/** Open the group dialog to create a group, or to rename `groupId`. */

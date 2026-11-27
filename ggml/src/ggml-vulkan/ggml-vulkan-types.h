@@ -450,10 +450,11 @@ struct vk_fa_pipeline_state {
     uint32_t limit_occupancy_shmem;
     ggml_type k_type;
     ggml_type v_type;
+    uint32_t bias_bins;
 
     bool operator<(const vk_fa_pipeline_state &b) const {
-        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type) <
-               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type);
+        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type, bias_bins) <
+               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type, b.bias_bins);
     }
 };
 
@@ -465,10 +466,11 @@ struct vk_xe_fa_pipeline_state {
     bool unaligned_q;
     bool partial_row_mask;
     bool multi_head_mask;
+    uint32_t bias_bins;
 
     bool operator<(const vk_xe_fa_pipeline_state &b) const {
-        return std::tie(HSK, HSV, qk_ratio, pv_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask) <
-               std::tie(b.HSK, b.HSV, b.qk_ratio, b.pv_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask);
+        return std::tie(HSK, HSV, qk_ratio, pv_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask, bias_bins) <
+               std::tie(b.HSK, b.HSV, b.qk_ratio, b.pv_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask, b.bias_bins);
     }
 };
 
@@ -810,6 +812,7 @@ struct vk_device_struct {
     bool coopmat2_bf16_support {};
     bool coopmat2_gdn_support {};
     bool coopmat2_decode_vector;
+    uint32_t coopmat2_reserved_shmem {};
 
     bool dot2_f16 {};
     bool ocp_fp4 {};

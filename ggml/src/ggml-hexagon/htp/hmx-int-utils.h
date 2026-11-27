@@ -26,6 +26,11 @@ static inline HVX_Vector hvx_qf32_mul_sf_scalar(HVX_Vector v_sf, uint32_t scalar
 #endif
 }
 
+static inline HVX_Vector hmx_qf32_to_i32_zp128(HVX_Vector v_qf) {
+    const HVX_Vector v_128p5 = Q6_V_vsplat_R(0x43008000);
+    return Q6_Vw_equals_Vsf(Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(v_qf, v_128p5)));
+}
+
 static inline void emit_int_hmx_scales_and_bias(
         HVX_Vector v_max_sf,
         float scale_const,
@@ -35,9 +40,11 @@ static inline void emit_int_hmx_scales_and_bias(
         HVX_Vector * restrict bias_out) {
 
     // |sum_k (a - zp) * w_hat| < 128 * l1_w = (l1_w << 7) <= 32768 * 2^p
+    // Add half-ULP (2^(p-1) for p > 0) so truncating the low p bits rounds to nearest instead of biasing negative.
     HVX_Vector v_max_mag = Q6_Vw_vasl_VwR(v_l1_w, 7);
     HVX_Vector v_p       = Q6_Vw_vmax_VwVw(Q6_V_vzero(), Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(17), Q6_Vuw_vcl0_Vuw(v_max_mag)));
-    HVX_Vector v_ib      = Q6_Vw_vsub_VwVw(Q6_Vw_vasl_VwVw(Q6_V_vsplat_R(32768), v_p), Q6_Vw_vasl_VwR(v_sum_w, 7));
+    HVX_Vector v_rnd     = Q6_Vw_vasr_VwR(Q6_Vw_vasl_VwVw(Q6_V_vsplat_R(1), v_p), 1);
+    HVX_Vector v_ib      = Q6_Vw_vsub_VwVw(Q6_Vw_vadd_VwVw(Q6_Vw_vasl_VwVw(Q6_V_vsplat_R(32768), v_p), v_rnd), Q6_Vw_vasl_VwR(v_sum_w, 7));
 
     HVX_Vector v_dw_base       = hvx_vec_mul_f32_f32(v_max_sf, hvx_vec_splat_f32(scale_const));
     HVX_Vector v_pow2_sf       = Q6_Vsf_equals_Vw(Q6_Vw_vasl_VwVw(Q6_V_vsplat_R(1), v_p));
@@ -59,9 +66,11 @@ static inline void emit_int_hmx_scales_and_bias_zp0(
         HVX_Vector * restrict bias_out) {
 
     // Unsigned a_u8 in [0, 255] (zp = 0): |sum_k a_u8 * w_hat| <= 255 * l1_w < (l1_w << 8) <= 32768 * 2^p
+    // Add half-ULP (2^(p-1) for p > 0) so truncating the low p bits rounds to nearest instead of biasing negative.
     HVX_Vector v_max_mag = Q6_Vw_vasl_VwR(v_l1_w, 8);
     HVX_Vector v_p       = Q6_Vw_vmax_VwVw(Q6_V_vzero(), Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(17), Q6_Vuw_vcl0_Vuw(v_max_mag)));
-    HVX_Vector v_ib      = Q6_Vw_vasl_VwVw(Q6_V_vsplat_R(32768), v_p);
+    HVX_Vector v_rnd     = Q6_Vw_vasr_VwR(Q6_Vw_vasl_VwVw(Q6_V_vsplat_R(1), v_p), 1);
+    HVX_Vector v_ib      = Q6_Vw_vadd_VwVw(Q6_Vw_vasl_VwVw(Q6_V_vsplat_R(32768), v_p), v_rnd);
 
     HVX_Vector v_dw_base       = hvx_vec_mul_f32_f32(v_max_sf, hvx_vec_splat_f32(scale_const));
     HVX_Vector v_pow2_sf       = Q6_Vsf_equals_Vw(Q6_Vw_vasl_VwVw(Q6_V_vsplat_R(1), v_p));
@@ -97,8 +106,7 @@ static inline void int_hmx_inv127_from_max_f16(
 }
 
 static inline HVX_Vector int_hmx_m_b4_from_sc_qf(HVX_Vector v_sc_qf, HVX_Vector v_inv127_qf) {
-    const HVX_Vector v12M_sf = Q6_V_vsplat_R(0x4B400000);
-    HVX_Vector v_m_biased    = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(v_sc_qf, v_inv127_qf), v12M_sf));
+    HVX_Vector v_m_biased    = hvx_vec_i32_from_qf32_rnd(Q6_Vqf32_vmpy_Vqf32Vqf32(v_sc_qf, v_inv127_qf));
     HVX_Vector v_m_h         = Q6_Vh_vpacke_VwVw(v_m_biased, v_m_biased);
     return Q6_Vh_vshuff_Vh(Q6_Vb_vshuff_Vb(Q6_Vb_vpacke_VhVh(v_m_h, v_m_h)));
 }

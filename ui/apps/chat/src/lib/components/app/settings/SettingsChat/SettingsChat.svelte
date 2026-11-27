@@ -9,6 +9,7 @@
 		SettingsChatToolsTab,
 		SettingsChatVoiceTab,
 		SettingsFooter,
+		SettingsHuggingFaceAccount,
 		SettingsResetButton
 	} from '#lib/components/app/settings/index.ts';
 	import {
@@ -225,6 +226,8 @@
 							/>
 
 							{#if currentSection.slug === SETTINGS_SECTION_SLUGS.GENERAL}
+								<SettingsHuggingFaceAccount />
+
 								<div class="flex justify-end gap-2">
 									<SettingsResetButton onReset={handleReset} />
 

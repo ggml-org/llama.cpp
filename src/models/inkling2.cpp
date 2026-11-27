@@ -99,7 +99,7 @@ void llama_model_inkling2::load_arch_tensors(llama_model_loader &) {
     output           = create_tensor(tn(LLM_TENSOR_OUTPUT,           "weight"), {n_embd, n_vocab_padded}, 0);
     prec_policy.set_acc(output, GGML_PREC_F32);
     output_norm      = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM,      "weight"), {n_embd}, 0);
-    output_res_query = create_tensor(tn(LLM_TENSOR_OUTPUT_RES_QUERY, "weight"), {n_embd}, 0);
+    output_res_query = create_tensor(tn(LLM_TENSOR_OUTPUT_RES_QUERY, "weight"), {n_embd}, TENSOR_NO_SCALE);
 
     for (int i = 0; i < n_layer_phys(); ++i) {
         auto & layer = layers[i];
@@ -122,7 +122,7 @@ void llama_model_inkling2::load_arch_tensors(llama_model_loader &) {
 
         // relative-position bias
         layer.attn_rel      = create_tensor(tn(LLM_TENSOR_ATTN_REL,      "weight", i), {n_embd, n_rel*n_head}, 0);
-        layer.attn_rel_bias = create_tensor(tn(LLM_TENSOR_ATTN_REL_BIAS, "weight", i), {n_rel, n_extent}, 0);
+        layer.attn_rel_bias = create_tensor(tn(LLM_TENSOR_ATTN_REL_BIAS, "weight", i), {n_rel, n_extent}, TENSOR_NO_SCALE);
         layer.attn_rel_clip = create_tensor(tn(LLM_TENSOR_ATTN_REL_CLIP, "weight", i), {n_rel, n_head}, 0);
 
         // short convolutions
@@ -144,9 +144,9 @@ void llama_model_inkling2::load_arch_tensors(llama_model_loader &) {
 
         // block attention residuals
         if (i > 0) {
-            layer.attn_res_query = create_tensor(tn(LLM_TENSOR_ATTN_RES_QUERY, "weight", i), {n_embd, hparams.is_swa(i) ? 1 : 3}, 0);
+            layer.attn_res_query = create_tensor(tn(LLM_TENSOR_ATTN_RES_QUERY, "weight", i), {n_embd, hparams.is_swa(i) ? 1 : 3}, TENSOR_NO_SCALE);
         }
-        layer.ffn_res_query = create_tensor(tn(LLM_TENSOR_FFN_RES_QUERY, "weight", i), {n_embd}, 0);
+        layer.ffn_res_query = create_tensor(tn(LLM_TENSOR_FFN_RES_QUERY, "weight", i), {n_embd}, TENSOR_NO_SCALE);
 
         // MoE
         layer.ffn_norm         = create_tensor(tn(LLM_TENSOR_FFN_NORM,         "weight", i), {n_embd}, 0);
@@ -386,7 +386,7 @@ ggml_tensor * llama_model_inkling2::graph::build_layer(int il, int ip, ggml_tens
         sinks = zero;
 
         cur = build_attn(inp,
-                nullptr, nullptr, nullptr,
+                nullptr, nullptr,
                 Qcur, Kcur, Vcur, table, sinks, 1.0f/sqrtf(n_embd_head), il);
 
         cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, inputs[0])));

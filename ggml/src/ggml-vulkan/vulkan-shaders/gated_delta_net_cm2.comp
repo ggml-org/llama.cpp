@@ -36,7 +36,7 @@ shared OPD sh_kqh[2 * C * LDP], sh_kql[2 * C * LDP];
 shared OPD sh_sh[V * LDP], sh_sl[V * LDP]; // state mirror [V x D] row-major (D padded)
 shared OPD sh_ph[C * C], sh_pl[C * C];
 shared OPD sh_ih[C * C], sh_il[C * C];
-shared OPD sh_dh[C * LDV], sh_dl[C * LDV]; // delta / solved [C x V] row-major (V padded)
+shared OPD sh_dh[C * LDV], sh_dl[C * LDV]; // delta [C x V] row-major (V padded)
 shared float sh_lower[C * (C - 1) / 2]; // packed strictly-lower Gram entries
 shared float sh_prefix[C], sh_ep[C], sh_beta[C], sh_carry[C];
 
@@ -70,9 +70,15 @@ float StoreGramPmat(const in uint32_t r, const in uint32_t c, const in float ele
     return elem;
 }
 
-float SplitRowS(const in uint32_t r, const in uint32_t c, const in float elem) {
-    const uint i = r * LDP + c;
-    split(elem, sh_sh[i], sh_sl[i]);
+// The bf16 hi and lo parts go to the state mirror in separate callbacks, so
+// that a thread's stores of neighboring elements are adjacent and vectorize.
+float StoreHi(const in uint32_t r, const in uint32_t c, const in float elem, const in uint32_t c0) {
+    sh_sh[r * LDP + c0 + c] = OPD(elem);
+    return elem;
+}
+
+float StoreLo(const in uint32_t r, const in uint32_t c, const in float elem, const in uint32_t c0) {
+    sh_sl[r * LDP + c0 + c] = OPD(elem - float(OPD(elem)));
     return elem;
 }
 
@@ -92,13 +98,8 @@ float StoreDeltaV(const in uint32_t r, const in uint32_t c, const in float ks, c
     return ks;
 }
 
-float StoreSolved(const in uint32_t r, const in uint32_t c, const in float elem) {
-    const uint i = c * LDV + r;
-    split(elem, sh_dh[i], sh_dl[i]);
-    // The state mirror is no longer needed after KS/QS.
-    const uint j = r * LDP + c;
-    split(sh_carry[c] * elem, sh_sh[j], sh_sl[j]);
-    return elem;
+float ScaleCarry(const in uint32_t r, const in uint32_t c, const in float elem) {
+    return sh_carry[c] * elem;
 }
 
 float StoreOut(const in uint32_t r, const in uint32_t c, const in float elem,
@@ -146,8 +147,9 @@ void stage_inputs(const in float q[NQK], const in float k[NQK]) {
     }
 }
 
-// [K; Q] * K^T computes Gram and P in one 32-row matrix.
-void gram_pmat() {
+// [K; Q] * K^T computes Gram and P in one 32-row matrix. Each state block's
+// hi/lo split for the S*K^T/S*Q^T products runs interleaved with these MMAs.
+void gram_pmat(in coopmat<float, WG, V, KT, MACC> state[D / KT]) {
     coopmat<float, WG, KQ_ROWS, C, MACC> x = coopmat<float, WG, KQ_ROWS, C, MACC>(0.0);
     [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
         coopmat<OPD, WG, KQ_ROWS, KT, MUA> ah, al;
@@ -157,17 +159,20 @@ void gram_pmat() {
         coopMatLoad(bh, sh_kqh, kk, LDP, COL);
         coopMatLoad(bl, sh_kql, kk, LDP, COL);
         PRODUCT(x, ah, al, bh, bl);
+        coopMatPerElementNV(state[kk / KT], state[kk / KT], StoreHi, kk);
+        coopMatPerElementNV(state[kk / KT], state[kk / KT], StoreLo, kk);
     }
     coopMatPerElementNV(x, x, StoreGramPmat);
 }
 
-void invert() {
+// The elimination steps only write registers; store_inverse() runs after the
+// S*K^T/S*Q^T products, so the compiler can overlap the steps with them.
+void invert(out float x[C / (2 * NSUB)]) {
     const uint col = gl_SubgroupInvocationID % C;
     // Each half-subgroup covers all columns of its assigned rows.
     const uint section = gl_SubgroupInvocationID / C;
     const uint row_base = (gl_SubgroupID * 2u + section) * (C / (2 * NSUB));
     // Keep the diagonal zero so pivots at or above the row do nothing.
-    float x[C / (2 * NSUB)];
     [[unroll]] for (uint j = 0; j < C / (2 * NSUB); ++j) {
         const uint row = row_base + j;
         x[j] = col < row ? -sh_lower[row * (row - 1) / 2 + col] : 0.0;
@@ -179,6 +184,11 @@ void invert() {
             x[j] -= xp * lower;
         }
     }
+}
+
+void store_inverse(const in float x[C / (2 * NSUB)]) {
+    const uint col = gl_SubgroupInvocationID % C;
+    const uint row_base = (gl_SubgroupID * 2u + gl_SubgroupInvocationID / C) * (C / (2 * NSUB));
     [[unroll]] for (uint j = 0; j < C / (2 * NSUB); ++j) {
         const uint row = row_base + j;
         split(col == row ? 1.0 : x[j], sh_ih[row * C + col], sh_il[row * C + col]);
@@ -195,17 +205,25 @@ float replay_update(const in uint32_t r, const in uint32_t c, const in float s, 
     return s + data_pk[k_off + c] * (beta * (data_pv[v_off + r] - dot));
 }
 
-void replay(inout coopmat<float, WG, V, D, MACC> state, uint seq_id, uint head_id, uint iq1, uint v0) {
+// The products of the state blocks with their slices of k are summed per
+// element first, so one row reduction gives the dot product over all of D.
+void replay(inout coopmat<float, WG, V, KT, MACC> state[D / KT], uint seq_id, uint head_id, uint iq1, uint v0) {
     const uint n_rep = replay_count(seq_id);
     [[dont_unroll]] for (uint t = 0; t < n_rep; ++t) {
         uint k_off, v_off;
         float decay, beta;
         replay_inputs(seq_id, head_id, iq1, t, k_off, v_off, decay, beta);
-        state *= decay;
-        coopmat<float, WG, V, D, MACC> dot;
-        coopMatPerElementNV(dot, state, replay_product, k_off);
+        coopmat<float, WG, V, KT, MACC> dot = coopmat<float, WG, V, KT, MACC>(0.0);
+        [[unroll]] for (uint b = 0; b < D / KT; ++b) {
+            state[b] *= decay;
+            coopmat<float, WG, V, KT, MACC> prod;
+            coopMatPerElementNV(prod, state[b], replay_product, k_off + b * KT);
+            dot += prod;
+        }
         coopMatReduceNV(dot, dot, gl_CooperativeMatrixReduceRowNV, replay_sum);
-        coopMatPerElementNV(state, state, replay_update, dot, k_off, v_off + v0, beta);
+        [[unroll]] for (uint b = 0; b < D / KT; ++b) {
+            coopMatPerElementNV(state[b], state[b], replay_update, dot, k_off + b * KT, v_off + v0, beta);
+        }
     }
 }
 #endif
@@ -224,8 +242,11 @@ void main() {
     const uint out_base = (seq_id * p.n_tokens * p.H + head_id) * D + v0;
 
     // Transposing the state-side products gives them V=32 rows with C=16 columns.
-    coopmat<float, WG, V, D, MACC> state;
-    coopMatLoad(state, data_state, state_base, D, ROW);
+    // It is kept as one [V x KT] block per K-tile.
+    coopmat<float, WG, V, KT, MACC> state[D / KT];
+    [[unroll]] for (uint t = 0; t < D / KT; ++t) {
+        coopMatLoad(state[t], data_state, state_base + t * KT, D, ROW);
+    }
 
 #ifdef GDN_REPLAY
     replay(state, seq_id, head_id, iq1, v0);
@@ -267,11 +288,10 @@ void main() {
         // Current inputs are in shared memory; keep the next chunk in registers.
         prefetch(t0 + C, q_base, k_base, gb_base, qreg, kreg, greg, breg);
 
-        gram_pmat();
+        gram_pmat(state);
         barrier();
-        invert();
-        coopMatPerElementNV(state, state, SplitRowS);
-        barrier();
+        float inv[C / (2 * NSUB)];
+        invert(inv);
 
         coopmat<float, WG, V, C, MACC> ks = coopmat<float, WG, V, C, MACC>(0.0), base_r = coopmat<float, WG, V, C, MACC>(0.0);
         [[unroll]] for (uint kk = 0; kk < D; kk += KT) {
@@ -286,6 +306,7 @@ void main() {
             PRODUCT(ks, ah, al, kh, kl);
             PRODUCT(base_r, ah, al, qh, ql);
         }
+        store_inverse(inv);
         coopMatPerElementNV(base_r, base_r, ApplyExpPrefix);
         coopMatPerElementNV(ks, ks, StoreDeltaV, vmat);
         barrier();
@@ -300,15 +321,21 @@ void main() {
             coopMatLoad(il, sh_il, 0, C, COL);
             PRODUCT(solved, rh, rl, ih, il);
         }
-        barrier();
-        coopMatPerElementNV(solved, solved, StoreSolved);
+        // The state mirror is no longer needed after KS/QS. Unlike the delta
+        // buffer, it needs no barrier before solved is stored there.
+        coopmat<float, WG, V, C, MACC> carry_solved;
+        coopMatPerElementNV(carry_solved, solved, ScaleCarry);
+        coopMatPerElementNV(carry_solved, carry_solved, StoreHi, 0u);
+        coopMatPerElementNV(carry_solved, carry_solved, StoreLo, 0u);
+        coopMatPerElementNV(solved, solved, StoreHi, uint(C));
+        coopMatPerElementNV(solved, solved, StoreLo, uint(C));
         barrier();
 
         {
             coopmat<OPD, WG, V, C, MUA> xh, xl;
             coopmat<OPD, WG, C, C, MUB> ph, pl;
-            coopMatLoad(xh, sh_dh, 0, LDV, COL);
-            coopMatLoad(xl, sh_dl, 0, LDV, COL);
+            coopMatLoad(xh, sh_sh, C, LDP, ROW);
+            coopMatLoad(xl, sh_sl, C, LDP, ROW);
             coopMatLoad(ph, sh_ph, 0, C, COL);
             coopMatLoad(pl, sh_pl, 0, C, COL);
             PRODUCT(base_r, xh, xl, ph, pl);
@@ -316,14 +343,18 @@ void main() {
         coopMatPerElementNV(base_r, base_r, StoreOut, out_base + t0 * (p.H * D), valid);
 
         coopmat<OPD, WG, V, C, MUA> xh, xl;
-        coopmat<OPD, WG, C, D, MUB> kh, kl;
         coopMatLoad(xh, sh_sh, 0, LDP, ROW);
         coopMatLoad(xl, sh_sl, 0, LDP, ROW);
-        coopMatLoad(kh, sh_kqh, 0, LDP, ROW);
-        coopMatLoad(kl, sh_kql, 0, LDP, ROW);
-        state *= sh_ep[valid - 1];
-        PRODUCT(state, xh, xl, kh, kl);
+        [[unroll]] for (uint t = 0; t < D / KT; ++t) {
+            coopmat<OPD, WG, C, KT, MUB> kh, kl;
+            coopMatLoad(kh, sh_kqh, t * KT, LDP, ROW);
+            coopMatLoad(kl, sh_kql, t * KT, LDP, ROW);
+            state[t] *= sh_ep[valid - 1];
+            PRODUCT(state[t], xh, xl, kh, kl);
+        }
     }
 
-    coopMatStore(state, data_dst, p.s_off + state_base, D, ROW);
+    [[unroll]] for (uint t = 0; t < D / KT; ++t) {
+        coopMatStore(state[t], data_dst, p.s_off + state_base + t * KT, D, ROW);
+    }
 }

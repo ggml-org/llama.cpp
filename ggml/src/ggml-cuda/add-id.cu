@@ -2,26 +2,28 @@
 
 static __global__ void add_id_kernel(
         const float * src0, const float * src1, const int32_t * src2, float * dst,
-        int64_t ne0, int64_t ne1,
+        int64_t ne0, int64_t ne1, int64_t ne2,
         size_t nb01, size_t nb02,
         size_t nb11,
         size_t nb21
     ) {
 
     const int64_t i1 = blockIdx.x;
-    const int64_t i2 = blockIdx.y;
 
-    const int i11 = *(const int32_t *) ((const char *) src2 + i1*sizeof(int32_t) + i2*nb21);
+    // gridDim.y is capped at 65535, blocks stride over larger ne2
+    for (int64_t i2 = blockIdx.y; i2 < ne2; i2 += gridDim.y) {
+        const int i11 = *(const int32_t *) ((const char *) src2 + i1*sizeof(int32_t) + i2*nb21);
 
-    const size_t nb1 = ne0 * sizeof(float);
-    const size_t nb2 = ne1 * nb1;
+        const size_t nb1 = ne0 * sizeof(float);
+        const size_t nb2 = ne1 * nb1;
 
-    float * dst_row = (float *)((char *)dst + i1*nb1 + i2*nb2);
-    const float * src0_row = (const float *)((const char *)src0 +  i1*nb01 + i2*nb02);
-    const float * src1_row = (const float *)((const char *)src1 + i11*nb11);
+        float * dst_row = (float *)((char *)dst + i1*nb1 + i2*nb2);
+        const float * src0_row = (const float *)((const char *)src0 +  i1*nb01 + i2*nb02);
+        const float * src1_row = (const float *)((const char *)src1 + i11*nb11);
 
-    for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
-        dst_row[i0] = src0_row[i0] + src1_row[i0];
+        for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
+            dst_row[i0] = src0_row[i0] + src1_row[i0];
+        }
     }
 }
 
@@ -47,10 +49,10 @@ void ggml_cuda_op_add_id(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     float * dst_d = (float *)dst->data;
 
     int threads = std::min((int)ne00, 768); // cols
-    dim3 blocks(ne01, ne02); // n_experts_used, n_tokens
+    dim3 blocks(ne01, std::min(ne02, (int64_t)65535)); // n_experts_used, n_tokens
     add_id_kernel<<<blocks, threads, 0, ctx.stream()>>>(
         src0_d, src1_d, src2_d, dst_d,
-        ne0, ne1,
+        ne0, ne1, ne2,
         nb01, nb02,
         nb11,
         nb21

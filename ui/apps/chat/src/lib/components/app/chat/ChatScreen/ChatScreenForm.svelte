@@ -17,7 +17,6 @@
 		onFileUpload?: (files: File[]) => void;
 		onSend?: (message: string, files?: ChatUploadedFile[]) => Promise<boolean>;
 		onStop?: () => void;
-		onSystemPromptAdd?: (draft: { message: string; files: ChatUploadedFile[] }) => void;
 		uploadedFiles?: ChatUploadedFile[];
 	}
 
@@ -29,7 +28,6 @@
 		onFileUpload,
 		onSend,
 		onStop,
-		onSystemPromptAdd,
 		uploadedFiles = $bindable([])
 	}: Props = $props();
 
@@ -111,16 +109,10 @@
 		}
 	}
 
-	// With system messages hidden in the conversation there is nothing to edit in place, so the
-	// form itself turns into the system message editor
+	// The form itself turns into the system message editor, whether or not the conversation
+	// shows its system message
 
 	function handleSystemPromptClick() {
-		if (settingsStore.config[SETTINGS_KEYS.SHOW_SYSTEM_MESSAGE] ?? true) {
-			onSystemPromptAdd?.({ files: uploadedFiles, message });
-
-			return;
-		}
-
 		const existing = conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM);
 
 		stashedDraft = { files: uploadedFiles, message };

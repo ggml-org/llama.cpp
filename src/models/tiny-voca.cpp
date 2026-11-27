@@ -120,7 +120,7 @@ llama_model_tiny_voca::graph::graph(const llm_graph_params & params) : llm_graph
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    layer.wo, layer.wo_b, layer.wo_s,
+                    layer.wo, layer.wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "kqv_out", il);
         }
@@ -144,9 +144,9 @@ llama_model_tiny_voca::graph::graph(const llm_graph_params & params) : llm_graph
         }
 
         cur = build_ffn(cur,
-                layer.ffn_up,   layer.ffn_up_b,   NULL,
-                NULL,           NULL,             NULL,
-                layer.ffn_down, layer.ffn_down_b, NULL, NULL,
+                layer.ffn_up,   layer.ffn_up_b,
+                NULL,           NULL,
+                layer.ffn_down, layer.ffn_down_b, NULL,
                 LLM_FFN_GELU_ERF, LLM_FFN_SEQ, il);
         cb(cur, "ffn_out", il);
 

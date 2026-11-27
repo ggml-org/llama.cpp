@@ -291,6 +291,19 @@ typedef struct {
 } ggml_metal_kargs_add_id;
 
 typedef struct {
+    int64_t  ne0;
+    int64_t  ne2;
+    uint64_t nb1;
+    uint64_t nb2;
+    uint64_t nb3;
+    uint64_t s_nb0;
+    uint64_t s_nb1;
+    uint64_t ids_nb0;
+    uint64_t ids_nb1;
+    int32_t  use_ids;
+} ggml_metal_kargs_mul_mat_scale;
+
+typedef struct {
     int32_t  ne00;
     int32_t  ne01;
     int32_t  ne02;

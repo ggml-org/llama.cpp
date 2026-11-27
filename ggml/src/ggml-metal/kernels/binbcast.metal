@@ -205,6 +205,35 @@ kernel void kernel_add_id(
     }
 }
 
+kernel void kernel_mul_mat_scale(
+        constant ggml_metal_kargs_mul_mat_scale & args,
+        device const char * scale,
+        device const char * ids,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort3 tpitg[[thread_position_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int i1 = tgpig.x;
+    const int i2 = tgpig.y % args.ne2;
+    const int i3 = tgpig.y / args.ne2;
+
+    device const char * s = scale;
+
+    if (args.use_ids) {
+        const int32_t expert = *((device const int32_t *) (ids + i1*args.ids_nb0 + i2*args.ids_nb1));
+        if (expert < 0) {
+            return;
+        }
+        s += expert*args.s_nb1;
+    }
+
+    device float * dst_row = (device float *) (dst + i1*args.nb1 + i2*args.nb2 + i3*args.nb3);
+
+    for (int i0 = tpitg.x; i0 < args.ne0; i0 += ntg.x) {
+        dst_row[i0] *= *((device const float *) (s + i0*args.s_nb0));
+    }
+}
+
 template<typename T>
 kernel void kernel_repeat(
         constant ggml_metal_kargs_repeat & args,

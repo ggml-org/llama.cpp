@@ -1933,8 +1933,8 @@ static __device__ __forceinline__ void flash_attn_ext_f16_process_tile(
 
                         if (!needs_fixup && !is_fixup) {
                             const float KQ_rowsum_j = meta_j[1];
-                            dstk_val.x /= KQ_rowsum_j;
-                            dstk_val.y /= KQ_rowsum_j;
+                            dstk_val.x = fattn_normalize(dstk_val.x, KQ_rowsum_j);
+                            dstk_val.y = fattn_normalize(dstk_val.y, KQ_rowsum_j);
                         }
 
                         if (is_fixup) {
@@ -1992,7 +1992,9 @@ static __global__ void flash_attn_ext_f16(
                             const int32_t s11,  const int32_t s12,  const int64_t s13,
                             const int32_t s21,  const int32_t s22,  const int64_t s23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
-                            const int32_t s31,  const int64_t s32,  const int64_t s33) {
+                            const int32_t s31,  const int64_t s32,  const int64_t s33,
+        const fattn_indexed_bias bias) {
+    GGML_UNUSED(bias); // biased ops are never dispatched to the mma kernel
     ggml_cuda_pdl_sync(); // TODO optimize placement
 #if defined(FLASH_ATTN_AVAILABLE) && (defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE))
     using T_K = decltype(ggml_cuda_fattn_kv_dtype<type_K>());
@@ -2199,7 +2201,8 @@ static __global__ void flash_attn_ext_f16(
 bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_tensor * dst, const int ncols1, const int ncols2);
 
 bool ggml_cuda_fattn_ext_use_gqa_opt(
-        const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * mask, const float max_bias);
+        const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * mask,
+        const ggml_tensor * kv_rows, const float max_bias);
 // GGML_CUDA_FATTN_MMA_FUSED: 0 disables the fused dequant path, 2 requires it where supported (routing tests), default enabled.
 static int ggml_cuda_fattn_mma_f16_fused_q_switch() {
     static const int value = []() {
@@ -2404,7 +2407,7 @@ void ggml_cuda_flash_attn_ext_mma_f16_case(ggml_backend_cuda_context & ctx, ggml
     const size_t nbytes_shared_ref = nbytes_shared_total;
     // The fused route is decided after the kernel selection above: fused_q_supported consumes the sparse predicate.
     const bool fused_q = ggml_cuda_fattn_mma_f16_fused_q_switch() != 0 &&
-        ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, mask, max_bias) &&
+        ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, mask, dst->src[5], max_bias) &&
         ggml_cuda_fattn_mma_f16_fused_q_supported(K, V, DKQ, DV, ncols2, nstages, use_sparse, logit_softcap != 0.0f);
     const int fused_K = fused_q ? ggml_cuda_fattn_mma_fused_type_from_ggml(K->type) : FATTN_MMA_FUSED_NONE;
     const int fused_V = fused_q ? ggml_cuda_fattn_mma_fused_type_from_ggml(V->type) : FATTN_MMA_FUSED_NONE;

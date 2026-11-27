@@ -20,10 +20,13 @@
 		modalities: ModelModalities;
 		hasTools: boolean;
 		hasReasoning: boolean;
+		/** Leaner pane for a narrow host such as Search: no Hugging Face link, no description. */
+		compact?: boolean;
 	}
 
 	let {
 		baseModels,
+		compact = false,
 		details,
 		gguf,
 		hasReasoning,
@@ -83,23 +86,25 @@
 			</div>
 		</div>
 
-		<Button
-			class="h-auto gap-1.5 px-2.5 py-1.5 text-caption"
-			href={HuggingFaceService.getModelUrl(modelId)}
-			rel="noopener noreferrer"
-			size="sm"
-			target="_blank"
-			variant="secondary"
-		>
-			<img alt="" class="size-3.5" src={asset('recommended-mcp/huggingface.ico')} />
+		{#if !compact}
+			<Button
+				class="h-auto gap-1.5 px-2.5 py-1.5 text-caption"
+				href={HuggingFaceService.getModelUrl(modelId)}
+				rel="noopener noreferrer"
+				size="sm"
+				target="_blank"
+				variant="secondary"
+			>
+				<img alt="" class="size-3.5" src={asset('recommended-mcp/huggingface.ico')} />
 
-			View on Hugging Face
+				View on Hugging Face
 
-			<ExternalLink class="size-3.5" />
-		</Button>
+				<ExternalLink class="size-3.5" />
+			</Button>
+		{/if}
 	</div>
 
 	<ModelsDiscoverDetailsHfHubStats {details} />
 
-	<ModelsDiscoverDetailsMetadata {details} {gguf} {licenseTag} {modelId} />
+	<ModelsDiscoverDetailsMetadata {compact} {details} {gguf} {licenseTag} {modelId} />
 </header>

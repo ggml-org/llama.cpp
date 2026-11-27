@@ -9,6 +9,7 @@
 import { lastPathSegment } from './path-display';
 import {
 	GLOB,
+	HIDDEN_NAME_PREFIX,
 	HOME_TILDE,
 	HOME_TILDE_PREFIX,
 	LEADING_SLASHES_REGEX,
@@ -30,6 +31,19 @@ export interface PathQuery {
 function toPosixSeparators(query: string): string {
 	if (!GLOB.DRIVE_PREFIX_REGEX.test(query) && !query.startsWith(GLOB.WINDOWS_SEPARATOR))
 		return query;
+
+	return query.split(GLOB.WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
+}
+
+/**
+ * The query with `\\` rewritten into `/` when the scope it is searched in is a
+ * Windows path (`C:/Users/al`, `//host/share`), so `git\\llama` is a path there
+ * too. Under a POSIX scope the backslash stays: it is a legal filename character.
+ */
+export function toScopeSeparators(query: string, scope: string): string {
+	const isWindowsScope = GLOB.DRIVE_PREFIX_REGEX.test(scope) || GLOB.UNC_ROOT_REGEX.test(scope);
+
+	if (!isWindowsScope) return query;
 
 	return query.split(GLOB.WINDOWS_SEPARATOR).join(PATH_SEPARATOR);
 }
@@ -86,10 +100,11 @@ export function toHomeRelativeQuery(query: string, home?: string | null): string
 	return home ? joinPath(home, query) : HOME_TILDE_PREFIX + query;
 }
 
-export function buildCaseInsensitiveGlob(query: string): string {
-	let out = GLOB.WILDCARD;
+/** Glob fragment matching `text` in any letter case, with glob metacharacters taken literally. */
+function toCaseInsensitiveFragment(text: string): string {
+	let out = '';
 
-	for (const c of query) {
+	for (const c of text) {
 		const lo = c.toLowerCase();
 		const up = c.toUpperCase();
 
@@ -100,7 +115,70 @@ export function buildCaseInsensitiveGlob(query: string): string {
 		else out += c;
 	}
 
-	return out + GLOB.WILDCARD;
+	return out;
+}
+
+export function buildCaseInsensitiveGlob(query: string): string {
+	return GLOB.WILDCARD + toCaseInsensitiveFragment(query) + GLOB.WILDCARD;
+}
+
+/**
+ * Globs that together match every name within one typo of `query`: each one
+ * swaps a pair of neighbouring characters for a wildcard, which covers a
+ * wrong, missing, extra or swapped character there. They match far more than
+ * that, so the results are filtered with `fuzzyDistance`.
+ */
+export function buildFuzzyGlobs(query: string): string[] {
+	const chars = [...query];
+
+	if (chars.length < SEARCH.FUZZY_MIN_QUERY_LENGTH || chars.length > SEARCH.FUZZY_MAX_QUERY_LENGTH)
+		return [];
+
+	const globs = new Set<string>();
+
+	for (let i = 0; i + 1 < chars.length; i++) {
+		const kept = [chars.slice(0, i), chars.slice(i + 2)]
+			.filter((part) => part.length > 0)
+			.map((part) => toCaseInsensitiveFragment(part.join('')));
+
+		globs.add(GLOB.WILDCARD + kept.join(GLOB.WILDCARD) + GLOB.WILDCARD);
+	}
+
+	return [...globs];
+}
+
+/**
+ * Fewest single-character edits (a wrong, missing, extra or swapped
+ * character) that turn `query` into some part of `text`, ignoring case.
+ */
+export function fuzzyDistance(text: string, query: string): number {
+	const t = [...text.toLowerCase()];
+	const q = [...query.toLowerCase()];
+
+	// a match may start anywhere in the text, so the first row costs nothing
+	let previous: number[] = new Array(t.length + 1).fill(0);
+	let beforePrevious: number[] = [];
+
+	for (let i = 1; i <= q.length; i++) {
+		const row = [i];
+
+		for (let j = 1; j <= t.length; j++) {
+			const substitution = previous[j - 1] + (q[i - 1] === t[j - 1] ? 0 : 1);
+
+			let best = Math.min(previous[j] + 1, row[j - 1] + 1, substitution);
+
+			if (i > 1 && j > 1 && q[i - 1] === t[j - 2] && q[i - 2] === t[j - 1]) {
+				best = Math.min(best, beforePrevious[j - 2] + 1);
+			}
+
+			row.push(best);
+		}
+
+		beforePrevious = previous;
+		previous = row;
+	}
+
+	return Math.min(...previous);
 }
 
 export function buildGlobSearchArgs(
@@ -138,9 +216,24 @@ function rankScore(path: string, query: string): number {
 	return RANK_OTHER;
 }
 
+/** True when the path is, or sits inside, a hidden folder (`.config/llama`, `git\\.cache`). */
+export function isHiddenPath(path: string): boolean {
+	return toPosixSeparators(path)
+		.split(PATH_SEPARATOR)
+		.some((segment) => segment.startsWith(HIDDEN_NAME_PREFIX));
+}
+
+/**
+ * Regular entries come before hidden ones, unless the query itself asks for a
+ * hidden name (`.config`). Within each group the best name match wins.
+ */
 export function rankEntries(entries: GlobEntry[], query: string): GlobEntry[] {
+	const hiddenRank = (path: string) =>
+		!query.startsWith(HIDDEN_NAME_PREFIX) && isHiddenPath(path) ? 1 : 0;
+
 	return [...entries].sort(
 		(a, b) =>
+			hiddenRank(a.path) - hiddenRank(b.path) ||
 			rankScore(a.path, query) - rankScore(b.path, query) ||
 			a.path.length - b.path.length ||
 			a.path.localeCompare(b.path)

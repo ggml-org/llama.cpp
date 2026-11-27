@@ -251,6 +251,8 @@ export interface ChatCommandsOptions {
 	hasPrompts: () => boolean;
 	/** Gates `/cwd`. */
 	hasCwdTools: () => boolean;
+	/** Gates `/system-message`. */
+	canEditSystemMessage: () => boolean;
 }
 
 /** Protocol-level verbs accepted by the realtime inference control endpoint. Mirrors `CONTROL_ACTION`. */
@@ -263,6 +265,8 @@ export interface ChatFormCommand {
 	keywords?: string[];
 	action: ChatFormCommandAction;
 	disabled: boolean;
+	/** Takes an argument after a space (`/cwd ~/git`); the others end at their name. */
+	takesArgument?: boolean;
 }
 
 /**
@@ -324,6 +328,8 @@ export interface ChatMessageActionsContext {
 	setShowForkDialog: (show: boolean) => void;
 	navigateToSibling: (siblingId: string) => void;
 	forkConversation?: (options: { name: string; includeAttachments: boolean }) => void;
+	/** Shares the conversation up to this message; absent in a build without sharing. */
+	share?: () => void;
 }
 
 export interface ChatMessageEditState {

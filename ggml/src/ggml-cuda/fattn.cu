@@ -162,8 +162,11 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
 // The GQA optimizations require a mask shared by all Q heads of a K/V head, so they are skipped for ALiBi, no mask, per-head
 // masks (mask->ne[2] > 1), or unpadded KV. As the fused gate's ncols2 prediction it must stay identical to switch_ncols2/get_best_fattn_kernel.
 bool ggml_cuda_fattn_ext_use_gqa_opt(
-        const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * mask, const float max_bias) {
-    bool use_gqa_opt = mask && mask->ne[2] == 1 && max_bias == 0.0f && K->ne[1] % FATTN_KQ_STRIDE == 0;
+        const ggml_tensor * Q, const ggml_tensor * K, const ggml_tensor * V, const ggml_tensor * mask,
+        const ggml_tensor * kv_rows, const float max_bias) {
+    // same KV extent as the upstream routing predicates: with kv_rows the kernel iterates over the row list, not the cache
+    const int64_t n_kv = kv_rows ? kv_rows->ne[0] : K->ne[1];
+    bool use_gqa_opt = mask && mask->ne[2] == 1 && max_bias == 0.0f && n_kv % FATTN_KQ_STRIDE == 0;
     for (const ggml_tensor * t : {Q, K, V, mask}) {
         if (t == nullptr || ggml_is_quantized(t->type)) {
             continue;
@@ -512,7 +515,6 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
     FATTN_VEC_CASE( 64, type_K_case, type_V_case)       \
     FATTN_VEC_CASE(128, type_K_case, type_V_case)       \
     FATTN_VEC_CASE(256, type_K_case, type_V_case)       \
-    FATTN_VEC_CASE(512, type_K_case, type_V_case)       \
 
 typedef void (* fattn_vec_case_t)(ggml_backend_cuda_context & ctx, ggml_tensor * dst);
 
@@ -615,9 +617,6 @@ static void ggml_cuda_flash_attn_ext_vec(ggml_backend_cuda_context & ctx, ggml_t
     vec_case(ctx, dst);
 }
 
-// Defined below, together with the fused-path allocation predictor:
-static bool ggml_cuda_fattn_mma_f16_fused_q_applies(const int cc, const ggml_tensor * dst);
-
 // Best FlashAttention kernel for a specific GPU:
 enum best_fattn_kernel {
     BEST_FATTN_KERNEL_NONE    =   0,
@@ -650,16 +649,16 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_NONE;
 #endif// FLASH_ATTN_AVAILABLE
 
-    if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
-        return BEST_FATTN_KERNEL_NONE;
-    }
-
     const ggml_tensor * KQV   = dst;
     const ggml_tensor * Q     = dst->src[0];
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * kv_rows = dst->src[5];
+
+    if (!ggml_validate_flash_attn_ext_indexed_bias(dst)) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
 
     // with kv_rows the kernel iterates over the mask columns
     const int64_t n_kv = kv_rows ? kv_rows->ne[0] : K->ne[1];
@@ -741,6 +740,20 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
+    // the tile and vec kernels implement the indexed bias, the mma kernel does not
+    if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
+        float logit_softcap;
+        memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+        if (Q->ne[0] != 128 && !(Q->ne[0] == 64 && logit_softcap == 0.0f)) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        if (logit_softcap == 0.0f && Q->ne[1] == 1 && n_kv % FATTN_KQ_STRIDE == 0 &&
+                ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type)) {
+            return BEST_FATTN_KERNEL_VEC;
+        }
+        return BEST_FATTN_KERNEL_TILE;
+    }
+
     if (mask && mask->ne[2] != 1) {
         // the kv_rows mask is compacted per sequence, it has no head dimension
         if (kv_rows) {
@@ -754,35 +767,15 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
     }
 
+    // without a bias only the MMA kernel reads K/V through kv_rows
+    if (kv_rows) {
+        return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72 ?
+            BEST_FATTN_KERNEL_MMA_F16 : BEST_FATTN_KERNEL_NONE;
+    }
+
     // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
-    // The MMA kernel and the vector kernel can read K/V through the kv_rows gather list:
-    if (kv_rows) {
-        if (!GGML_CUDA_CC_IS_NVIDIA(cc) || !turing_mma_available(cc) || !mask || Q->ne[0] == 40 || Q->ne[0] == 72) {
-            return BEST_FATTN_KERNEL_NONE;
-        }
-        // Decode-shaped ops on quantized or f8_e4m3 caches go to the vec kernel with its kv_rows gather, unless the fused MMA dequant
-        // applies (fused beats vec at depth there); the f16 fallback can't read kv_rows, so a compiled vec instance is required
-        // (ggml_is_quantized excludes f8_e4m3, which needs its own clause).
-        const bool vec_rows_types_ok =
-            (ggml_is_quantized(K->type) || K->type == GGML_TYPE_F8_E4M3) &&
-            (ggml_is_quantized(V->type) || V->type == GGML_TYPE_F8_E4M3);
-        // vec@512 lives only in this lane: the general route keeps upstream's <=256 cap (Nov 19: a relaxed general cap
-        // diverted head-512 general-lane ops to vec, breaking sha + decode parity with master at dsv41/gemma-4).
-        const bool can_use_vec_rows = Q->ne[0] <= 512 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
-        // With the fused switch fully off, select kernels exactly like upstream master (kv_rows -> MMA + f16
-        // dequant copy): vec-gather only complements fused, and it loses to that route at deep 128-class caches.
-        if (ggml_cuda_fattn_mma_f16_fused_q_switch() != 0 &&
-                cc >= GGML_CUDA_CC_ADA_LOVELACE && can_use_vec_rows &&
-                Q->ne[1] <= 2 &&
-                vec_rows_types_ok &&
-                ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr &&
-                !ggml_cuda_fattn_mma_f16_fused_q_applies(cc, dst)) {
-            return BEST_FATTN_KERNEL_VEC;
-        }
-        return BEST_FATTN_KERNEL_MMA_F16;
-    }
 
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc)) {
@@ -914,7 +907,7 @@ static bool ggml_cuda_fattn_mma_f16_fused_q_applies(const int cc, const ggml_ten
     float logit_softcap = 0.0f;
     memcpy(&logit_softcap, (const float *) dst->op_params + 2, sizeof(float));
     const int gqa_ratio = Q->ne[2] / K->ne[2];
-    const bool use_gqa_opt = ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, dst->src[3], max_bias);
+    const bool use_gqa_opt = ggml_cuda_fattn_ext_use_gqa_opt(Q, K, V, dst->src[3], dst->src[5], max_bias);
     // Mirror of switch_ncols2 (Volta's %-rules can differ but never fuse there: nstages = 0 without cp.async).
     const int ncols2 = !use_gqa_opt ? 1 : gqa_ratio > 4 ? 8 : gqa_ratio > 2 ? 4 : gqa_ratio > 1 ? 2 : 1;
     if (ncols2 == 1) {

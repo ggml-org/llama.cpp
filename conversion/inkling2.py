@@ -65,6 +65,26 @@ def _dequant_expert_chunk(weight: Callable[[], Tensor], scale: Callable[[], Tens
     return values
 
 
+def _repack_nvfp4_rows(packed: np.ndarray, scales: np.ndarray, name: str, expert: int) -> np.ndarray:
+    if np.any(scales & 0x80) or np.any(scales == 0x7F):
+        raise ValueError(f"Inkling2: {name}_scale expert {expert}: NVFP4 block scales must be finite and nonnegative")
+    n_rows = packed.shape[0]
+    n_blocks = scales.shape[1]
+    nibbles = np.stack([packed & 0x0F, packed >> 4], axis=-1).reshape(n_rows, n_blocks, 16)
+    qs = (nibbles[:, :, :8] | (nibbles[:, :, 8:] << 4)).astype(np.uint8)
+    n_super = n_blocks // 4
+    blocks = np.concatenate([scales.reshape(n_rows, n_super, 4), qs.reshape(n_rows, n_super, 32)], axis=-1)
+    return blocks.reshape(n_rows, n_super * 36)
+
+
+def _repack_nvfp4_expert(weight: Callable[[], Tensor], scale: Callable[[], Tensor], name: str, expert: int, w13: bool) -> np.ndarray:
+    packed = LazyTorchTensor.to_eager(weight().view(torch.uint8)[expert]).numpy()
+    scales = LazyTorchTensor.to_eager(scale().view(torch.uint8)[expert]).numpy()
+    if not w13:
+        return _repack_nvfp4_rows(packed, scales, name, expert)
+    return np.concatenate([_repack_nvfp4_rows(packed[half::2], scales[half::2], name, expert) for half in (0, 1)])
+
+
 def _is_inkling2(dir_model: Path) -> bool:
     if not (dir_model / "config.json").is_file():
         return False
@@ -84,9 +104,11 @@ def _load_inkling2_hparams(dir_model: Path):
 class Inkling2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.INKLING2
 
-    def __init__(self, dir_model: Path, *args, **kwargs):
+    def __init__(self, dir_model: Path, ftype: gguf.LlamaFileType, *args, **kwargs):
         self._expert_quant: dict[str, dict] = {}
         self._packed_experts: dict[str, gguf.LazyChunkedTensor] = {}
+        self._native_experts: dict[str, tuple[gguf.LazyChunkedTensor, np.ndarray]] = {}
+        self._preserve_nvfp4 = ftype == gguf.LlamaFileType.GUESSED
         quant_path = dir_model / "hf_quant_config.json"
         if quant_path.is_file():
             with open(quant_path, encoding="utf-8") as f:
@@ -99,7 +121,7 @@ class Inkling2Model(TextModel):
                         if name in self._expert_quant:
                             raise ValueError(f"Inkling2: duplicate hf_quant_config.json scheme for {name}")
                         self._expert_quant[name] = group
-        super().__init__(dir_model, *args, **kwargs)
+        super().__init__(dir_model, ftype, *args, **kwargs)
         logger.warning("Inkling2: converting the text backbone only; vision and MTP tensors are skipped")
         hp = self.hparams
         for name, default in (("q_bias", False), ("o_bias", False), ("n_shared_experts", 0), ("use_value_norm_no_gamma", True), ("attn_res_normalize_values", True), ("scoring_func", "sigmoid")):
@@ -165,15 +187,38 @@ class Inkling2Model(TextModel):
                     t = gen()
                     if t.dtype != torch.float32 or tuple(t.shape) != expected:
                         raise ValueError(f"Inkling2: {companion}: expected F32 {expected}, got {t.dtype} {tuple(t.shape)}")
-            chunks: list[Callable[[], np.ndarray]] = []
-            for expert in range(experts):
-                for half in range(2 if w13 else 1):
-                    for start in range(0, rows // 2 if w13 else rows, _EXPERT_CHUNK_ROWS):
-                        stop = min(start + _EXPERT_CHUNK_ROWS, rows // 2 if w13 else rows)
-                        # The same packed row slice selects the weight and its scale groups.
-                        row_slice = slice(2 * start + half, 2 * stop + half, 2) if w13 else slice(start, stop)
-                        chunks.append(partial(_dequant_expert_chunk, weight, scale, amax, denominator, name, expert, row_slice))
-            self._packed_experts[name] = gguf.LazyChunkedTensor(chunks, shape, np.float32)
+            preserve_nvfp4 = nvfp4 and self._preserve_nvfp4
+            if preserve_nvfp4 and cols % 64 != 0:
+                logger.warning("Inkling2: %s: %d columns are not a multiple of 64; dequantizing NVFP4", name, cols)
+                preserve_nvfp4 = False
+            chunks: list[Callable[[], np.ndarray]]
+            if preserve_nvfp4:
+                assert amax is not None and denominator is not None
+                a = LazyTorchTensor.to_eager(amax()).numpy().astype(np.float32)
+                d = LazyTorchTensor.to_eager(denominator()).numpy().astype(np.float32)
+                if not np.isfinite(a).all() or (a < 0).any():
+                    raise ValueError(f"Inkling2: {name}_amax: expected finite nonnegative values")
+                if not np.isfinite(d).all() or (d <= 0).any():
+                    raise ValueError(f"Inkling2: {name}_outer_scale_denominator: expected finite positive value")
+                with np.errstate(over="ignore", invalid="ignore"):
+                    outer_scale = a / d
+                if not np.isfinite(outer_scale).all():
+                    raise ValueError(f"Inkling2: {name}: non-finite outer scale")
+                chunks = [partial(_repack_nvfp4_expert, weight, scale, name, expert, w13) for expert in range(experts)]
+                byte_shape = (experts, rows, cols // 64 * 36)
+                self._native_experts[name] = (gguf.LazyChunkedTensor(chunks, byte_shape, np.uint8), outer_scale)
+            else:
+                chunks = []
+                for expert in range(experts):
+                    for half in range(2 if w13 else 1):
+                        for start in range(0, rows // 2 if w13 else rows, _EXPERT_CHUNK_ROWS):
+                            stop = min(start + _EXPERT_CHUNK_ROWS, rows // 2 if w13 else rows)
+                            # The same packed row slice selects the weight and its scale groups.
+                            row_slice = slice(2 * start + half, 2 * stop + half, 2) if w13 else slice(start, stop)
+                            chunks.append(partial(_dequant_expert_chunk, weight, scale, amax, denominator, name, expert, row_slice))
+                self._packed_experts[name] = gguf.LazyChunkedTensor(chunks, shape, np.float32)
+                if not nvfp4 and self._fp8_as_q8:
+                    self._fp8_dequantized.add(name)
             self.model_tensors[name] = lambda shape=shape: torch.empty(shape, dtype=torch.float32, device="meta")
             for companion in required:
                 del self.model_tensors[companion]
@@ -181,6 +226,7 @@ class Inkling2Model(TextModel):
             t = gen()
             if not t.dtype.is_floating_point or t.element_size() == 1 or name.endswith(("_weight_scale", "_weight_amax", "_weight_outer_scale_denominator")):
                 raise ValueError(f"Inkling2: unexpected packed tensor or orphan companion {name}")
+        self._is_nvfp4 = bool(self._native_experts)
 
     @classmethod
     def filter_tensors(cls, item: tuple[str, Callable[[], Tensor]]) -> tuple[str, Callable[[], Tensor]] | None:
@@ -253,6 +299,16 @@ class Inkling2Model(TextModel):
         name = name.replace(".linear.", ".")
         if name.endswith(".o_proj.gate_proj.weight"):
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid), data_torch
+            return
+        if name in self._native_experts:
+            target = name.replace(".w13_weight", ".gate_up_proj").replace(".w2_weight", ".down_proj")
+            new_name = self.map_tensor_name(target, try_suffixes=()) + ".weight"
+            packed, scale = self._native_experts[name]
+            shape = gguf.quant_shape_from_byte_shape(packed.shape, gguf.GGMLQuantizationType.NVFP4)
+            shape_str = f"{{{', '.join(str(n) for n in reversed(shape))}}}"
+            logger.info(f"{new_name}, NVFP4 --> NVFP4, shape = {shape_str}")
+            self.gguf_writer.add_tensor(new_name, cast("np.ndarray", packed), raw_dtype=gguf.GGMLQuantizationType.NVFP4)
+            self._write_scales_tensor(new_name.removesuffix(".weight") + ".scale", scale.tolist())
             return
         if name in self._packed_experts:
             target = name.replace(".w13_weight", ".gate_up_proj").replace(".w2_weight", ".down_proj")
