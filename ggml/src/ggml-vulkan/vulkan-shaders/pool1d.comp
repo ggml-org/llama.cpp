@@ -1,5 +1,10 @@
 #version 450
 
+#if defined(USE_SUBGROUP)
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#endif
+
 #include "types.glsl"
 
 #extension GL_EXT_shader_16bit_storage : require
@@ -15,18 +20,27 @@ layout(push_constant) uniform parameter {
     int p0;
 } p;
 
-#define BLOCK_SIZE 512
+layout(constant_id = 0) const uint BLOCK_SIZE = 512;
 #define FLT_MAX 3.402823466e+38F
 #define OP_POOL_MAX 0u
 #define OP_POOL_AVG 1u
 
-layout (local_size_x = BLOCK_SIZE, local_size_y = 1, local_size_z = 1) in;
+layout (local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout(binding = 0) readonly buffer X {A_TYPE data_a[];};
 layout(binding = 1) writeonly buffer D {D_TYPE data_d[];};
 
 void main() {
-    const uint idx = gl_GlobalInvocationID.x;
+    const uint workgroup = gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x;
+#if defined(USE_SUBGROUP)
+    const uint idx = workgroup * gl_NumSubgroups + gl_SubgroupID;
+    const int lane = int(gl_SubgroupInvocationID);
+    const int step = int(gl_SubgroupSize);
+#else
+    const uint idx = workgroup * BLOCK_SIZE + gl_LocalInvocationID.x;
+    const int lane = 0;
+    const int step = 1;
+#endif
     if (idx >= p.pelements) {
         return;
     }
@@ -51,7 +65,7 @@ void main() {
     }
 
     #pragma unroll
-    for (uint i = bl; i < el; i++) {
+    for (int i = bl + lane; i < el; i += step) {
         const float cur = D_TYPE(data_a[nc * p.IL + i]);
 
         if (p.op == OP_POOL_AVG) {
@@ -61,5 +75,11 @@ void main() {
         }
     }
 
+#if defined(USE_SUBGROUP)
+    res = p.op == OP_POOL_AVG ? subgroupAdd(res) : subgroupMax(res);
+    if (!subgroupElect()) {
+        return;
+    }
+#endif
     data_d[nc * p.OL + cur_ol] = res;
 }
