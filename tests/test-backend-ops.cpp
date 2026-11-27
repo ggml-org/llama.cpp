@@ -6182,6 +6182,9 @@ struct test_gated_delta_net_replay : public test_case {
                 init_tensor_uniform(t, -2.0f, 2.0f);
             } else if (strcmp(t->name, "pend_gb") == 0) {
                 // the gates < 0, then the betas in [0, 1] (element 0 of each gate group)
+                // Gates down to -20 leave almost nothing of the state for the replayed
+                // updates to depend on. Keep them mild with prefill sizes, like g.
+                const float g_min = n_seq_tokens >= 64 ? -0.125f : -20.0f;
                 std::vector<float> data(ggml_nelements(t), 0.0f);
                 std::uniform_real_distribution<float> u(0.0f, 1.0f);
                 for (int64_t s = 0; s < n_seqs; ++s) {
@@ -6189,7 +6192,7 @@ struct test_gated_delta_net_replay : public test_case {
                         float * row = data.data() + (s*2*n_pend + r)*g0*H;
                         for (int64_t h = 0; h < H; ++h) {
                             if (r < n_pend) {
-                                for (int64_t j = 0; j < g0; ++j) { row[h*g0 + j] = -20.0f*u(rng) - 1e-4f; }
+                                for (int64_t j = 0; j < g0; ++j) { row[h*g0 + j] = g_min*u(rng) - 1e-4f; }
                             } else {
                                 row[h*g0] = u(rng);
                             }
