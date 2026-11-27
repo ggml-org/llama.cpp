@@ -4260,7 +4260,7 @@ ggml_tensor * llm_graph_context::build_rs(
     const bool in_place = inp->rs_in_place && !get_state_rows && !gathered;
 
     // rollback snapshots are never in place; n_rs_seq is fixed per context, so the graph shape is stable
-    const bool from_cache = !gathered && (kv_state->get_n_rs_seq() == 0 || kv_state->get_rs_replay());
+    const bool from_cache = !gathered && !kv_state->get_rs_snapshots();
     GGML_ASSERT(get_state_rows || !from_cache || s->type == GGML_TYPE_F32); // the states are read from the cache, the gather is F32
 
     // a custom getter reads the states of the ubatch straight from the cache, so the gather skips the first

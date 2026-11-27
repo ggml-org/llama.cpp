@@ -1463,9 +1463,7 @@ int32_t llama_memory_recurrent_context::get_rs_z() const {
 
 bool llama_memory_recurrent_context::get_rs_in_place() const {
     // rollback snapshots, zeroed states and extra states go through the gather
-    // rs_replay keeps one state plane, so its states can be in place like without rollback
-    const bool snapshots = mem->n_rs_seq != 0 && !mem->rs_replay;
-    if (is_full || snapshots || mem->rs_z >= 0 || mem->n != get_ubatch().n_seqs) {
+    if (is_full || get_rs_snapshots() || mem->rs_z >= 0 || mem->n != get_ubatch().n_seqs) {
         return false;
     }
 
@@ -1481,10 +1479,6 @@ bool llama_memory_recurrent_context::get_rs_in_place() const {
 
 uint32_t llama_memory_recurrent_context::get_size() const {
     return mem->size;
-}
-
-uint32_t llama_memory_recurrent_context::get_n_rs_seq() const {
-    return mem->n_rs_seq;
 }
 
 ggml_tensor * llama_memory_recurrent_context::get_r_l(int32_t il) const {
@@ -1513,6 +1507,11 @@ ggml_tensor * llama_memory_recurrent_context::get_spgb_l(int32_t il) const {
 
 bool llama_memory_recurrent_context::get_rs_replay() const {
     return mem->rs_replay;
+}
+
+bool llama_memory_recurrent_context::get_rs_snapshots() const {
+    // rs_replay keeps one state plane, so its states can be in place like without rollback
+    return mem->n_rs_seq != 0 && !mem->rs_replay;
 }
 
 uint32_t llama_memory_recurrent_context::get_rs_rep(int i) const {
