@@ -20,7 +20,8 @@
 		'tertiary',
 		'outline',
 		'ghost',
-		'destructive'
+		'destructive',
+		'danger-secondary'
 	];
 	const sizes: NonNullable<ButtonSize>[] = ['sm', 'default', 'lg'];
 </script>
@@ -48,6 +49,8 @@
 				<Button><Plus /> New chat</Button>
 
 				<Button variant="destructive"><Trash2 /> Delete</Button>
+
+				<Button variant="danger-secondary"><Trash2 /> Remove</Button>
 			</div>
 		</StateGalleryItem>
 	</StateGallery>

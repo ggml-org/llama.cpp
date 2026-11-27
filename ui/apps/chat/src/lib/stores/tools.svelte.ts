@@ -524,7 +524,7 @@ class ToolsStore {
 		}
 	}
 
-	private hasServerTool(name: BuiltInTool): boolean {
+	hasServerTool(name: BuiltInTool): boolean {
 		return this._serverTools.some((def) => def.function.name === name);
 	}
 

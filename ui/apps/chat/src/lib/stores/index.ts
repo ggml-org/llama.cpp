@@ -34,6 +34,9 @@ export { agenticStore } from './agentic/index.svelte';
 // CONVERSATION MEDIA (one slideshow of the thread's images, audio and video)
 export { mediaGalleryStore } from './media-gallery.svelte';
 
+// BACKGROUND PROCESSES (long-lived commands the agent started, e.g. dev servers)
+export { backgroundProcessesStore } from './background-processes.svelte';
+
 // CONVERSATIONS
 export { sidebarDragStore } from './sidebar-drag.svelte';
 export { conversationsStore } from './conversations/index.svelte';

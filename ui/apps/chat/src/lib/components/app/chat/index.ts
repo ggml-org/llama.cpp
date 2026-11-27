@@ -267,6 +267,7 @@ export { default as ChatFormInput } from './ChatForm/ChatFormInput/ChatFormInput
  * synthetic "Set working directory to ..." user message into chat history
  * and is enforced on tool calls via the `x-tool-cwd` request header.
  */
+export { default as ChatFormBackgroundProcesses } from './ChatForm/ChatFormBackgroundProcesses/ChatFormBackgroundProcesses.svelte';
 export { default as ChatFormCurrentWorkingDirectory } from './ChatForm/ChatFormCurrentWorkingDirectory/ChatFormCurrentWorkingDirectory.svelte';
 
 /**

@@ -24,6 +24,8 @@
 					'matte-key-solid [--key-edge:var(--button-primary-edge)] bg-(--action-primary) text-(--fg-on-action) hover:bg-(--action-primary-hover)',
 				destructive:
 					'matte-key-solid [--key-edge:var(--button-danger-edge)] [--key-sheen-solid:var(--button-danger-sheen)] bg-(--action-danger) hover:bg-(--action-danger-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-(--fg-on-danger)!',
+				'danger-secondary':
+					'bg-(--action-danger-secondary) text-(--fg-danger) hover:bg-(--action-danger-secondary-hover) focus-visible:bg-(--action-danger-secondary-hover) focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40',
 				ghost:
 					'hover:text-(--fg-default) hover:bg-(--action-ghost-hover) hover:shadow-(--button-shadow) backdrop-blur-sm',
 				outline:

@@ -1250,14 +1250,168 @@ struct server_tool_grep_search : server_tool {
 };
 
 //
+// background processes started by exec_shell_command with background = true
+// tracked so a client can list them, read their logs and stop them, and stopped when the server exits
+//
+
+static constexpr int SERVER_BG_HELPER_TIMEOUT  = 10;          // seconds, for status, log and stop helpers
+static constexpr int SERVER_BG_LOG_MAX_BYTES   = 64 * 1024;
+static constexpr int SERVER_BG_STOP_GRACE_SECS = 2;
+
+// "$1" is the pid, also its process group id (the wrapper runs it with job control):
+// TERM the group, give it a moment, then KILL what is left
+static constexpr const char * SERVER_BG_STOP_SCRIPT =
+    "kill -TERM -- -\"$1\" 2>/dev/null || kill -TERM \"$1\" 2>/dev/null\n"
+    "i=0; while kill -0 \"$1\" 2>/dev/null && [ $i -lt \"$2\" ]; do sleep 1; i=$((i+1)); done\n"
+    "kill -KILL -- -\"$1\" 2>/dev/null || kill -KILL \"$1\" 2>/dev/null\n"
+    "true\n";
+
+struct server_bg_process {
+    int id = 0;
+    std::string pid;
+    std::string command;
+    std::string description;
+    std::string cwd;
+    std::string runtime;
+    std::string log_path;
+    int64_t started_at = 0; // unix seconds
+    bool stopped = false;   // stopped through the API, or seen exited
+};
+
+struct server_bg_processes {
+    std::mutex mutex;
+    std::vector<server_bg_process> procs;
+    int next_id = 1;
+
+    ~server_bg_processes() {
+        stop_all();
+    }
+
+    int add(server_bg_process p) {
+        std::lock_guard<std::mutex> lock(mutex);
+        p.id = next_id++;
+        p.started_at = (int64_t) std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        procs.push_back(p);
+        return p.id;
+    }
+
+    static bool is_running(const server_bg_process & p) {
+        auto io = make_tools_io({{"runtime", p.runtime}});
+        auto res = io->run({"kill", "-0", p.pid}, 256, SERVER_BG_HELPER_TIMEOUT);
+        return res.exit_code == 0 && !res.timed_out;
+    }
+
+    static void stop_one(const server_bg_process & p) {
+        auto io = make_tools_io({{"runtime", p.runtime}});
+        io->run({"sh", "-c", SERVER_BG_STOP_SCRIPT, "_", p.pid, std::to_string(SERVER_BG_STOP_GRACE_SECS)},
+                256, SERVER_BG_HELPER_TIMEOUT + SERVER_BG_STOP_GRACE_SECS);
+    }
+
+    bool find(int id, server_bg_process & out) {
+        std::lock_guard<std::mutex> lock(mutex);
+        for (auto & p : procs) {
+            if (p.id == id) {
+                out = p;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void mark_stopped(int id) {
+        std::lock_guard<std::mutex> lock(mutex);
+        for (auto & p : procs) {
+            if (p.id == id) p.stopped = true;
+        }
+    }
+
+    json list() {
+        std::vector<server_bg_process> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            snapshot = procs;
+        }
+        json result = json::array();
+        for (auto & p : snapshot) {
+            bool running = !p.stopped && is_running(p);
+            if (!running && !p.stopped) mark_stopped(p.id);
+            result.push_back({
+                {"id",          p.id},
+                {"pid",         p.pid},
+                {"command",     p.command},
+                {"description", p.description},
+                {"cwd",         p.cwd},
+                {"log_path",    p.log_path},
+                {"started_at",  p.started_at},
+                {"running",     running},
+            });
+        }
+        return result;
+    }
+
+    std::string log(const server_bg_process & p) {
+        auto io = make_tools_io({{"runtime", p.runtime}});
+        auto res = io->run({"tail", "-c", std::to_string(SERVER_BG_LOG_MAX_BYTES), p.log_path},
+                           SERVER_BG_LOG_MAX_BYTES, SERVER_BG_HELPER_TIMEOUT);
+        return res.output;
+    }
+
+    // stopped processes leave the list; running ones are stopped first
+    void remove(int id) {
+        server_bg_process p;
+        if (!find(id, p)) return;
+        if (!p.stopped) stop_one(p);
+        std::lock_guard<std::mutex> lock(mutex);
+        procs.erase(std::remove_if(procs.begin(), procs.end(),
+            [id](const server_bg_process & q) { return q.id == id; }), procs.end());
+    }
+
+    void stop_all() {
+        std::vector<server_bg_process> snapshot;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            snapshot = procs;
+        }
+        for (auto & p : snapshot) {
+            if (!p.stopped && is_running(p)) {
+                stop_one(p);
+                mark_stopped(p.id);
+            }
+        }
+    }
+};
+
+//
 // exec_shell_command: run an arbitrary shell command
 //
 
 static constexpr size_t SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE = 16 * 1024; // 16 KB
 static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT     = 60;        // seconds
+static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_BG_STARTUP_SECS = 3;         // seconds of output to show before returning
+static constexpr int    SERVER_TOOL_EXEC_SHELL_COMMAND_BG_TAIL_BYTES   = 4 * 1024;
+
+// starts "$1" detached from the tool call, with its output in a log file, and reports its first
+// seconds of output; the agent reads the log and stops the process with further shell commands
+static constexpr const char * SERVER_TOOL_EXEC_SHELL_COMMAND_BG_SCRIPT =
+    "tmp=${TMPDIR:-/tmp}\n"
+    "log=$(mktemp \"${tmp%/}/llama-bg-XXXXXX\") || exit 1\n"
+    // job control puts the process in its own group, so a stop takes its children too
+    "set -m\n"
+    "nohup sh -c \"$1\" >\"$log\" 2>&1 </dev/null &\n"
+    "pid=$!\n"
+    "set +m\n"
+    // first, so the process is tracked even if this wrapper times out
+    "echo \"[background pid: $pid]\"\n"
+    "echo \"[log file: $log]\"\n"
+    "sleep \"$2\"\n"
+    "tail -c \"$3\" \"$log\"\n"
+    "if kill -0 \"$pid\" 2>/dev/null; then echo \"[still running]\"; else echo \"[already exited]\"; fi\n";
 
 struct server_tool_exec_shell_command : server_tool {
-    server_tool_exec_shell_command() {
+    std::shared_ptr<server_bg_processes> bg;
+
+    explicit server_tool_exec_shell_command(std::shared_ptr<server_bg_processes> bg) : bg(std::move(bg)) {
         name = "exec_shell_command";
         display_name = "Execute shell command";
         uses_cwd = true;
@@ -1277,6 +1431,7 @@ struct server_tool_exec_shell_command : server_tool {
                         // first, so a client can show it while the command still streams; the tool ignores it
                         {"description",     {{"type", "string"},  {"description", "Short plain-language description of what this command does, starting with a verb, e.g. 'List files in the project root'. 3 to 10 words. Shown to the user."}}},
                         {"command",         {{"type", "string"},  {"description", "Shell command to execute"}}},
+                        {"background",      {{"type", "boolean"}, {"description", "Run the command in the background (default false). Use it for long-lived processes such as dev servers and watchers: the call returns after a few seconds with the process id, a log file path and the output so far, and the process keeps running. The user sees it in a list of background processes and can stop it there; you can also read the log with `tail` and stop the process with `kill <pid>`. Do not add `&` or `nohup` yourself."}}},
                         {"timeout",         {{"type", "integer"}, {"description", string_format("Timeout in seconds (default 10, max %d)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT)}}},
                         {"max_output_size", {{"type", "integer"}, {"description", string_format("Maximum output size in bytes (default %zu)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE)}}},
                     }},
@@ -1291,19 +1446,56 @@ struct server_tool_exec_shell_command : server_tool {
         int    timeout        = json_value(params, "timeout",         10);
         size_t max_output     = (size_t) json_value(params, "max_output_size", (int) SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
 
+        bool   background     = json_value(params, "background",      false);
+
         timeout    = std::min(timeout,    SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT);
         max_output = std::min(max_output, SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE);
 
         // an isolate is always POSIX regardless of host OS, so it always gets `sh -c`
 #ifdef _WIN32
-        std::vector<std::string> args = !json_value(params, "runtime", std::string()).empty()
+        const bool posix = !json_value(params, "runtime", std::string()).empty();
+#else
+        const bool posix = true;
+#endif
+        std::vector<std::string> args = posix
             ? std::vector<std::string>{"sh", "-c", command}
             : std::vector<std::string>{"cmd", "/c", command};
-#else
-        std::vector<std::string> args = {"sh", "-c", command};
-#endif
+
+        if (background) {
+            if (!posix) {
+                return {{"error", "background commands need a POSIX shell"}};
+            }
+            args = {"sh", "-c", SERVER_TOOL_EXEC_SHELL_COMMAND_BG_SCRIPT, "_", command,
+                    std::to_string(SERVER_TOOL_EXEC_SHELL_COMMAND_BG_STARTUP_SECS),
+                    std::to_string(SERVER_TOOL_EXEC_SHELL_COMMAND_BG_TAIL_BYTES)};
+            timeout = std::max(timeout, SERVER_TOOL_EXEC_SHELL_COMMAND_BG_STARTUP_SECS + 5);
+        }
 
         auto io = make_tools_io(params);
+
+        if (background) {
+            auto res = io->run(args, max_output, timeout);
+            std::string out = res.output;
+            std::smatch m_pid, m_log;
+            static const std::regex re_pid("\\[background pid: (\\d+)\\]");
+            static const std::regex re_log("\\[log file: ([^\\]\\n]+)\\]");
+            if (bg && std::regex_search(out, m_pid, re_pid) && std::regex_search(out, m_log, re_log)) {
+                server_bg_process p;
+                p.pid         = m_pid[1];
+                p.log_path    = m_log[1];
+                p.command     = command;
+                p.description = json_value(params, "description", std::string());
+                p.cwd         = json_value(params, "cwd",         std::string());
+                p.runtime     = json_value(params, "runtime",     std::string());
+                int id = bg->add(p);
+                out = string_format("[background id: %d]\n", id) + out;
+            }
+            if (st) {
+                st->push(out);
+                return json();
+            }
+            return {{"plain_text_response", out}};
+        }
 
         if (st) {
             auto res = io->run(args, max_output, timeout, [st](const std::string & chunk) {
@@ -1964,7 +2156,7 @@ static server_tool & find_tool(std::vector<std::unique_ptr<server_tool>> & tools
 // public API
 //
 
-static std::vector<std::unique_ptr<server_tool>> build_tools() {
+static std::vector<std::unique_ptr<server_tool>> build_tools(const std::shared_ptr<server_bg_processes> & bg) {
     // IMPORTANT: for contributors, please keep this array of tools as minimal as possible
     //            we only accept minimal i/o and shell command tools here
     //            for example, do not add: web search, get date time, etc.
@@ -1973,7 +2165,7 @@ static std::vector<std::unique_ptr<server_tool>> build_tools() {
     tools.push_back(std::make_unique<server_tool_read_file>());
     tools.push_back(std::make_unique<server_tool_file_glob_search>());
     tools.push_back(std::make_unique<server_tool_grep_search>());
-    tools.push_back(std::make_unique<server_tool_exec_shell_command>());
+    tools.push_back(std::make_unique<server_tool_exec_shell_command>(bg));
     tools.push_back(std::make_unique<server_tool_write_file>());
     tools.push_back(std::make_unique<server_tool_edit_file>());
     tools.push_back(std::make_unique<server_tool_get_info>());
@@ -2023,7 +2215,8 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
         }
 
         std::unordered_set<std::string> enabled_set(enabled_tools.begin(), enabled_tools.end());
-        auto all_tools = build_tools();
+        bg = std::make_shared<server_bg_processes>();
+        auto all_tools = build_tools(bg);
 
         // collect all known tool names for validation
         std::vector<std::string> known_names;
@@ -2073,6 +2266,50 @@ void server_tools::setup(const std::vector<std::string> & enabled_tools,
             SRV_INF("Added %zu MCP tools\n", n_added);
         }
     }
+
+    // background processes: list, read a log, stop and forget one
+    auto bg_error = [](int status, const std::string & msg) {
+        auto res = std::make_unique<server_http_res>();
+        res->status = status;
+        res->data   = safe_json_to_str(format_error_response(msg, status == 404 ? ERROR_TYPE_NOT_FOUND : ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    };
+    auto bg_id = [](const std::string & value) {
+        try { return std::stoi(value); } catch (...) { return 0; }
+    };
+
+    handle_bg_list = [this](const server_http_req &) -> server_http_res_ptr {
+        auto res = std::make_unique<server_http_res>();
+        res->data = safe_json_to_str(bg ? bg->list() : json::array());
+        return res;
+    };
+
+    handle_bg_log = [this, bg_error, bg_id](const server_http_req & req) -> server_http_res_ptr {
+        server_bg_process p;
+        if (!bg || !bg->find(bg_id(req.get_param("id")), p)) {
+            return bg_error(404, "unknown background process");
+        }
+        auto res = std::make_unique<server_http_res>();
+        res->data = safe_json_to_str({{"id", p.id}, {"log", bg->log(p)}});
+        return res;
+    };
+
+    handle_bg_stop = [this, bg_error](const server_http_req & req) -> server_http_res_ptr {
+        int id = 0;
+        try {
+            id = json::parse(req.body).value("id", 0);
+        } catch (...) {
+            return bg_error(400, "expected a JSON body with an id");
+        }
+        server_bg_process p;
+        if (!bg || !bg->find(id, p)) {
+            return bg_error(404, "unknown background process");
+        }
+        bg->remove(id);
+        auto res = std::make_unique<server_http_res>();
+        res->data = safe_json_to_str({{"id", id}, {"stopped", true}});
+        return res;
+    };
 
     handle_get = [this](const server_http_req &) -> server_http_res_ptr {
         auto res = std::make_unique<server_http_res>();
