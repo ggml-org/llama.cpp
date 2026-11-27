@@ -153,19 +153,21 @@ def test_disabled_with_flag():
     assert "__TEST_TAG_CACHE_IDLE_SLOT__" not in log.drain()
 
 
+# one-token completion on a slot, returns the number of prompt tokens reused from the cache
+def cache_n(prompt, id_slot):
+    res = server.make_request("POST", "/completion", data={"prompt": prompt, "id_slot": id_slot, "n_predict": 1})
+    assert res.status_code == 200
+    return res.body["timings"]["cache_n"]
+
+
 # an idle slot is saved to the prompt cache, if there is one, before a purge frees its cells
-@pytest.mark.parametrize("cache_ram,n_restored", [(100, 300), (0, 0)])
-def test_purge_saves_idle_slot(cache_ram, n_restored):
+@pytest.mark.parametrize("cache_ram", [100, 0])
+def test_purge_saves_idle_slot(cache_ram):
     global server
     server.no_cache_idle_slots = True  # idle slots keep their cells
     server.cache_ram = cache_ram
     server.start()
     log = LogReader(server.log_path)
-
-    def cache_n(prompt, id_slot):
-        res = server.make_request("POST", "/completion", data={"prompt": prompt, "id_slot": id_slot, "n_predict": 1})
-        assert res.status_code == 200
-        return res.body["timings"]["cache_n"]
 
     cache_n([100] * 300, 0)
 
@@ -174,4 +176,19 @@ def test_purge_saves_idle_slot(cache_ram, n_restored):
     assert "purging slot 0" in log.drain()
 
     # with a prompt cache, the purged prompt is restored instead of recomputed
-    assert cache_n([100] * 310, 1) >= n_restored
+    n = cache_n([100] * 310, 1)
+    assert n >= 300 if cache_ram else n == 0
+
+
+# with --no-cache-idle-slots, a restore that does not fit frees idle slots, each saved first, and is retried
+def test_restore_retry_frees_idle_slots():
+    global server
+    server.no_cache_idle_slots = True
+    server.start()
+
+    cache_n([100] * 300, 0)  # A on slot 0
+    cache_n([300] * 100, 0)  # C takes slot 0, A is saved to the prompt cache
+    cache_n([200] * 300, 1)  # B stays idle on slot 1
+
+    # A does not fit next to B, so slot 1 is saved and freed before the restore is retried
+    assert cache_n([100] * 310, 0) >= 300

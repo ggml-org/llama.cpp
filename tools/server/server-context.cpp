@@ -1870,6 +1870,28 @@ private:
                 if (!slot.prompt_load(*prompt_cache, task.tokens, lora)) {
                     slot.prompt_clear();
                 }
+            } else if (params_base.kv_unified) {
+                // idle slots keep their cells: save and free them one at a time until the restore fits
+                // stop once the cache no longer holds a start worth restoring (the saves can evict it)
+                int n_purged = 0;
+
+                while (prompt_cache->has_better(slot.prompt, task.tokens, lora) && try_clear_idle_slots()) {
+                    n_purged++;
+
+                    if (slot.prompt_load(*prompt_cache, task.tokens, lora)) {
+                        break;
+                    }
+
+                    slot.prompt_clear();
+                }
+
+                if (n_purged > 0) {
+                    if (slot.prompt.n_tokens() > 0) {
+                        SLT_INF(slot, "loaded the prompt from the cache after purging %d idle slots\n", n_purged);
+                    } else {
+                        SLT_WRN(slot, "could not load the prompt from the cache after purging %d idle slots\n", n_purged);
+                    }
+                }
             }
         }
 
