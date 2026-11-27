@@ -5635,7 +5635,7 @@ bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
     return a->op == GGML_OP_FLASH_ATTN_EXT && ggml_get_op_params_i32(a, 5) != 0;
 }
 
-bool ggml_validate_flash_attn_ext_indexed_bias(const struct ggml_tensor * a) {
+static bool ggml_validate_flash_attn_ext_indexed_bias(const struct ggml_tensor * a) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
     const struct ggml_tensor * table   = a->src[6];
     const struct ggml_tensor * indices = a->src[7];

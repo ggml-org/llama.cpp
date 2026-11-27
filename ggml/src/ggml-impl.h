@@ -124,8 +124,6 @@ GGML_API void ggml_rope_yarn_corr_dims(
 
 GGML_API bool ggml_rope_get_truncate(const struct ggml_tensor * a);
 
-GGML_API bool ggml_validate_flash_attn_ext_indexed_bias(const struct ggml_tensor * a);
-
 //
 // logging
 //
