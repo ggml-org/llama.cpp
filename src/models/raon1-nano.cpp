@@ -330,7 +330,7 @@ ggml_tensor * llama_model_raon1_nano::graph::build_mla_layer(
     q = ggml_concat(ctx0, q_nope, q_extra, 0);
     latent = ggml_reshape_3d(ctx0, latent, rank, 1, n_tokens);
     ggml_tensor * k = ggml_concat(ctx0, latent, extra, 0);
-    ggml_tensor * out = build_attn(inp_attn_k, nullptr, nullptr, nullptr, q, k, latent,
+    ggml_tensor * out = build_attn(inp_attn_k, nullptr, nullptr, q, k, latent,
             nullptr, nullptr, layer.wv_b, 1.0f/sqrtf(nk), il);
     out = ggml_mul(ctx0, out, ggml_sigmoid(ctx0, build_lora_mm(layer.wqkv_gate, cur)));
     cb(out, "mla_gated", il);
@@ -398,7 +398,7 @@ llama_model_raon1_nano::graph::graph(const llama_model & model, const llm_graph_
         cur = build_hc_pre(inp, layer.hc_ffn_fn, layer.hc_ffn_base, layer.hc_ffn_chart, layer.ffn_norm, &post, &comb, il);
         cb(cur, "ffn_norm", il);
         cur = build_ffn(cur, layer.ffn_up, nullptr, nullptr, nullptr, nullptr, nullptr,
-                nullptr, nullptr, nullptr, nullptr, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
+                nullptr, LLM_FFN_SWIGLU, LLM_FFN_SEQ, il);
         cur = build_lora_mm(layer.ffn_down, cur);
         // Avoid F16 accumulation overflow in the last layers. Use the same minimum precision in all layers.
         ggml_prec_set_acc(cur, GGML_PREC_BF16);
