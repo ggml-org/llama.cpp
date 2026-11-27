@@ -15754,16 +15754,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {20, 1}, 8192, 32, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true));
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {20, 1}, 8192, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, true));
 
-    // attention sinks: prompt of 1024 after 49152 cached tokens (gpt-oss, Flint)
-    test_cases.emplace_back(new test_flash_attn_ext( 64,  64, 8, {8, 1}, 50176, 1024, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16,  GGML_TYPE_F16));
-    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {8, 1}, 50176, 1024, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
     test_cases.emplace_back(new test_flash_attn_ext(96, 96, 2, {8, 1}, 8192, 128, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}, false));
     for (int64_t kv : {8192, 32768}) {
         for (int64_t nq : {128, 256, 512, 1024}) {
             test_cases.emplace_back(new test_flash_attn_ext(192, 192, 2, {8, 1}, kv, nq, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}, false));
         }
     }
-  
+
+    // attention sinks: prompt of 1024 after 49152 cached tokens (gpt-oss, Flint)
+    test_cases.emplace_back(new test_flash_attn_ext( 64,  64, 8, {8, 1}, 50176, 1024, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_F16,  GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, {8, 1}, 50176, 1024, true, true, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0));
+    
     // MLA uses V as a view of the compressed K cache.
     test_cases.emplace_back(new test_flash_attn_ext(576, 512, 1, {20, 1}, 32768, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}, false, true));
     for (int64_t nq : {256, 512, 1024, 2048}) {
