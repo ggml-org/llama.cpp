@@ -31,7 +31,7 @@ typedef uint64_t ggml_cuda_thread_mask_t;
 #define CU_MEM_ALLOCATION_TYPE_PINNED hipMemAllocationTypePinned
 #define CU_MEM_LOCATION_TYPE_DEVICE hipMemLocationTypeDevice
 #define CU_MEM_ACCESS_FLAGS_PROT_READWRITE hipMemAccessFlagsProtReadWrite
-#define CU_CHECK(fn) {hipError_t err = fn; if(err != hipSuccess) { GGML_ABORT("HipVMM Failure: %s\n", hipGetErrorString(err)); }}
+#define CU_CHECK(fn) {hipError_t err_ = (fn); if(err_ != hipSuccess) { GGML_ABORT("HipVMM Failure: %s\n", hipGetErrorString(err_)); }}
 #define cublasStrsmBatched hipblasStrsmBatched
 #define cublasCreate hipblasCreate
 #define cublasDestroy hipblasDestroy
