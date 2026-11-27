@@ -10638,7 +10638,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     std::vector<std::unique_ptr<test_case>> test_cases;
     std::default_random_engine rng(0);
 
-    for (ggml_prec prec : {GGML_PREC_F32, GGML_PREC_BF16}) {
+    for (ggml_prec prec : {GGML_PREC_UNDEFINED, GGML_PREC_F32, GGML_PREC_BF16}) {
         test_cases.emplace_back(new test_flash_attn_ext_overflow(64, 64, 1, {1, 1}, 64, 32, false, false, 0, 0, prec, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, false));
     }
 

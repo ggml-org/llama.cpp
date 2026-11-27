@@ -987,8 +987,8 @@ inline bool ggml_webgpu_flash_attn_can_use_subgroup_matrix_path(bool            
                                                                 const ggml_tensor * Q,
                                                                 const ggml_tensor * V,
                                                                 ggml_prec           precision) {
-    return precision != GGML_PREC_F32 && precision != GGML_PREC_BF16 && supports_subgroup_matrix &&
-           Q->ne[0] % sg_mat_k == 0 && V->ne[0] % sg_mat_n == 0;
+    return precision == GGML_PREC_F16 && supports_subgroup_matrix && Q->ne[0] % sg_mat_k == 0 &&
+           V->ne[0] % sg_mat_n == 0;
 }
 
 /** Matrix Multiplication **/
