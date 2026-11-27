@@ -1047,7 +1047,7 @@ class tensor_traits_common : public tensor_traits_base {
                         return true;
                 }
             case GGML_OP_FLASH_ATTN_EXT:
-                // K/V row lists and the indexed bias are handled by the generic CPU path
+                // K/V row lists and bias are handled by the generic CPU path
                 if (op->src[5] != nullptr || ggml_flash_attn_ext_has_bias(op)) {
                     return false;
                 }

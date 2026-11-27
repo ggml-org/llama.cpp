@@ -5671,8 +5671,9 @@ static bool ggml_flash_attn_ext_add_bias_validate(const struct ggml_tensor * a) 
     }
 
     if (!bias_idxs) {
-        return bias->ne[0] == mask->ne[0] && bias->ne[1] == q->ne[1] &&
-               bias->ne[2] == k->ne[2] && bias->ne[3] == q->ne[3];
+        // TODO: support dense bias in the backends
+        GGML_ASSERT(false);
+        return false;
     }
 
     if (bias->ne[0] == 0 || bias->ne[1] != q->ne[2] || bias->ne[3] != 1) {

@@ -331,7 +331,7 @@ static bool htp_kparams_solve_flash_attn(
         return false;
     }
 
-    // K/V row lists and indexed bias are not supported
+    // K/V row lists and bias are not supported
     if (op->src[5] != nullptr || ggml_flash_attn_ext_has_bias(op)) {
         return false;
     }
