@@ -326,7 +326,7 @@ static bool parse_bool_value(const std::string & value) {
 // common_models_handler
 //
 
-static std::string get_default_local_path(const std::string & url) {
+std::string common_get_default_local_path(const std::string & url) {
     auto f = string_split<std::string>(url, '#').front();
     f = string_split<std::string>(f, '?').front();
     return fs_get_cache_file(string_split<std::string>(f, '/').back()).string();
@@ -436,7 +436,7 @@ static std::vector<common_download_task> build_url_tasks(const common_params_mod
     if (parts.size() == 1) {
         common_download_task task;
         task.url        = parts[0];
-        task.local_path = model.path.empty() ? get_default_local_path(parts[0]) : model.path;
+        task.local_path = model.path.empty() ? common_get_default_local_path(parts[0]) : model.path;
         task.opts       = opts;
         tasks.push_back(std::move(task));
         return tasks;
@@ -454,7 +454,7 @@ static std::vector<common_download_task> build_url_tasks(const common_params_mod
         task.url  = part;
         task.opts = opts;
 
-        std::string local = get_default_local_path(part);
+        std::string local = common_get_default_local_path(part);
         if (!base_dir.empty()) {
             auto pos = local.rfind('/');
             std::string name = pos == std::string::npos ? local : local.substr(pos + 1);
@@ -487,7 +487,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     auto handle_url = [&](common_params_model & model) {
         if (!model.url.empty()) {
             if (model.path.empty()) {
-                model.path = get_default_local_path(model.url);
+                model.path = common_get_default_local_path(model.url);
             }
         }
     };
@@ -498,7 +498,7 @@ void common_models_handler_apply(common_models_handler & handler, common_params 
     // optionally, if docker repo is set, resolve it
     if (!params.model.docker_repo.empty()) {
         params.model.url  = common_docker_resolve_model(params.model.docker_repo);
-        params.model.path = get_default_local_path(params.model.url);
+        params.model.path = common_get_default_local_path(params.model.url);
     }
 
     // handle plain "url" tasks (non-hf)
@@ -3420,12 +3420,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--ui-mcp-proxy", "--webui-mcp-proxy"},
         {"--no-ui-mcp-proxy", "--no-webui-mcp-proxy"},
-        "experimental: whether to enable MCP CORS proxy, for Llama Chat to reach public MCP servers without CORS headers; local and private addresses are refused - do not enable in untrusted environments (default: disabled)\n"
+        "experimental: whether to enable MCP CORS proxy, for Llama Chat to reach public MCP servers without CORS headers; local and private addresses are refused unless --ui-mcp-proxy-allow-private-urls is set - do not enable in untrusted environments (default: disabled)\n"
         "note: for security reasons, this will limit --cors-origins to localhost by default",
         [](common_params & params, bool value) {
             params.ui_mcp_proxy = value;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY"));
+    add_opt(common_arg(
+        {"--ui-mcp-proxy-allow-private-urls"},
+        "allow the MCP CORS proxy to reach local or private addresses (e.g. MCP servers on localhost or LAN) - anyone who can reach the proxy can then reach your local network (default: disabled, only public addresses)\n"
+        "note: only has effect with --ui-mcp-proxy",
+        [](common_params & params) {
+            params.ui_mcp_proxy_allow_private_urls = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY_ALLOW_PRIVATE_URLS"));
     add_opt(common_arg(
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
@@ -3486,6 +3494,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             // note: do not modify cors_origins here, as the options are not evaluated in order (user may explicitly set --cors-origins before --agent)
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_AGENT"));
+    add_opt(common_arg(
+        {"--ui-agent"},
+        "enable agent mode in Llama Chat with nothing enabled on the server: the tools that run in the browser and MCP servers the browser reaches itself, no server tools and no MCP proxy (default: disabled)\n"
+        "note: not needed with --agent, --tools or --ui-mcp-proxy, they enable agent mode in Llama Chat too",
+        [](common_params & params) {
+            params.ui_agent = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_AGENT"));
     add_opt(common_arg(
         {"--ui", "--webui"},
         {"--no-ui", "--no-webui"},

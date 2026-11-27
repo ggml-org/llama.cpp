@@ -8,22 +8,20 @@ import LoadFailedIcon from '@lucide/svelte/icons/circle-alert';
 import DiscoverIcon from '@lucide/svelte/icons/compass';
 import UnloadIcon from '@lucide/svelte/icons/eject';
 import FileIcon from '@lucide/svelte/icons/file';
+// not a microphone: that one is for recording and dictation
+import AudioIcon from '@lucide/svelte/icons/file-headphone';
 import FileTextIcon from '@lucide/svelte/icons/file-text';
-import CompactCommandIcon from '@lucide/svelte/icons/fold-vertical';
-import CwdCommandIcon from '@lucide/svelte/icons/folder-open';
 import ImageIcon from '@lucide/svelte/icons/image';
 import LoadingIcon from '@lucide/svelte/icons/loader-2';
-import AudioIcon from '@lucide/svelte/icons/mic';
 import ModelIcon from '@lucide/svelte/icons/package';
 import PauseDownloadIcon from '@lucide/svelte/icons/pause';
 import ResumeDownloadIcon from '@lucide/svelte/icons/play';
 import LoadIcon from '@lucide/svelte/icons/power';
 import RetryIcon from '@lucide/svelte/icons/rotate-cw';
-import PromptCommandIcon from '@lucide/svelte/icons/sparkles';
 import VideoIcon from '@lucide/svelte/icons/video';
-import { ChatFormCommandAction, FileTypeCategory, ModelCapability } from '#lib/enums/index.ts';
+import CancelLoadIcon from '@lucide/svelte/icons/x';
+import { FileTypeCategory, ModelCapability } from '#lib/enums/index.ts';
 import type { ModelCapabilities } from '#lib/types/models.js';
-import type { Component } from 'svelte';
 export {
 	CAPABILITY_ICONS,
 	CAPABILITY_LABELS,
@@ -63,14 +61,6 @@ export const CAPABILITY_FLAG_KEYS: Record<ModelCapability, keyof ModelCapabiliti
 	[ModelCapability.TOOL_USE]: 'tools'
 };
 
-/** Icons of the slash-command picker, one per chat-form command. */
-export const CHAT_FORM_COMMAND_ICONS: Record<ChatFormCommandAction, Component> = {
-	[ChatFormCommandAction.COMPACT]: CompactCommandIcon,
-	[ChatFormCommandAction.CWD]: CwdCommandIcon,
-	[ChatFormCommandAction.MODEL]: MODEL_ICON,
-	[ChatFormCommandAction.PROMPT]: PromptCommandIcon
-};
-
 /** Icons of the download control a manager row shows while it downloads. */
 export const MODEL_DOWNLOAD_ICONS = {
 	pause: PauseDownloadIcon,
@@ -79,6 +69,7 @@ export const MODEL_DOWNLOAD_ICONS = {
 
 /** Icons the model load control shows for its states and actions. */
 export const MODEL_LOAD_ICONS = {
+	cancel: CancelLoadIcon,
 	failed: LoadFailedIcon,
 	load: LoadIcon,
 	loading: LoadingIcon,

@@ -39,6 +39,8 @@ env:
   LLAMA_ARG_LOG_PREFIX: 1
   LLAMA_ARG_LOG_TIMESTAMPS: 1
   LLAMA_ARG_LOG_VERBOSITY: 10
+  # [TAG_MTMD_NO_REALLOC] must match -DGGML_SCHED_NO_REALLOC=ON below, skips tests that are known to realloc
+  GGML_SCHED_NO_REALLOC: ON
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || github.run_id }}

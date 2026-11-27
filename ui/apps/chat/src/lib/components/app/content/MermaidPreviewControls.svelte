@@ -31,7 +31,7 @@
 </script>
 
 <div
-	class="mermaid-preview-controls absolute bottom-8 flex shrink-0 items-center justify-center p-3"
+	class="mermaid-preview-controls absolute bottom-8 left-1/2 flex shrink-0 -translate-x-1/2 cursor-auto items-center justify-center p-3"
 >
 	<div class="mermaid-preview-controls-inner flex items-center gap-1 rounded-lg bg-muted p-1">
 		<button
@@ -44,7 +44,7 @@
 		</button>
 
 		<span
-			class="mermaid-preview-zoom-label min-w-[3.5rem] px-0.5 text-center text-xs font-medium text-muted-foreground tabular-nums select-none"
+			class="mermaid-preview-zoom-label min-w-14 px-0.5 text-center text-label-sm text-muted-foreground tabular-nums select-none"
 			>{Math.round(scale * 100)}%</span
 		>
 

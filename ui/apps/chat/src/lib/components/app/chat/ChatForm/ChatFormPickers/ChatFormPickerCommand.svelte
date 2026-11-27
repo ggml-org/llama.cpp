@@ -4,7 +4,6 @@
 		ChatFormPickerListItem,
 		ChatFormPickerPopover
 	} from '#lib/components/app/chat/index.ts';
-	import { CHAT_FORM_COMMAND_ICONS } from '#lib/constants/index.ts';
 	import { usePickerNavigation } from '#lib/hooks/use-picker-navigation.svelte.ts';
 	import type { ChatFormCommand } from '#lib/types/index.ts';
 
@@ -121,22 +120,19 @@
 		showSearchInput={false}
 	>
 		{#snippet item(command, index, isSelected)}
-			{@const Icon = CHAT_FORM_COMMAND_ICONS[command.action]}
 			<ChatFormPickerListItem
 				dataIndex={index}
 				disabled={command.disabled}
 				{isSelected}
 				onclick={() => handleSelect(command)}
-				onmouseenter={() => {
+				onhover={() => {
 					if (!command.disabled) nav.setHover(index);
 				}}
 			>
-				<Icon class="mt-0.5 size-icon-md shrink-0 text-muted-foreground" />
-
 				<div class="flex min-w-0 flex-1 flex-col">
-					<span class="font-mono text-sm font-medium">/{command.name}</span>
+					<span class="font-mono text-label">/{command.name}</span>
 
-					<span class="min-w-0 flex-1 truncate text-left text-xs text-muted-foreground">
+					<span class="min-w-0 flex-1 truncate text-left text-caption text-muted-foreground">
 						{command.description}
 					</span>
 				</div>

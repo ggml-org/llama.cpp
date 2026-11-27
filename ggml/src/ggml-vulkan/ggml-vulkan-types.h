@@ -36,6 +36,21 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 } VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV;
 #endif
 
+#ifndef VK_EXT_cooperative_matrix_maintenance1
+#define VK_EXT_cooperative_matrix_maintenance1 1
+#define VK_EXT_COOPERATIVE_MATRIX_MAINTENANCE_1_EXTENSION_NAME "VK_EXT_cooperative_matrix_maintenance1"
+#define VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_MAINTENANCE_1_FEATURES_EXT ((VkStructureType)1000659000)
+typedef struct VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT {
+    VkStructureType    sType;
+    void*              pNext;
+    VkBool32           cooperativeMatrixProperties2;
+    VkBool32           cooperativeMatrixReductions;
+    VkBool32           cooperativeMatrixConversions;
+    VkBool32           cooperativeMatrixPerElementOperations;
+    VkBool32           cooperativeMatrixGetCoordinate;
+} VkPhysicalDeviceCooperativeMatrixMaintenance1FeaturesEXT;
+#endif
+
 #if __has_include(<spirv/unified1/spirv.hpp>)
 #    include <spirv/unified1/spirv.hpp>
 #elif __has_include(<spirv-headers/spirv.hpp>)
@@ -220,6 +235,12 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 #define MAX_PARAMETER_COUNT 12
 
 #define MAX_FUSED_ADDS (MAX_PARAMETER_COUNT - 3)
+
+#define GGML_VK_GDN_CM_V 64u
+#define GGML_VK_GDN_CM2_V 32u
+#define GGML_VK_GDN_CM_D 128u
+#define GGML_VK_GDN_CM_PAD 8u
+#define GGML_VK_GDN_CM_LDP (GGML_VK_GDN_CM_D + GGML_VK_GDN_CM_PAD)
 
 struct vk_pipeline_struct;
 
@@ -429,10 +450,11 @@ struct vk_fa_pipeline_state {
     uint32_t limit_occupancy_shmem;
     ggml_type k_type;
     ggml_type v_type;
+    uint32_t bias_bins;
 
     bool operator<(const vk_fa_pipeline_state &b) const {
-        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type) <
-               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type);
+        return std::tie(HSK, HSV, Br, Bc, D_split, row_split, shmem_staging, path, workgroup_size, subgroup_size, aligned, f32acc, flags, limit_occupancy_shmem, k_type, v_type, bias_bins) <
+               std::tie(b.HSK, b.HSV, b.Br, b.Bc, b.D_split, b.row_split, b.shmem_staging, b.path, b.workgroup_size, b.subgroup_size, b.aligned, b.f32acc, b.flags, b.limit_occupancy_shmem, b.k_type, b.v_type, b.bias_bins);
     }
 };
 
@@ -444,10 +466,11 @@ struct vk_xe_fa_pipeline_state {
     bool unaligned_q;
     bool partial_row_mask;
     bool multi_head_mask;
+    uint32_t bias_bins;
 
     bool operator<(const vk_xe_fa_pipeline_state &b) const {
-        return std::tie(HSK, HSV, qk_ratio, pv_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask) <
-               std::tie(b.HSK, b.HSV, b.qk_ratio, b.pv_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask);
+        return std::tie(HSK, HSV, qk_ratio, pv_ratio, decode_n, unaligned_seq_len, unaligned_q, partial_row_mask, multi_head_mask, bias_bins) <
+               std::tie(b.HSK, b.HSV, b.qk_ratio, b.pv_ratio, b.decode_n, b.unaligned_seq_len, b.unaligned_q, b.partial_row_mask, b.multi_head_mask, b.bias_bins);
     }
 };
 
@@ -767,6 +790,12 @@ struct vk_device_struct {
     bool coopmat_acc_f32_support {};
     bool coopmat_acc_f16_support {};
     bool coopmat_bf16_support {};
+    bool coopmat_bf16_acc_support {};
+    bool coopmat_maintenance1 {};
+    bool coopmat_m1_reductions {};
+    bool coopmat_m1_conversions {};
+    bool coopmat_m1_per_element_ops {};
+    bool coopmat_m1_get_coordinate {};
     bool coopmat_support_16x16x16_f16acc {};
     bool coopmat_support_16x16x16_f32acc {};
     bool coopmat1_fa_support {};
@@ -781,7 +810,9 @@ struct vk_device_struct {
 
     bool coopmat2;
     bool coopmat2_bf16_support {};
+    bool coopmat2_gdn_support {};
     bool coopmat2_decode_vector;
+    uint32_t coopmat2_reserved_shmem {};
 
     bool dot2_f16 {};
     bool ocp_fp4 {};
@@ -985,8 +1016,12 @@ struct vk_device_struct {
     vk_pipeline pipeline_rwkv_wkv7_f32;
     vk_pipeline pipeline_gated_linear_attn_f32;
     vk_pipeline pipeline_lightning_indexer_f32[GGML_TYPE_COUNT];
-    // [size_idx][kda] where size_idx: 0=d16, 1=d32, 2=d64, 3=d128
-    vk_pipeline pipeline_gated_delta_net[4][2];
+    // [size_idx][kda][replay] where size_idx: 0=d16, 1=d32, 2=d64, 3=d128
+    vk_pipeline pipeline_gated_delta_net[4][2][2];
+    vk_pipeline pipeline_gated_delta_net_cm[2];
+    vk_pipeline pipeline_gated_delta_net_cm_v32[2];
+    vk_pipeline pipeline_gated_delta_net_cm_v128[2];
+    vk_pipeline pipeline_ssm_scan_f32_d96;
     vk_pipeline pipeline_ssm_scan_f32_d128;
     vk_pipeline pipeline_ssm_scan_f32_d256;
     vk_pipeline pipeline_ssm_conv_f32;

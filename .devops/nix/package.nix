@@ -13,7 +13,6 @@
   blas,
   cudaPackages,
   autoAddDriverRunpath,
-  darwin,
   rocmPackages,
   vulkan-headers,
   vulkan-loader,
@@ -104,19 +103,9 @@ let
     ln -s /usr/bin/xcrun $out/bin
   '';
 
-  # apple_sdk is supposed to choose sane defaults, no need to handle isAarch64
-  # separately
-  darwinBuildInputs =
-    with darwin.apple_sdk.frameworks;
-    [
-      Accelerate
-      CoreVideo
-      CoreGraphics
-    ]
-    ++ optionals useMetalKit [ MetalKit ];
-
   cudaBuildInputs = with cudaPackages; [
     cuda_cudart
+    cuda_nvml_dev
     cccl # <nv/target>
     libcublas
   ];
@@ -182,7 +171,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
   webui = stdenvNoCC.mkDerivation {
     pname = "webui";
     version = llamaVersion;
-    # the app compiles Llama UI from its source in ../../lib/ui, so the source is ui/ as a whole
+    # the app compiles Llama UI and the harness from their sources in ../../lib, so the source is ui/ as a whole
     src = lib.cleanSource ../../ui;
     sourceRoot = "source/apps/chat";
 
@@ -243,8 +232,7 @@ effectiveStdenv.mkDerivation (finalAttrs: {
     ++ optionals syclAot [ oclocAot ];
 
   buildInputs =
-    optionals effectiveStdenv.hostPlatform.isDarwin darwinBuildInputs
-    ++ optionals useCuda cudaBuildInputs
+    optionals useCuda cudaBuildInputs
     ++ optionals useMpi [ mpi ]
     ++ optionals useRocm rocmBuildInputs
     ++ optionals useBlas [ blas ]

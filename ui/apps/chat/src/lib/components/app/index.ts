@@ -1,5 +1,6 @@
 export * from './actions';
 export * from './badges';
+export { default as DropImportOverlay } from './DropImportOverlay.svelte';
 export * from './chat';
 export * from './content';
 export * from './dialogs';

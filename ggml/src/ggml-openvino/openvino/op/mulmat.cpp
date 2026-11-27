@@ -2,7 +2,6 @@
 #include "../op_table.h"
 #include "../utils.h"
 
-#include <climits>
 #include <cstdint>
 #include <memory>
 #include <openvino/core/node.hpp>

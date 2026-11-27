@@ -49,34 +49,29 @@ OutputVector translate_rope(const NodeContext & context) {
 
     Output<Node> cos_theta_node;
     Output<Node> sin_theta_node;
-    if (context.has_input("rope_cos")) {
-        cos_theta_node = context.get_input("rope_cos");
-        sin_theta_node = context.get_input("rope_sin");
+    std::string cache_key = "rope_sin_cos";
+    for (int i = 0; i < 15; i++) {
+        cache_key += "_" + std::to_string(op_params[i]);
+    }
+    if (context.get_input_size() == 3) {
+        cache_key += "_ff_" + context.get_input_names()[2];
+    }
+    // Not every ROPE takes inp_pos: gemma-4 rotates its KV-shared layers at the positions of the output rows only
+    cache_key += "_pos_" + context.get_input_names()[1];
+    if (context.has_input(cache_key + "_cos")) {
+        cos_theta_node = context.get_input(cache_key + "_cos");
+        sin_theta_node = context.get_input(cache_key + "_sin");
     } else {
-        std::string cache_key = "rope_sin_cos";
-        for (int i = 0; i < 15; i++) {
-            cache_key += "_" + std::to_string(op_params[i]);
-        }
+        auto inp_pos = context.get_input(1).get_node_shared_ptr();
+        std::shared_ptr<ov::Node> rope_freqs_weight;
         if (context.get_input_size() == 3) {
-            cache_key += "_ff_" + context.get_input_names()[2];
+            rope_freqs_weight = context.get_input(2).get_node_shared_ptr();
         }
-        // Not every ROPE takes inp_pos: gemma-4 rotates its KV-shared layers at the positions of the output rows only
-        cache_key += "_pos_" + context.get_input_names()[1];
-        if (context.has_input(cache_key + "_cos")) {
-            cos_theta_node = context.get_input(cache_key + "_cos");
-            sin_theta_node = context.get_input(cache_key + "_sin");
-        } else {
-            auto inp_pos = context.get_input(1).get_node_shared_ptr();
-            std::shared_ptr<ov::Node> rope_freqs_weight;
-            if (context.get_input_size() == 3) {
-                rope_freqs_weight = context.get_input(2).get_node_shared_ptr();
-            }
-            auto sin_cos = make_sin_cos(op_params, inp_pos, rope_freqs_weight, mode, false, head_dim);
-            sin_theta_node = sin_cos.first;
-            cos_theta_node = sin_cos.second;
-            context.put_shared(cache_key + "_cos", cos_theta_node);
-            context.put_shared(cache_key + "_sin", sin_theta_node);
-        }
+        auto sin_cos = make_sin_cos(op_params, inp_pos, rope_freqs_weight, mode, false, head_dim);
+        sin_theta_node = sin_cos.first;
+        cos_theta_node = sin_cos.second;
+        context.put_shared(cache_key + "_cos", cos_theta_node);
+        context.put_shared(cache_key + "_sin", sin_theta_node);
     }
 
     auto output_type = context.get_output_type();

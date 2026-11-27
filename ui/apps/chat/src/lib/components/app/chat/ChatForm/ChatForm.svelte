@@ -1,35 +1,48 @@
 <script lang="ts">
-	import ContextGaugePopup from './ChatFormContextGauge/ContextGaugePopup.svelte';
+	import ContextGaugeDrawer from './ChatFormContextGauge/ContextGaugeDrawer.svelte';
+	import { microphoneUnavailableReason, warmUpVoiceCapture } from '@ggml-org/llama-voice';
+	import { VoiceRecorder } from '@ggml-org/llama-voice/svelte';
 	import { Maximize, Minimize } from '@lucide/svelte';
 	import {
 		ActionIcon,
 		ChatAttachmentsList,
 		ChatFormActions,
+		ChatFormActionsRecording,
 		ChatFormCurrentWorkingDirectory,
 		ChatFormInput,
 		ChatFormInputFileInputInvisible,
 		ChatFormMcpResourcesList,
 		ChatFormPickers,
+		ChatFormSystemMessageAttachment,
+		ChatFormSystemMessageChip,
 		DialogMcpResourcesBrowser
 	} from '#lib/components/app/index.ts';
 	import {
-		CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX,
+		CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES,
 		CLIPBOARD_CONTENT_QUOTE_PREFIX,
 		ICON_CLASS_DEFAULT,
 		INITIAL_FILE_SIZE,
+		OPEN_OVERLAY_SELECTOR,
 		PROMPT_CONTENT_SEPARATOR,
-		SETTING_CONFIG_DEFAULT
+		SETTING_CONFIG_DEFAULT,
+		SYSTEM_MESSAGE_PLACEHOLDER,
+		VOICE_EDITOR_SELECTOR
 	} from '#lib/constants/index.ts';
 	import {
 		ContentPartType,
 		FileExtensionText,
 		KeyboardKey,
+		MessageRole,
 		MimeTypeText,
 		SpecialFileType,
 		ToolSource
 	} from '#lib/enums/index.ts';
 	import { useChatFormExpansion } from '#lib/hooks/use-chat-form-expansion.svelte.ts';
 	import { useChatFormPickers } from '#lib/hooks/use-chat-form-pickers.svelte.ts';
+	import {
+		useChatFormVoice,
+		type VoiceRecorderLike
+	} from '#lib/hooks/use-chat-form-voice.svelte.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -39,7 +52,8 @@
 		serverStore,
 		settingsStore,
 		toolsStore,
-		uiStore
+		uiStore,
+		voiceTranscriptsStore
 	} from '#lib/stores/index.ts';
 	import type {
 		FileMentionEntry,
@@ -49,23 +63,14 @@
 		PromptMessage
 	} from '#lib/types/index.ts';
 	import {
-		AudioRecorder,
-		convertToWav,
-		createAudioFile,
-		describeMicrophoneError,
-		isAudioRecordingSupported,
-		microphoneUnavailableReason
-	} from '#lib/utils/browser-only.ts';
-	import {
 		buildMentionInsertion,
-		findCommandToken,
 		findMentionToken,
 		getConversationModel,
 		isIMEComposing,
 		parseClipboardContent,
 		uuid
 	} from '#lib/utils/index.ts';
-	import { onMount, untrack } from 'svelte';
+	import { onMount, tick, untrack } from 'svelte';
 	import type { ClassValue } from 'svelte/elements';
 	import { toast } from 'svelte-sonner';
 
@@ -86,6 +91,8 @@
 		placeholder?: string;
 		showAddButton?: boolean;
 		showModelSelector?: boolean;
+		/** Writing the system message: the form takes the system message's dashed, muted look. */
+		systemMode?: boolean;
 
 		// Event Handlers
 		onAttachmentRemove?: (index: number) => void;
@@ -96,6 +103,9 @@
 		onUploadedFileRemove?: (fileId: string) => void;
 		onUploadedFilesChange?: (files: ChatUploadedFile[]) => void;
 		onValueChange?: (value: string) => void;
+
+		/** Records voice input; tests and stories pass a fake, the app a VoiceRecorder. */
+		voiceRecorder?: VoiceRecorderLike;
 	}
 
 	let {
@@ -116,29 +126,30 @@
 		showAddButton = true,
 		showModelSelector = true,
 		singleRow = false,
+		systemMode = false,
 		uploadedFiles = $bindable([]),
-		value = $bindable('')
+		value = $bindable(''),
+		voiceRecorder
 	}: Props = $props();
 
 	// Component References
 
-	let audioRecorder: AudioRecorder | undefined;
 	let chatFormActionsRef: ChatFormActions | undefined = $state(undefined);
 	let fileInputRef: ChatFormInputFileInputInvisible | undefined = $state(undefined);
 	let pickersRef: { handleKeydown: (event: KeyboardEvent) => boolean } | undefined =
 		$state(undefined);
 	let inputRef: ChatFormInput | undefined = $state(undefined);
+	let workingDirectoryRef: ChatFormCurrentWorkingDirectory | undefined = $state(undefined);
 
-	// Audio Recording State
-	let isRecording = $state(false);
-	let recordingSupported = $state(false);
+	// Voice input
+	const recorder: VoiceRecorderLike = untrack(() => voiceRecorder) ?? new VoiceRecorder();
 	/** Why this page can't record at all (no HTTPS, no recorder), which no tap fixes. */
 	let micUnavailableReason = $state<string | null>(null);
 	/** Why the last start failed (denied, no microphone, busy); the next tap tries again. */
 	let micError = $state<string | null>(null);
 
-	// Invisible anchor the pickers' popovers float above: the form's top edge, or in the
-	// expanded editor the line being written
+	// Invisible anchor the pickers' popovers float above: the line being written, or on a
+	// phone the form's top edge
 	let pickerAnchor: HTMLDivElement | null = $state(null);
 	let pickerAnchorBox = $state({ height: 1, top: 0 });
 
@@ -146,6 +157,25 @@
 		conversationsStore.activeConversation?.cwd ?? conversationsStore.preferences.pendingCwd
 	);
 
+	let systemMessage = $derived(
+		conversationsStore.activeMessages.find((m) => m.role === MessageRole.SYSTEM)
+	);
+	// A new chat shows the system message written for it as an attachment, until the first
+	// message sends it. A conversation with one offers it in a chip under the form.
+	// A placeholder is one nobody has written yet
+	let systemMessageAttachment = $derived.by(() => {
+		if (conversationsStore.activeConversation) return null;
+
+		const content = chatStore.pendingSystemMessage;
+
+		return content && content.trim() && content !== SYSTEM_MESSAGE_PLACEHOLDER ? content : null;
+	});
+	let systemMessageChip = $derived(
+		conversationsStore.activeConversation ? systemMessage?.content : undefined
+	);
+
+	// a system message is the same whichever model answers: its editor offers no selector
+	let isModelSelectorShown = $derived(showModelSelector && !systemMode);
 	let showWorkingDirectory = $derived(conversationsStore.preferences.hasEnabledCwdTools());
 	// On a desktop the chip under the form shows a directory once one is set, and the + menu
 	// sets one until then. A phone has no chip: a chat shows it in its header (see
@@ -157,12 +187,16 @@
 
 	const pickers = useChatFormPickers({
 		canCompact: () => chatStore.canCompact(conversationsStore.activeMessages),
+		canEditSystemMessage: () => !!onSystemPromptClick && !systemMode,
+		// a phone picks in a drawer with its own search field, and a touch screen opens no
+		// typed pickers (see opensOnInput)
+		editsCwdInline: () => !deviceStore.isMobile && !deviceStore.isTouch,
 		focusInput: refocusInput,
 		getCaretOffset: () => inputRef?.getCaretOffset(),
 		getCwd: () => cwd,
 		getPickersRef: () => pickersRef,
 		getServerHome: () => toolsStore.serverHome ?? null,
-		getShowModelSelector: () => showModelSelector,
+		getShowModelSelector: () => isModelSelectorShown,
 		getValue: () => value,
 		hasCwdTools: () => conversationsStore.preferences.hasEnabledCwdTools(),
 		// policy-aware, same rule as the agentic flow: MCP category on and at
@@ -170,34 +204,53 @@
 		hasPrompts: () => {
 			const prefs = conversationsStore.preferences;
 
-			if (!prefs.isCategoryEnabled(ToolSource.MCP)) return false;
+			if (!mcpStore.isFeatureEnabled || !prefs.isCategoryEnabled(ToolSource.MCP)) return false;
 
 			return mcpStore
 				.getServers()
 				.some((s) => s.enabled && prefs.isServerToolsEnabled(s.id) && s.url.trim());
 		},
 		onCompact: () => chatStore.compactConversation(),
+		onSystemMessage: () => onSystemPromptClick?.({ files: uploadedFiles, message: value }),
 		openModelSelector: () => chatFormActionsRef?.openModelSelector(),
 		// TODO: no typed pickers with an on-screen keyboard for now: each mobile browser moves
 		// the page its own way as it opens, so a list by the form can not stay clear of the
 		// text. A drawer with its own search field (as the directory picker is) could.
 		opensOnInput: () => !deviceStore.isTouch,
-		setCaretOffset: (offset) => inputRef?.setCaretOffset(offset),
+		setCaretOffset: (offset) => {
+			inputRef?.setCaretOffset(offset);
+			// the caret moved without typing, e.g. onto the `/cwd` line the + menu just added
+			measurePickerAnchor();
+		},
 		setValue: (v) => {
 			value = v;
 			onValueChange?.(v);
 		}
 	});
 
-	async function handleWorkingDirectoryChange(newDir: string | null) {
-		// Committing a directory consumes the `/cwd` token; the chip's
-		// clear-X path has no token to consume.
-		const token = findCommandToken(value);
-
-		if (token && token.name === 'cwd') {
-			value = '';
-			onValueChange?.('');
+	const voice = useChatFormVoice({
+		addVoiceFile: (file) => {
+			uploadedFiles = [...uploadedFiles, file];
+			onUploadedFilesChange?.(uploadedFiles);
+		},
+		getCaretOffset: () => inputRef?.getCaretOffset() ?? value.length,
+		getValue: () => value,
+		onMicError: (message) => (micError = message),
+		recorder,
+		// on a phone placing the caret would open the keyboard
+		setCaretOffset: (offset) => {
+			if (!deviceStore.isMobile) inputRef?.setCaretOffset(offset);
+		},
+		setValue: (next) => {
+			value = next;
+			onValueChange?.(next);
 		}
+	});
+
+	async function handleWorkingDirectoryChange(newDir: string | null) {
+		// Committing a directory consumes the `/cwd` line and keeps the message below it; the
+		// chip's clear-X path has no line to consume.
+		pickers.consumeCwdCommand();
 
 		await conversationsStore.preferences.setCwd(newDir);
 
@@ -234,6 +287,14 @@
 		(attachments && attachments.length > 0) || (uploadedFiles && uploadedFiles.length > 0)
 	);
 	let canSubmit = $derived(value.trim().length > 0 || hasAttachments);
+	// while a voice message records, what is being said shows in the empty message box; once
+	// it stops, the text goes with the clip, as its transcript
+	let voicePlaceholder = $derived(
+		voice.isActive && voice.liveCaption && !value.trim() ? voice.liveCaption : null
+	);
+
+	// while a reply streams, sending what is recorded waits for its first words in the form
+	let hasVoiceText = $derived(!!value.trim() || !!voice.liveCaption);
 
 	const EXPANDED_SHEET_FILL = 'max-md:bg-(--chat-form-sheet-fill)';
 
@@ -259,11 +320,14 @@
 	// wrapped, as the wider row of its own would fit it again and flip it straight back
 	let textHeight = $state<number | null>(null);
 	let wrappedAtLength = Infinity;
+	let lastLength = 0;
 	let canBeSingleRow = $derived(
 		singleRow &&
 			!deviceStore.isMobile &&
 			!isExpanded &&
+			!voice.isActive &&
 			!hasAttachments &&
+			!systemMessageAttachment &&
 			!mcpStore.resources.hasAttachments &&
 			!value.includes('\n')
 	);
@@ -275,11 +339,16 @@
 	$effect(() => {
 		void textHeight;
 
-		const height = inputRef?.getContentDOM()?.offsetHeight ?? 0;
-		const fitsOneLine = height < CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX;
+		const content = inputRef?.getContentDOM();
+		const lineHeight = content ? parseFloat(getComputedStyle(content).lineHeight) : 0;
+		const lines = content && lineHeight ? content.offsetHeight / lineHeight : 0;
+		const fitsOneLine = lines < CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES;
 		const length = value.length;
 
-		if (!length) wrappedAtLength = Infinity;
+		// an emptied form tries the one row again; one that wraps while empty keeps the two rows
+		if (!length && lastLength) wrappedAtLength = Infinity;
+
+		lastLength = length;
 
 		if (!canBeSingleRow) {
 			isSingleRow = false;
@@ -302,18 +371,30 @@
 		isExpanded && deviceStore.isMobile ? (actionsEl ?? null) : pickerAnchor
 	);
 
+	// The anchor covers the caret's line, kept within the form when the line is scrolled out
+	// of the editor's view; on a phone the form's top edge
+	function measurePickerAnchor() {
+		const line = deviceStore.isMobile ? null : inputRef?.getCaretRect();
+		const form = pickerAnchor?.parentElement?.getBoundingClientRect();
+
+		if (!line || !form) {
+			pickerAnchorBox = { height: 1, top: 0 };
+
+			return;
+		}
+
+		const top = Math.min(Math.max(line.top - form.top, 0), form.height);
+
+		pickerAnchorBox = { height: Math.max(line.bottom - line.top, 1), top };
+	}
+
 	// before the popover is drawn, and again as the query is typed and the line moves
 	$effect.pre(() => {
 		if (!isPickerOpen) return;
 
 		void value;
 
-		const line = isExpanded && !deviceStore.isMobile ? inputRef?.getCaretRect() : null;
-		const formTop = pickerAnchor?.parentElement?.getBoundingClientRect().top ?? 0;
-
-		pickerAnchorBox = line
-			? { height: line.bottom - line.top, top: line.top - formTop }
-			: { height: 1, top: 0 };
+		measurePickerAnchor();
 	});
 	// shown on hover (always on touch screens) while collapsed, always while expanded: on
 	// the phone sheet it keeps the collapsed card's place, below the status bar
@@ -327,9 +408,7 @@
 	);
 
 	onMount(() => {
-		recordingSupported = isAudioRecordingSupported();
 		micUnavailableReason = microphoneUnavailableReason();
-		audioRecorder = new AudioRecorder();
 	});
 
 	/** Expands for the message as it stands, e.g. one put back after a send failed. */
@@ -375,6 +454,10 @@
 				onAttachmentRemove?.(index);
 			}
 		} else {
+			const removed = uploadedFiles.find((file) => file.id === fileId);
+
+			if (removed?.voice) voiceTranscriptsStore.forget(removed.name);
+
 			onUploadedFileRemove?.(fileId);
 		}
 	}
@@ -382,7 +465,14 @@
 	function handleKeydown(event: KeyboardEvent) {
 		// Pickers consume navigation/escape keys first; when consumed, skip
 		// the enter-to-submit logic below and keep the key from the editor.
-		if (pickers.handleKeydown(event)) {
+		// The directory picker takes the keys typed on its `/cwd` line; in the message below
+		// it only Escape, so Enter and the arrows there stay the message's
+		const isDirectoryKey = pickers.isCaretInCwdCommand() || event.key === KeyboardKey.ESCAPE;
+
+		if (
+			(isDirectoryKey && workingDirectoryRef?.handleKeydown(event)) ||
+			pickers.handleKeydown(event)
+		) {
 			event.preventDefault();
 
 			return;
@@ -399,9 +489,7 @@
 
 			event.preventDefault();
 
-			if (!canSubmit || disabled || hasLoadingAttachments) return;
-
-			onSubmit?.();
+			void submit();
 		}
 	}
 
@@ -586,7 +674,7 @@
 		inputRef?.replaceText(built.newValue, built.caretOffset);
 	}
 
-	async function handleMicClick() {
+	function handleMicClick() {
 		// a phone shows no tooltip on a tap, so the reason comes as a toast
 		if (micUnavailableReason) {
 			toast.error(micUnavailableReason);
@@ -594,35 +682,86 @@
 			return;
 		}
 
-		if (!audioRecorder || !recordingSupported) {
-			console.warn('Audio recording not supported');
+		void voice.start();
+	}
+
+	// the audio set-up takes a moment, so it is made while the message is being written;
+	// it asks for no microphone, so the browser shows no recording indicator
+	function handleFocusIn(event: FocusEvent) {
+		if (voice.showButton && !voice.isActive) warmUpVoiceCapture();
+
+		// the voice message's live text shown as the placeholder turns into text to edit
+		if (voicePlaceholder && (event.target as Element | null)?.closest(VOICE_EDITOR_SELECTOR)) {
+			voice.adoptLiveText();
+		}
+	}
+
+	// a send asked for while the dictated text is still being refined waits for it
+	let isSendWaiting = $state(false);
+
+	/** Sends the message; dictated text that is still being refined is sent refined. */
+	async function submit() {
+		if (!canSubmit || disabled || hasLoadingAttachments || isSendWaiting) return;
+
+		// sending closes the directory picker first, so its `/cwd` command is not sent as text
+		if (pickers.isWorkingDirectoryPickerOpen) {
+			pickers.handleWorkingDirectoryClose();
+
+			if (!canSubmit) return;
+		}
+
+		if (voice.isRefining) {
+			isSendWaiting = true;
+
+			try {
+				await voice.settled();
+				await tick();
+			} finally {
+				isSendWaiting = false;
+			}
+
+			if (!canSubmit || disabled || hasLoadingAttachments) return;
+		}
+
+		onSubmit?.();
+	}
+
+	/** Stops the recording and sends the message once its text or clip is in the form. */
+	async function handleStopAndSend() {
+		await voice.stop();
+		await tick();
+		await submit();
+	}
+
+	// Escape drops a recording, or else stops the reply, wherever the focus is. On the body, so it
+	// runs before the overlays' document listeners: a tooltip closing on Escape does not take the key
+	function handleBodyKeydown(event: KeyboardEvent) {
+		if (event.key !== KeyboardKey.ESCAPE || event.defaultPrevented) return;
+
+		if (document.querySelector(OPEN_OVERLAY_SELECTOR)) return;
+
+		if (voice.isActive) {
+			event.preventDefault();
+			voice.cancel();
 
 			return;
 		}
 
-		if (isRecording) {
-			isRecording = false;
-			try {
-				const audioBlob = await audioRecorder.stopRecording();
-				const wavBlob = await convertToWav(audioBlob);
-				const audioFile = createAudioFile(wavBlob);
+		// the system message editor and a message edit take Escape in their own window listeners
+		if (!isLoading || systemMode || chatStore.isEditing() || isIMEComposing(event)) return;
 
-				onFilesAdd?.([audioFile]);
-			} catch (error) {
-				console.error('Failed to stop recording:', error);
-			}
-		} else {
-			try {
-				await audioRecorder.startRecording();
-				isRecording = true;
-				micError = null;
-			} catch (error) {
-				micError = describeMicrophoneError(error);
-				toast.error(micError);
-			}
-		}
+		event.preventDefault();
+		onStop?.();
 	}
 </script>
+
+<svelte:body onkeydown={handleBodyKeydown} />
+
+{#snippet systemMessageLeading()}
+	{#if systemMessageAttachment}
+		<ChatFormSystemMessageAttachment content={systemMessageAttachment} {disabled} />
+	{/if}
+{/snippet}
 
 <ChatFormInputFileInputInvisible bind:this={fileInputRef} onFileSelect={handleFileSelect} />
 
@@ -636,12 +775,10 @@
 			'max-h-[calc(100dvh-var(--chat-tabs-offset,0px)-var(--chat-form-padding-top)-2rem)] max-md:max-h-dvh',
 		className
 	]}
+	onfocusin={handleFocusIn}
 	onsubmit={(event) => {
 		event.preventDefault();
-
-		if (!canSubmit || disabled || hasLoadingAttachments) return;
-
-		onSubmit?.();
+		void submit();
 	}}
 >
 	<!-- the pickers' own triggers fill this box, so all of them share the anchor -->
@@ -678,9 +815,7 @@
 		bind:this={cardEl}
 		class={[
 			'chat-form-surface group/chat-form relative flex shrink flex-col overflow-hidden outline-none transition-[min-height,padding,border-radius,border-color,background-color] duration-400 ease-[var(--chat-form-resize-ease,cubic-bezier(0.3,1.12,0.5,1))] motion-reduce:transition-none',
-			isSingleRow
-				? 'rounded-(--chat-form-single-row-radius)'
-				: 'rounded-(--chat-form-radius-compact) md:rounded-(--chat-form-radius)',
+			isSingleRow ? 'rounded-(--chat-form-single-row-radius)' : 'rounded-4xl md:rounded-3xl',
 			// on a phone the sheet's animation moves it (see useChatFormExpansion): only its
 			// border, hidden on the sheet, fades back in after
 			'max-md:transition-[border-color] max-md:duration-200',
@@ -702,10 +837,13 @@
 				'max-md:pt-safe',
 				// no rim, ring or visible border along the screen's edges; the border stays
 				// transparent so nothing inside shifts by its width
-				'max-md:[--glass-edge-side:transparent] max-md:[--glass-edge-mid:transparent] max-md:[--glass-edge-side-focus:transparent] max-md:[--glass-edge-mid-focus:transparent] max-md:[--glass-highlight:transparent]',
+				'max-md:[--glass-edge:transparent] max-md:[--glass-edge-focus:transparent] max-md:[--glass-highlight:transparent]',
 				'max-md:border-transparent max-md:focus-within:border-transparent max-md:dark:border-transparent max-md:dark:focus-within:border-transparent',
 				EXPANDED_SHEET_FILL
 			],
+			// a dashed outline stands in for the card's edge, drawn inside it: the card keeps its size
+			systemMode &&
+				'!bg-muted !outline-2 -outline-offset-2 !outline-dashed !outline-border/50 [--glass-edge-focus:transparent] [--glass-edge:transparent]',
 			disabled && 'cursor-not-allowed opacity-60'
 		]}
 		data-single-row={isSingleRow || undefined}
@@ -727,6 +865,7 @@
 			activeModelId={activeModelId ?? undefined}
 			{attachments}
 			class={isExpanded ? 'py-5 max-md:px-(--chat-form-side-inset)' : 'py-5'}
+			leading={systemMessageAttachment ? systemMessageLeading : undefined}
 			limitToSingleRow
 			onFileRemove={handleFileRemove}
 			style="scroll-padding: 1rem;"
@@ -734,7 +873,7 @@
 
 		<div
 			class={[
-				'relative flex flex-1 shadow-sm transition-shadow focus-within:shadow-md',
+				'relative flex flex-1 shadow-(--elevation-control) transition-shadow focus-within:shadow-(--elevation-surface)',
 				// the add button, the text and the rest of the actions, or the text above them
 				isSingleRow
 					? 'items-center gap-2 rounded-(--chat-form-single-row-radius) px-3 py-2.5'
@@ -755,13 +894,14 @@
 				{disabled}
 				expanded={isExpanded}
 				onInput={() => {
+					voice.handleUserInput();
 					expansion.handleInput();
 					pickers.handleInput();
 					onValueChange?.(value);
 				}}
 				onKeydown={handleKeydown}
 				onPaste={handlePaste}
-				{placeholder}
+				placeholder={voicePlaceholder ?? placeholder}
 			/>
 
 			{#if mcpStore.resources.hasAttachments}
@@ -776,34 +916,63 @@
 
 			<!-- its own box, so the phone sheet can hold it by the bottom edge while it moves -->
 			<div bind:this={actionsEl} class={isSingleRow ? 'contents' : 'relative mt-auto'}>
-				<ChatFormActions
-					bind:this={chatFormActionsRef}
-					canSend={canSubmit}
-					class={isSingleRow ? undefined : 'px-3'}
-					{disabled}
-					inline={isSingleRow}
-					{isLoading}
-					isReasoning={chatStore.isReasoning}
-					{isRecording}
-					micWarning={micUnavailableReason ?? micError}
-					onFileUpload={handleFileUpload}
-					onMicClick={handleMicClick}
-					{onStop}
-					onSystemPromptClick={() =>
-						onSystemPromptClick?.({ files: uploadedFiles, message: value })}
-					onWorkingDirectoryClick={isWorkingDirectoryInAddMenu
-						? pickers.handleWorkingDirectoryOpen
-						: undefined}
-					{showAddButton}
-					{showModelSelector}
-					{uploadedFiles}
-					workingDirectory={cwd}
-				/>
+				{#if voice.isActive}
+					<ChatFormActionsRecording
+						class="px-3"
+						elapsedMs={voice.elapsedMs}
+						levels={voice.levels}
+						liveCaption={voicePlaceholder ? '' : voice.liveCaption}
+						mode={voice.mode}
+						onCancel={voice.cancel}
+						onSend={isLoading && !hasVoiceText ? undefined : () => void handleStopAndSend()}
+						onStop={() => void voice.stop()}
+						quiet={voice.quiet}
+						state={voice.state}
+					/>
+				{/if}
+
+				<!-- kept while recording, so its selector and menus keep their state -->
+				<div class={voice.isActive ? 'hidden' : 'contents'}>
+					<ChatFormActions
+						bind:this={chatFormActionsRef}
+						canSend={canSubmit}
+						class={isSingleRow ? undefined : 'px-3'}
+						{disabled}
+						inline={isSingleRow}
+						{isLoading}
+						isReasoning={chatStore.isReasoning}
+						{isSendWaiting}
+						isVoiceRefining={voice.isRefining}
+						micWarning={micUnavailableReason ?? micError}
+						onFileUpload={handleFileUpload}
+						onFilesSelect={handleFileSelect}
+						onMicClick={handleMicClick}
+						{onStop}
+						onSystemPromptClick={() =>
+							onSystemPromptClick?.({ files: uploadedFiles, message: value })}
+						onWorkingDirectoryClick={isWorkingDirectoryInAddMenu
+							? pickers.handleWorkingDirectoryOpen
+							: undefined}
+						{showAddButton}
+						showModelSelector={isModelSelectorShown}
+						voice={{
+							action: voice.label,
+							hint: voice.hint,
+							prepare: voice.prepare,
+							show: voice.showButton,
+							unavailableReason: voice.unavailableReason,
+							unprepare: voice.unprepare
+						}}
+						workingDirectory={cwd}
+					/>
+				</div>
 			</div>
 		</div>
 	</div>
 
-	<ContextGaugePopup />
+	{#if deviceStore.isMobile}
+		<ContextGaugeDrawer />
+	{/if}
 
 	<!-- iOS Safari tints its bottom toolbar from a solid fixed element at the screen's bottom
 	     edge: this strip carries the sheet's fill while it rests -->
@@ -817,21 +986,33 @@
 		></div>
 	{/if}
 
-	{#if showWorkingDirectory}
-		<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
-		<ChatFormCurrentWorkingDirectory
-			bind:query={pickers.workingDirectoryQuery}
-			class="self-start"
-			customAnchor={activePickerAnchor}
-			directory={cwd}
-			{disabled}
-			isOpen={pickers.isWorkingDirectoryPickerOpen}
-			onChange={handleWorkingDirectoryChange}
-			onClose={pickers.handleWorkingDirectoryClose}
-			onOpen={pickers.handleWorkingDirectoryOpen}
-			showChip={showWorkingDirectoryChip}
-		/>
-	{/if}
+	<!-- The chips sit under the card. On a new chat, where the page centres the form, they
+	     hang below it and take no room: the card stays where it is as they come and go -->
+	<div
+		class="flex flex-wrap items-center gap-x-1 self-start md:group-data-[chat-form-lifted]/chat-form-host:absolute md:group-data-[chat-form-lifted]/chat-form-host:top-full"
+	>
+		{#if showWorkingDirectory}
+			<!-- opened from the chip, the + menu, a phone chat's header or `/cwd` -->
+			<ChatFormCurrentWorkingDirectory
+				bind:query={pickers.workingDirectoryQuery}
+				bind:this={workingDirectoryRef}
+				class="self-start"
+				customAnchor={activePickerAnchor}
+				directory={cwd}
+				{disabled}
+				inline={pickers.isWorkingDirectoryInline}
+				isOpen={pickers.isWorkingDirectoryPickerOpen}
+				onChange={handleWorkingDirectoryChange}
+				onClose={pickers.handleWorkingDirectoryClose}
+				onOpen={pickers.handleWorkingDirectoryOpen}
+				showChip={showWorkingDirectoryChip}
+			/>
+		{/if}
+
+		{#if systemMessageChip}
+			<ChatFormSystemMessageChip content={systemMessageChip} {disabled} />
+		{/if}
+	</div>
 </form>
 
 <DialogMcpResourcesBrowser

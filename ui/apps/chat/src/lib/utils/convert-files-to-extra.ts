@@ -1,3 +1,4 @@
+import { clampPdfDpi } from './pdf-dpi';
 import { convertPDFToImage, convertPDFToText } from './pdf-processing';
 import { isSvgMimeType, svgBase64UrlToPngDataURL } from './svg-to-png';
 import { isLikelyTextFile, readFileAsText } from './text-files';
@@ -6,6 +7,7 @@ import { SETTINGS_KEYS } from '#lib/constants/index.ts';
 import { AttachmentType, FileTypeCategory, SpecialFileType } from '#lib/enums/index.ts';
 import { modelsStore } from '#lib/stores/models/index.svelte.ts';
 import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
+import { voiceTranscriptsStore } from '#lib/stores/voice-transcripts.svelte.ts';
 import type {
 	ChatUploadedFile,
 	DatabaseMessageExtra,
@@ -83,13 +85,21 @@ export async function parseFilesToMessageExtras(
 			// Process audio files (MP3 and WAV)
 			try {
 				const base64Data = await readFileAsBase64(file.file);
+				// a voice message keeps its waveform, and its transcript once it is there
+				const transcript = file.voice ? voiceTranscriptsStore.transcriptOf(file.name) : undefined;
 
 				extras.push({
 					base64Data: base64Data,
 					mimeType: file.type,
 					name: file.name,
 					size: file.size,
-					type: AttachmentType.AUDIO
+					type: AttachmentType.AUDIO,
+					...(file.voice && {
+						durationMs: file.voice.durationMs,
+						peaks: file.voice.peaks,
+						voice: true as const,
+						...(transcript !== undefined && { transcript })
+					})
 				});
 			} catch (error) {
 				console.error(`Failed to process audio file ${file.name}:`, error);
@@ -143,7 +153,7 @@ export async function parseFilesToMessageExtras(
 				if (shouldProcessAsImages) {
 					// Process PDF as images (only for vision models)
 					try {
-						const images = await convertPDFToImage(file.file);
+						const images = await convertPDFToImage(file.file, clampPdfDpi(currentConfig.pdfDpi));
 						// kept for the preview's Text view; the model only receives the images
 						const content = file.textContent ?? (await convertPDFToText(file.file).catch(() => ''));
 

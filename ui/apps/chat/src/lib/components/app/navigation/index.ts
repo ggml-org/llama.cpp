@@ -182,7 +182,7 @@ export { default as SidebarNavigationSelectionBar } from './SidebarNavigation/Si
 export { default as SidebarNavigationConversationList } from './SidebarNavigation/SidebarNavigationConversationList.svelte';
 export { default as SidebarNavigationActions } from './SidebarNavigation/SidebarNavigationActions.svelte';
 
-/** The sidebar's footer: Models, MCP and Settings in a group inset in the sidebar. */
+/** The sidebar's footer: Models and Settings in a group inset in the sidebar. */
 export { default as SidebarNavigationFooter } from './SidebarNavigation/SidebarNavigationFooter.svelte';
 
 /**

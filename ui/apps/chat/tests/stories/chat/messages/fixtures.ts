@@ -14,6 +14,7 @@ import type {
 	ChatMessageActions,
 	ChatMessageAgenticTimings,
 	ChatMessageSiblingInfo,
+	ChatMessageToolCallTiming,
 	DatabaseMessage,
 	DatabaseMessageExtra,
 	SettingsConfigValue
@@ -210,15 +211,34 @@ export const rawOutputMessage = createMessage({
 
 /* Agentic (tool calls) */
 
+// a fixed start, so the loop time the group shows does not depend on the clock
+const AGENTIC_LOOP_START = Date.UTC(2026, 0, 1);
+const agenticToolCallTimings: ChatMessageToolCallTiming[] = [
+	{
+		duration_ms: 42,
+		endedAt: AGENTIC_LOOP_START + 42,
+		id: 'call-info',
+		name: BuiltInTool.SERVER_GET_INFO,
+		startedAt: AGENTIC_LOOP_START,
+		success: true
+	},
+	{
+		duration_ms: 318,
+		endedAt: AGENTIC_LOOP_START + 2418,
+		id: 'call-ls',
+		name: BuiltInTool.SERVER_EXEC_SHELL_COMMAND,
+		// waited for approval after the first call
+		startedAt: AGENTIC_LOOP_START + 2100,
+		success: true
+	}
+];
+
 export const agenticTimings: ChatMessageAgenticTimings = {
 	llm: { predicted_ms: 5400, predicted_n: 312, prompt_ms: 980, prompt_n: 4210 },
 	perTurn: [
 		{
 			llm: { predicted_ms: 1800, predicted_n: 96, prompt_ms: 610, prompt_n: 2400 },
-			toolCalls: [
-				{ duration_ms: 42, name: BuiltInTool.SERVER_GET_INFO, success: true },
-				{ duration_ms: 318, name: BuiltInTool.SERVER_EXEC_SHELL_COMMAND, success: true }
-			],
+			toolCalls: agenticToolCallTimings,
 			toolsMs: 360,
 			turn: 1
 		},
@@ -229,12 +249,10 @@ export const agenticTimings: ChatMessageAgenticTimings = {
 			turn: 2
 		}
 	],
-	toolCalls: [
-		{ duration_ms: 42, name: BuiltInTool.SERVER_GET_INFO, success: true },
-		{ duration_ms: 318, name: BuiltInTool.SERVER_EXEC_SHELL_COMMAND, success: true }
-	],
+	toolCalls: agenticToolCallTimings,
 	toolCallsCount: 2,
 	toolsMs: 360,
+	totalMs: 9840,
 	turns: 2
 };
 
@@ -244,6 +262,7 @@ export const assistantWithToolCallsMessage = createMessage({
 	parent: 'user-1',
 	reasoningContent: 'I need the working directory and the file list before I answer.',
 	role: MessageRole.ASSISTANT,
+	timings: { agentic: agenticTimings, predicted_ms: 1800, predicted_n: 96 },
 	toolCalls: toolCallsJson([
 		{ args: {}, id: 'call-info', name: BuiltInTool.SERVER_GET_INFO },
 		{ args: { command: 'ls -la' }, id: 'call-ls', name: BuiltInTool.SERVER_EXEC_SHELL_COMMAND }
@@ -591,6 +610,73 @@ export const searchResultsSection = toolSection(
 		'The server accepts --model-draft to enable speculative decoding.'
 	].join('\n')
 );
+
+export const toolSearchSection = toolSection(
+	'tool_search',
+	{ max_results: 1, query: 'select:Monitor' },
+	'Loaded 1 tool: Monitor'
+);
+
+/* Tool call groups: runs of consecutive calls shown as one row */
+
+function withId(section: AgenticSection, toolCallId: string): AgenticSection {
+	return { ...section, toolCallId };
+}
+
+const IMAGE_SECTION_COUNT = 4;
+
+export const toolGroupSections: AgenticSection[] = [
+	withId(getInfoSection, 'group-info'),
+	withId(readFileSection, 'group-read'),
+	withId(grepSearchSection, 'group-grep'),
+	withId(editFileSection, 'group-edit'),
+	withId(execShellSection, 'group-exec'),
+	withId(writeFileSection, 'group-write')
+];
+
+export const toolGroupImageSections: AgenticSection[] = [
+	withId(execShellSection, 'image-exec'),
+	...Array.from({ length: IMAGE_SECTION_COUNT }, (_, i) => ({
+		...readMediaSection,
+		toolArgs: JSON.stringify({ path: `/home/user/charts/chart-${i + 1}.svg` }),
+		toolCallId: `image-media-${i}`,
+		toolResultExtras: [
+			{
+				base64Url: i % 2 === 0 ? CHART_IMAGE_URL : SVG_IMAGE_URL,
+				name: 'mcp-attachment-usage.svg',
+				type: AttachmentType.IMAGE as const
+			}
+		]
+	}))
+];
+
+export const toolGroupRunningSections: AgenticSection[] = [
+	withId(readFileSection, 'running-read'),
+	withId(grepSearchSection, 'running-grep'),
+	toolSection(
+		BuiltInTool.SERVER_READ_FILE,
+		{ path: 'package.json' },
+		undefined,
+		AgenticSectionType.TOOL_CALL_PENDING
+	)
+];
+
+export const TOOL_GROUP_EXECUTING_ID = 'running-exec';
+
+export const toolGroupShellRunningSections: AgenticSection[] = [
+	withId(readFileSection, 'shell-read'),
+	{
+		...withId(execShellPendingSection, TOOL_GROUP_EXECUTING_ID),
+		toolResult: '> app@0.1.0 build\n> vite build\n\nvite v7.0.0 building for production...\n',
+		type: AgenticSectionType.TOOL_CALL
+	}
+];
+
+export const toolGroupMcpSections: AgenticSection[] = [
+	withId(toolSearchSection, 'mcp-search'),
+	withId(defaultToolSection, 'mcp-weather'),
+	withId(defaultToolMarkdownSection, 'mcp-issue')
+];
 
 /* Reasoning sections */
 

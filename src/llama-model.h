@@ -130,6 +130,7 @@ enum llm_type {
     LLM_TYPE_21B_A3B, // Ernie MoE small
     LLM_TYPE_24B_A2B, // lfm2moe
     LLM_TYPE_26B_A4B, // Gemma4
+    LLM_TYPE_29B_A4B, // Raon-1 mini
     LLM_TYPE_30B_A3B,
     LLM_TYPE_31B_A3_5B,
     LLM_TYPE_32B_A9B, // Granite4 Hybrid
@@ -424,6 +425,13 @@ struct llama_layer {
     struct ggml_tensor * dflash_ffn_conv_base  = nullptr;
     struct ggml_tensor * dflash_ffn_conv_proj  = nullptr;
 
+    // per-layer context K/V from mixed target features (Inkling2 DSpark)
+    struct ggml_tensor * dflash_ctx_mix         = nullptr;
+    struct ggml_tensor * dflash_ctx_norm        = nullptr;
+    struct ggml_tensor * dflash_wk_ctx          = nullptr;
+    struct ggml_tensor * dflash_wv_ctx          = nullptr;
+    struct ggml_tensor * dflash_attn_k_ctx_norm = nullptr;
+
     struct ggml_tensor * lilicorr_attn_norm       = nullptr;
     struct ggml_tensor * lilicorr_mlp_norm        = nullptr;
     struct ggml_tensor * lilicorr_attn_in_proj    = nullptr;
@@ -605,6 +613,7 @@ struct llama_layer {
     struct ggml_tensor * ssm_f_a    = nullptr;
     struct ggml_tensor * ssm_f_b    = nullptr;
     struct ggml_tensor * ssm_beta   = nullptr;
+    struct ggml_tensor * ssm_rda    = nullptr;
     struct ggml_tensor * ssm_g_a    = nullptr;
     struct ggml_tensor * ssm_g_b    = nullptr;
     struct ggml_tensor * ssm_o_norm = nullptr;
@@ -635,10 +644,17 @@ struct llama_layer {
     // glm5-next k-pool indexer
     struct ggml_tensor * indexer_kpool_gate = nullptr;
     struct ggml_tensor * indexer_kpool_ape  = nullptr;
+    // hy_v4_flash: what the k-pool pools
+    struct ggml_tensor * indexer_kpool_value = nullptr;
 
     // deepseek41
     struct ggml_tensor * engram_kv   = nullptr;
     struct ggml_tensor * engram_gate = nullptr; // q_weight*k_weight folded
+    // hy_v4_flash: engram_kv bias, per-head norm of the looked-up rows, scale and offset of the delta
+    struct ggml_tensor * engram_kv_b        = nullptr;
+    struct ggml_tensor * engram_lookup_norm = nullptr;
+    struct ggml_tensor * engram_pre_gamma   = nullptr;
+    struct ggml_tensor * engram_hc_scale    = nullptr;
 
     // MSA
     struct ggml_tensor * index_q_proj = nullptr;
@@ -737,14 +753,30 @@ struct llama_meta_device_get_split_state_userdata {
 struct ggml_backend_meta_split_state llama_meta_device_get_split_state(const struct ggml_tensor * tensor, void * userdata);
 
 struct llama_prec_policy {
-    // the key is the weight tensor `res->src[0]`, stores the recommended accumulation type of the op (unused for now)
-    // TODO: migrate ad-hoc ggml_prec_set_acc() calls to this container + update apply() to use it
+    // the key is the weight tensor `res->src[0]`, stores the recommended accumulation type of the op
     std::unordered_map<const ggml_tensor *, ggml_prec> prec_acc;
 
     // the key is the weight tensor `res->src[0]`, stores the recommended activation precision type
     std::unordered_map<const ggml_tensor *, ggml_prec> prec_src1;
 
-    bool apply(ggml_tensor * res) const;
+    bool apply(ggml_tensor * res, const ggml_tensor * w = nullptr) const;
+
+    void set_acc(const ggml_tensor * w, ggml_prec prec) {
+        if (w) {
+            prec_acc[w] = prec;
+        }
+    }
+
+    void set_src1(const ggml_tensor * w, ggml_prec prec) {
+        if (w) {
+            prec_src1[w] = prec;
+        }
+    }
+
+    ggml_prec get_src1(const ggml_tensor * w) const {
+        const auto it = prec_src1.find(w);
+        return it != prec_src1.end() ? it->second : GGML_PREC_UNDEFINED;
+    }
 
     void load(llama_model_loader & ml, const llama_model & model);
 };
@@ -818,6 +850,11 @@ struct llama_model {
 
     llama_hadamard hdmd;
 
+    // weight -> "<name>.scale" tensor (e.g. NVFP4 scale2), applied by build_lora_mm and build_lora_mm_id
+    std::unordered_map<const ggml_tensor *, ggml_tensor *> w_scales;
+
+    ggml_tensor * get_w_scale(const ggml_tensor * w) const;
+
     // see llama_model_set_attn_rot
     bool attn_rot = true;
 
@@ -827,6 +864,8 @@ struct llama_model {
 
     // deepseek41 Engram: token id -> id of its normalized form, hashed into the n-grams
     std::vector<int32_t> engram_token_map;
+    // hy_v4_flash Engram: n_modules*ngram_size hash multipliers, more than hparams.ple_layer_multipliers holds
+    std::vector<uint64_t> engram_multipliers;
 
     struct ggml_tensor * tok_embd   = nullptr;
     struct ggml_tensor * type_embd  = nullptr;
@@ -929,6 +968,9 @@ struct llama_model {
     struct ggml_tensor * dspark_joint_proj   = nullptr; // rnn markov head
     struct ggml_tensor * dspark_joint_proj_b = nullptr;
     struct ggml_tensor * dspark_mask_embd    = nullptr; // per-slot mask embeddings
+    struct ggml_tensor * dspark_markov_w2_b      = nullptr;
+    struct ggml_tensor * dspark_markov_ctx_mix   = nullptr; // rnn markov head: f_rnn from target features
+    struct ggml_tensor * dspark_markov_ctx_norm  = nullptr;
 
     // zaya1
     struct ggml_tensor * res_scale_in   = nullptr;
@@ -1052,6 +1094,12 @@ struct llama_model {
 
     llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
 
+    // graph size budget: max graph nodes per model tensor
+    virtual uint32_t graph_nodes_per_tensor() const { return 8; }
+
+    // apply Hadamard transform to the lightning indexer keys
+    virtual bool lid_k_hdmd() const { return false; }
+
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
     virtual void load_stats  (llama_model_loader & ml) = 0;
@@ -1063,6 +1111,9 @@ struct llama_model {
     virtual void load_arch_hparams(llama_model_loader & ml) = 0;
     virtual void load_arch_tensors(llama_model_loader & ml) = 0;
     virtual std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const = 0;
+
+    // optional, runs after the scale pass
+    virtual void post_arch_tensors(llama_model_loader &) {}
 
 protected:
     llama_model_params params;
@@ -1127,6 +1178,7 @@ struct llama_model_base : public llama_model {
     void load_hparams(llama_model_loader & ml) override;
     void load_vocab  (llama_model_loader & ml) override;
     bool load_tensors(llama_model_loader & ml) override;
+    void load_prec_policy(llama_model_loader & ml);
 
     // model must define these
     void load_arch_hparams(llama_model_loader & ml) override = 0;

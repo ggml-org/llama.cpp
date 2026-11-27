@@ -7,6 +7,7 @@
  * the chat flows.
  */
 
+import { AGENTIC_ENABLED } from '#lib/constants/app.constants.ts';
 import {
 	buildBrowserInfoToolDefinition,
 	buildGetDatetimeToolDefinition,
@@ -27,6 +28,7 @@ import {
 	ToolSource
 } from '#lib/enums/index.ts';
 import { ToolsService } from '#lib/services/tools.service.ts';
+import { agenticMode } from '#lib/stores/agentic-mode.svelte.ts';
 // direct imports between stores, not via the barrel, to avoid circular deps
 import { mcpStore } from '#lib/stores/mcp/index.svelte.ts';
 import { modelsStore } from '#lib/stores/models/index.svelte.ts';
@@ -46,6 +48,7 @@ class ToolsStore {
 	private _error = $state<string | null>(null);
 	private _loading = $state(false);
 	private _serverHome = $state<string | null | undefined>(undefined);
+	private _serverHomeRequest: Promise<string | null> | null = null;
 	private _serverTools = $state<OpenAIToolDefinition[]>([]);
 	private _toolsEndpointUnreachable = $state(false);
 	// server tools that resolve their paths against the working directory,
@@ -58,6 +61,8 @@ class ToolsStore {
 
 	/** Canonical flat list of tool entries with source metadata and stable keys, deduped by key */
 	get allTools(): ToolEntry[] {
+		if (!agenticMode.enabled) return [];
+
 		const entries: ToolEntry[] = [];
 		const seen = new SvelteSet<string>();
 		const push = (entry: ToolEntry) => {
@@ -233,7 +238,7 @@ class ToolsStore {
 	}
 
 	async fetchServerTools(): Promise<void> {
-		if (this._loading) return;
+		if (!AGENTIC_ENABLED || this._loading) return;
 
 		this._loading = true;
 		this._error = null;
@@ -243,6 +248,7 @@ class ToolsStore {
 			const toolInfos = await ToolsService.list();
 
 			this._serverTools = toolInfos.map((info) => info.definition);
+			agenticMode.serverHasTools = toolInfos.length > 0;
 			this.cwdAwareTools = new SvelteSet(
 				toolInfos.filter((info) => info.uses_cwd).map((info) => info.tool)
 			);
@@ -258,6 +264,7 @@ class ToolsStore {
 			}
 		} finally {
 			this._loading = false;
+			agenticMode.serverToolsKnown = true;
 		}
 	}
 
@@ -428,24 +435,18 @@ class ToolsStore {
 	 * directory picker's search scope and the `~` abbreviation of cwd
 	 * displays. Returns null when tools are unavailable.
 	 */
-	async resolveServerHome(): Promise<string | null> {
-		if (this._serverHome !== undefined) return this._serverHome;
+	resolveServerHome(): Promise<string | null> {
+		if (this._serverHome !== undefined) return Promise.resolve(this._serverHome);
 
-		try {
-			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
-				limit: 1,
-				max_depth: 1,
-				path: HOME_TILDE,
-				type: GlobSearchType.DIR
-			});
+		// a plain chat never calls the server's tools
+		if (!agenticMode.enabled) return Promise.resolve(null);
 
-			this._serverHome = typeof res.base === 'string' ? res.base : null;
-		} catch {
-			// searches still work via a literal `~`, only `~` abbreviation degrades
-			this._serverHome = null;
-		}
+		// callers at the same time (a send, the pickers) share one request
+		this._serverHomeRequest ??= this.requestServerHome().finally(() => {
+			this._serverHomeRequest = null;
+		});
 
-		return this._serverHome;
+		return this._serverHomeRequest;
 	}
 
 	setCategoryEnabled(source: ToolSource, enabled: boolean): void {
@@ -696,6 +697,25 @@ class ToolsStore {
 		if (!vision && !audio) return null;
 
 		return buildReadMediaToolDefinition(vision, audio);
+	}
+
+	private async requestServerHome(): Promise<string | null> {
+		try {
+			const res = await ToolsService.executeToolRaw(BuiltInTool.SERVER_FILE_GLOB_SEARCH, {
+				limit: 1,
+				max_depth: 1,
+				path: HOME_TILDE,
+				type: GlobSearchType.DIR
+			});
+
+			this._serverHome = typeof res.base === 'string' ? res.base : null;
+		} catch {
+			// searches still work via a literal `~`, only `~` abbreviation degrades. Left
+			// unresolved, so the next caller asks again instead of keeping the failure
+			return null;
+		}
+
+		return this._serverHome;
 	}
 
 	private toolKey(source: ToolSource, name: string, serverId?: string): string {

@@ -32,6 +32,7 @@ const uint32_t rows_per_thread = Br / row_split;
 const uint32_t cols_per_iter = WorkGroupSize / D_split / row_split;
 const uint32_t cols_per_thread = Bc / cols_per_iter;
 const uint32_t num_subgroups = SubGroupSize == 0 ? 0 : WorkGroupSize / SubGroupSize;
+const uint32_t mask_iters = (Bc * Br + WorkGroupSize - 1) / WorkGroupSize;
 
 
 layout (binding = 0) readonly buffer Q {float data_q[];};
@@ -201,11 +202,39 @@ void main() {
                 // skip this block
                 continue;
             }
-            // Only load if the block is not all zeros
-            if (mask_opt_bits != MASK_OPT_ALL_ZERO) {
+            // Skip all-zero blocks unless a bias has to be staged
+            if (mask_opt_bits != MASK_OPT_ALL_ZERO || USE_BIAS) {
+                const bool mask_zero = USE_BIAS && mask_opt_bits == MASK_OPT_ALL_ZERO;
                 bool nem1_bounds_check = !(p.gqa_ratio > 1) && (p.nem1 % Br) != 0;
 
                 float max_mask = NEG_FLT_MAX_OVER_2;
+
+                // Bias: all mask, index and table loads before the barrier; the max keeps them there
+                FLOAT_TYPE mb[mask_iters];
+                if (USE_BIAS) {
+                    bool mact[mask_iters], bact[mask_iters];
+                    FLOAT_TYPE mv[mask_iters];
+                    uint32_t bin_base[mask_iters];
+                    int32_t bin[mask_iters];
+                    [[unroll]] for (uint32_t it = 0; it < mask_iters; ++it) {
+                        const uint32_t c = (it * WorkGroupSize + tid) % Bc;
+                        const uint32_t r = (it * WorkGroupSize + tid) / Bc;
+                        uint32_t kcol, bq, bh;
+                        const bool kv_active = fa_kv_index(j * Bc + c, kcol);
+                        mact[it] = it * WorkGroupSize + tid < Bc * Br && kv_active && (!nem1_bounds_check || i * Br + r < p.nem1);
+                        bact[it] = fa_bias_row(r, bq, bh) && mact[it];
+                        mv[it] = FLOAT_TYPE(data_m[mact[it] && !mask_zero ? m_offset + (i * Br + r) * m_stride + kcol : 0]);
+                        bin_base[it] = (bq * p.neq2 + bh) * BiasBins;
+                        bin[it] = data_bias_idx[bact[it] ? bq * p.KV + kcol : 0];
+                    }
+                    [[unroll]] for (uint32_t it = 0; it < mask_iters; ++it) {
+                        const float t = data_bias_table[bact[it] ? bin_base[it] + uint32_t(bin[it]) : 0];
+                        const float m = mask_zero ? 0.0f : float(mv[it]);
+                        mb[it] = FLOAT_TYPE(bact[it] ? m + t : m);
+                        max_mask = mact[it] ? max(max_mask, float(mb[it])) : max_mask;
+                    }
+                }
+
                 barrier();
                 [[unroll]] for (uint32_t idx = 0; idx < Bc * Br; idx += gl_WorkGroupSize.x) {
                     uint32_t c = (idx + tid) % Bc;
@@ -214,9 +243,9 @@ void main() {
                         uint32_t kcol;
                         bool kv_active = fa_kv_index(j * Bc + c, kcol);
                         if (kv_active && (!nem1_bounds_check || i * Br + r < p.nem1)) {
-                            FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + (i * Br + r) * m_stride + kcol]);
-                            masksh[c * masksh_stride + r] = m;
+                            FLOAT_TYPE m = USE_BIAS ? mb[idx / WorkGroupSize] : FLOAT_TYPE(data_m[m_offset + (i * Br + r) * m_stride + kcol]);
                             max_mask = max(max_mask, float(m));
+                            masksh[c * masksh_stride + r] = m;
                         } else {
 #if defined(FLOAT16)
                             masksh[c * masksh_stride + r] = USE_SPARSE ? FLOAT_TYPE(NEG_FLT16_MAX) : FLOAT_TYPE(0);
@@ -452,7 +481,7 @@ void main() {
             }
         }
 
-        if (MASK_ENABLE && mask_opt_bits != MASK_OPT_ALL_ZERO) {
+        if (MASK_ENABLE && (mask_opt_bits != MASK_OPT_ALL_ZERO || USE_BIAS)) {
             [[unroll]] for (uint32_t c = 0; c < cols_per_thread; ++c) {
                 [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {
                     FLOAT_TYPE mvf = masksh[(c * cols_per_iter + col_tid) * masksh_stride + tile_row(r)];

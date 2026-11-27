@@ -20,10 +20,13 @@
 		modalities: ModelModalities;
 		hasTools: boolean;
 		hasReasoning: boolean;
+		/** Leaner pane for a narrow host such as Search: no Hugging Face link, no description. */
+		compact?: boolean;
 	}
 
 	let {
 		baseModels,
+		compact = false,
 		details,
 		gguf,
 		hasReasoning,
@@ -54,7 +57,7 @@
 
 			<div class="min-w-0">
 				<div class="flex items-center gap-2 @max-lg:flex-col @max-lg:items-start">
-					<h1 class="truncate text-lg font-semibold @max-lg:w-full">{details.id ?? modelId}</h1>
+					<h1 class="truncate text-title @max-lg:w-full">{details.id ?? modelId}</h1>
 
 					<ModelCapabilityIcons
 						gapClass="gap-2"
@@ -67,7 +70,7 @@
 
 				{#if baseModels.length}
 					<div class="flex items-center gap-1">
-						<span class="truncate text-xs text-muted-foreground">{baseModels.join(', ')}</span>
+						<span class="truncate text-caption text-muted-foreground">{baseModels.join(', ')}</span>
 
 						<a
 							aria-label="View base model on HuggingFace"
@@ -83,23 +86,25 @@
 			</div>
 		</div>
 
-		<Button
-			class="h-auto gap-1.5 px-2.5 py-1.5 text-xs"
-			href={HuggingFaceService.getModelUrl(modelId)}
-			rel="noopener noreferrer"
-			size="sm"
-			target="_blank"
-			variant="secondary"
-		>
-			<img alt="" class="size-3.5" src={asset('recommended-mcp/huggingface.ico')} />
+		{#if !compact}
+			<Button
+				class="h-auto gap-1.5 px-2.5 py-1.5 text-caption"
+				href={HuggingFaceService.getModelUrl(modelId)}
+				rel="noopener noreferrer"
+				size="sm"
+				target="_blank"
+				variant="secondary"
+			>
+				<img alt="" class="size-3.5" src={asset('recommended-mcp/huggingface.ico')} />
 
-			View on Hugging Face
+				View on Hugging Face
 
-			<ExternalLink class="size-3.5" />
-		</Button>
+				<ExternalLink class="size-3.5" />
+			</Button>
+		{/if}
 	</div>
 
 	<ModelsDiscoverDetailsHfHubStats {details} />
 
-	<ModelsDiscoverDetailsMetadata {details} {gguf} {licenseTag} {modelId} />
+	<ModelsDiscoverDetailsMetadata {compact} {details} {gguf} {licenseTag} {modelId} />
 </header>

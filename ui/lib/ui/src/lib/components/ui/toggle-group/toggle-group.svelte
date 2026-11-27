@@ -61,7 +61,7 @@ get along, so we shut typescript up by casting `value` to `never`.
 	bind:ref
 	bind:value={value as never}
 	class={cn(
-		'group/toggle-group flex w-fit flex-row items-stretch overflow-hidden rounded-control border border-(--toggle-group-border) bg-(--toggle-group-background) shadow-(--toggle-group-shadow) matte-key data-vertical:flex-col',
+		'group/toggle-group flex w-fit flex-row items-stretch overflow-hidden rounded-md border border-(--button-secondary-border) bg-(--button-secondary-background) shadow-(--elevation-control) matte-key data-vertical:flex-col',
 		GROUP_HEIGHT[size ?? 'sm'],
 		className
 	)}

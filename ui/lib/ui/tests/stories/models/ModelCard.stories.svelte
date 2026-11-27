@@ -28,7 +28,7 @@
 
 		<ModelCapabilityIcons asBadges supportsThinking supportsToolUse />
 
-		<p class="line-clamp-2 text-xs text-muted-foreground">
+		<p class="line-clamp-2 text-caption text-muted-foreground">
 			OpenAI's open-weight model for local reasoning and agents, with tool use and adjustable reasoning effort.
 		</p>
 

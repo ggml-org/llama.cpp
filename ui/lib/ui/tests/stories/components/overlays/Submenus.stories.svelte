@@ -112,7 +112,7 @@
 	<div class="h-96 w-[32rem]">
 		<ContextMenu.Root>
 			<ContextMenu.Trigger
-				class="flex h-24 w-52 items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground"
+				class="flex h-24 w-52 items-center justify-center rounded-lg border border-dashed text-body-sm text-muted-foreground"
 			>
 				Right-click here
 			</ContextMenu.Trigger>

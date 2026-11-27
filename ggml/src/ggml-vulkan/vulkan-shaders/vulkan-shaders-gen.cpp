@@ -348,7 +348,10 @@ compile_count_guard acquire_compile_slot() {
 }
 
 void string_to_spv_func(std::string name, std::string in_path, std::string out_path, std::map<std::string, std::string> defines, bool coopmat, bool dep_file, compile_count_guard slot) {
-    std::string target_env = (name.find("_cm2") != std::string::npos) ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
+    // coopmat2 and the maintenance1 GDN coopmat1 variants need SPIR-V 1.6 (vulkan1.3)
+    const bool needs_spv16 = name.find("_cm2") != std::string::npos ||
+                             name.find("gated_delta_net_f32_cm1") != std::string::npos;
+    std::string target_env = needs_spv16 ? "--target-env=vulkan1.3" : "--target-env=vulkan1.2";
 
     #ifdef _WIN32
         std::vector<std::string> cmd = {GLSLC, "-fshader-stage=compute", target_env, "\"" + in_path + "\"", "-o", "\"" + out_path + "\""};
@@ -733,6 +736,8 @@ void process_shaders() {
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
                 string_to_spv("flash_attn_f32_f16", "flash_attn_cm2.comp",
                     merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, true, f16acc);
+                string_to_spv("flash_attn_f32_f16", "flash_attn_cm2.comp",
+                    merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"FA_BIAS_STAGE", "1"}}), fp16, false, true, f16acc, "_bias");
 #endif
 
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
@@ -784,6 +789,9 @@ void process_shaders() {
     string_to_spv("flash_attn_f32_f16_bf16", "flash_attn_cm2.comp",
         merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}),
         true, false, true, false);
+    string_to_spv("flash_attn_f32_f16_bf16", "flash_attn_cm2.comp",
+        merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"FA_BIAS_STAGE", "1"}}),
+        true, false, true, false, "_bias");
 #endif
 
     std::map<std::string, std::string> base_dict = {{"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}};
@@ -1127,6 +1135,30 @@ void process_shaders() {
     string_to_spv("gated_delta_net_f32", "gated_delta_net.comp", merge_maps(base_dict, {{"FLOAT_TYPE", "float"}, {"USE_SUBGROUP_ADD", "1"}, {"USE_SUBGROUP_CLUSTERED", "1"}}));
     string_to_spv("gated_delta_net_f32_nocluster", "gated_delta_net.comp", merge_maps(base_dict, {{"FLOAT_TYPE", "float"}, {"USE_SUBGROUP_ADD", "1"}, {"USE_SUBGROUP_CLUSTERED", "0"}}));
     string_to_spv("gated_delta_net_f32_shmem", "gated_delta_net.comp", merge_maps(base_dict, {{"FLOAT_TYPE", "float"}, {"USE_SUBGROUP_ADD", "0"}, {"USE_SUBGROUP_CLUSTERED", "0"}}));
+
+#if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm2.comp", base_dict, true, false, true);
+    string_to_spv("gated_delta_net_f32", "gated_delta_net_cm2.comp", merge_maps(base_dict, {{"GDN_REPLAY", "1"}}), true, false, true, false, "_rep");
+#endif
+#if defined(GGML_VULKAN_BFLOAT16_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT) && defined(GGML_VULKAN_COOPMAT_MAINTENANCE1_GLSLC_SUPPORT)
+    for (bool replay : {false, true}) {
+        for (bool bf16acc : {false, true}) {
+            auto defines = base_dict;
+            if (replay) {
+                defines["GDN_REPLAY"] = "1";
+            }
+            if (bf16acc) {
+                defines["BF16ACC"] = "1";
+            }
+            const std::string acc_suffix = bf16acc ? "_bf16acc" : "";
+            const std::string rep_suffix = replay ? "_rep" : "";
+            string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", defines, true, true, false, false, acc_suffix + rep_suffix);
+            string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(defines, {{"V", "32"}}), true, true, false, false, acc_suffix + "_v32" + rep_suffix);
+            // The whole-head state mirror is too large for shared memory.
+            string_to_spv("gated_delta_net_f32", "gated_delta_net_cm.comp", merge_maps(defines, {{"GMEM_MIRROR", "1"}, {"V", "128"}}), true, true, false, false, acc_suffix + "_v128" + rep_suffix);
+        }
+    }
+#endif
 
     string_to_spv("opt_step_adamw_f32", "opt_step_adamw.comp", merge_maps(base_dict, {{"A_TYPE", "float"}}));
     string_to_spv("opt_step_sgd_f32", "opt_step_sgd.comp", merge_maps(base_dict, {{"A_TYPE", "float"}}));

@@ -7,3 +7,10 @@ export enum SessionRecordType {
 	MESSAGE = 'message',
 	SESSION = 'session'
 }
+
+/** What the Import/Export settings tab exports. */
+export enum DataExportScope {
+	ALL = 'all',
+	CONVERSATIONS = 'conversations',
+	SETTINGS = 'settings'
+}

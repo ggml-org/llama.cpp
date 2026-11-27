@@ -6,7 +6,6 @@
 	import { MAX_HEIGHT_CODE_BLOCK } from '#lib/constants/index.ts';
 	import { FileTypeText } from '#lib/enums/index.ts';
 	import type { AgenticSection } from '#lib/types/index.ts';
-	import { getToolUi } from '#lib/utils/index.ts';
 
 	interface Props {
 		section: AgenticSection;
@@ -18,16 +17,17 @@
 	let { isStreaming, onToggle, open, section }: Props = $props();
 
 	const runJsMeta = $derived(parseRunJavascriptMeta(section));
-	const title = $derived(getToolUi(section.toolName)?.label ?? section.toolName ?? '');
 </script>
 
-<ToolCallBlock {isStreaming} meta={runJsMeta} {onToggle} {open} {section} {title}>
+<ToolCallBlock {isStreaming} meta={runJsMeta} {onToggle} {open} {section}>
 	{#snippet children(meta, ctx)}
 		{#if ctx.isPending}
-			<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">Running...</div>
+			<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
+				Running...
+			</div>
 		{:else if meta?.errorMessage}
 			<div
-				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-xs text-fg-danger italic"
+				class="flex items-start gap-2 rounded bg-surface-danger p-2 text-caption text-fg-danger italic"
 			>
 				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
@@ -50,7 +50,7 @@
 				streaming={ctx.isCodeStreaming}
 			/>
 
-			<div class="mb-2 mt-3 flex items-center gap-2 text-xs text-muted-foreground/70">
+			<div class="mb-2 mt-3 flex items-center gap-2 text-caption text-muted-foreground/70">
 				<Terminal class="size-icon-xs" />
 
 				<span>Console</span>
@@ -69,7 +69,9 @@
 					/>
 				</div>
 			{:else}
-				<div class="rounded bg-muted/20 p-2 text-xs text-muted-foreground/70 italic">No output</div>
+				<div class="rounded bg-muted/20 p-2 text-caption text-muted-foreground/70 italic">
+					No output
+				</div>
 			{/if}
 		{/if}
 	{/snippet}

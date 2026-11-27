@@ -21,7 +21,9 @@ on:
     paths: [
       '.github/workflows/ci-self-hosted-openvino.yml',
       'ci/run.sh',
-      '**/CMakeLists.txt',
+      'CMakeLists.txt',
+      'ggml/CMakeLists.txt',
+      'tests/CMakeLists.txt',
       '**/.cmake',
       'ggml/src/*',
       'ggml/src/ggml-cpu/**',

@@ -56,7 +56,7 @@
 					</svg>
 				</div>
 
-				<h1 class="mb-2 text-2xl font-bold">Error {status}</h1>
+				<h1 class="mb-2 text-heading font-bold">Error {status}</h1>
 
 				<p class="text-muted-foreground">
 					{error?.message || 'Something went wrong'}

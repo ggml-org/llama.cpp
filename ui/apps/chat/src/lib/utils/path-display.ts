@@ -9,6 +9,11 @@ import {
 	TRAILING_SLASHES_REGEX
 } from '#lib/constants/index.ts';
 
+/** `~` or a path under it, as typed or as a search from `~` returns it. */
+function isTildePath(path: string): boolean {
+	return path === HOME_TILDE || path.startsWith(HOME_TILDE_PREFIX);
+}
+
 export function lastPathSegment(p: string): string {
 	const trimmed = p.replace(TRAILING_SLASHES_REGEX, '');
 	const idx = trimmed.lastIndexOf(PATH_SEPARATOR);
@@ -16,13 +21,15 @@ export function lastPathSegment(p: string): string {
 	return idx === -1 ? trimmed : trimmed.slice(idx + 1);
 }
 
-// `~/...` under `home`; falls back to the basename when home is unknown
-// or the path is outside it.
+// `~/...` under `home` (a path already written from `~` stays as it is); falls back to the
+// basename when home is unknown or the path is outside it.
 export function abbreviateWorkingDir(
 	path: string | null | undefined,
 	home: string | null | undefined
 ): string {
 	if (!path) return '';
+
+	if (isTildePath(path)) return path;
 
 	if (!home) return lastPathSegment(path);
 
@@ -37,6 +44,8 @@ export function abbreviateWorkingDir(
 // Unlike abbreviateWorkingDir, paths outside `home` are returned
 // unchanged - used where the full path matters.
 export function abbreviateHome(path: string, home: string | null | undefined): string {
+	if (isTildePath(path)) return path;
+
 	if (!home) return path;
 
 	if (path === home) return HOME_TILDE;

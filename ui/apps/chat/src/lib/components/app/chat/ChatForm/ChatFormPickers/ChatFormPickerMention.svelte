@@ -4,7 +4,12 @@
 	import { File, Folder } from '@lucide/svelte';
 	import { ChatFormPickerList, ChatFormPickerListItem } from '#lib/components/app/chat/index.ts';
 	import HighlightedMatch from '#lib/components/app/forms/HighlightedMatch.svelte';
-	import { FILE_GLOB_SEARCH_PICKERS, HOME_TILDE, SEARCH } from '#lib/constants/index.ts';
+	import {
+		CHAT_FORM_PATH_PICKER_WIDTH_CLASS,
+		FILE_GLOB_SEARCH_PICKERS,
+		HOME_TILDE,
+		SEARCH
+	} from '#lib/constants/index.ts';
 	import {
 		BuiltInTool,
 		FileMentionEntryType,
@@ -216,7 +221,7 @@
 
 	<Popover.Content
 		align="start"
-		class={['w-[var(--bits-popover-anchor-width)] max-w-none rounded-xl p-0', className]}
+		class={[CHAT_FORM_PATH_PICKER_WIDTH_CLASS, 'rounded-xl p-0', className]}
 		{customAnchor}
 		onCloseAutoFocus={(event) => event.preventDefault()}
 		onOpenAutoFocus={(event) => event.preventDefault()}
@@ -240,7 +245,7 @@
 					dataIndex={index}
 					{isSelected}
 					onclick={() => handleSelect(entry)}
-					onmouseenter={() => nav.setHover(index)}
+					onhover={() => nav.setHover(index)}
 				>
 					{@const Icon = entry.type === FileMentionEntryType.DIRECTORY ? Folder : File}
 					<Icon
@@ -258,7 +263,7 @@
 								<Tooltip.Root>
 									<Tooltip.Trigger>
 										{#snippet child({ props })}
-											<span {...props} class="truncate text-sm font-medium">{entry.name}</span>
+											<span {...props} class="truncate text-label">{entry.name}</span>
 										{/snippet}
 									</Tooltip.Trigger>
 
@@ -267,17 +272,17 @@
 									</Tooltip.Content>
 								</Tooltip.Root>
 							{:else}
-								<span class="truncate text-sm font-medium">{entry.name}</span>
+								<span class="truncate text-label">{entry.name}</span>
 							{/if}
 
 							<span
-								class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground"
+								class="shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-caption-sm uppercase tracking-wide text-muted-foreground"
 							>
 								{entry.type}
 							</span>
 						</div>
 
-						<span class="min-w-0 flex-1 truncate font-mono text-left text-xs">
+						<span class="min-w-0 flex-1 truncate font-mono text-left text-caption">
 							<HighlightedMatch query={trimmedQuery} text={abbreviateHome(entry.path, home)} />
 						</span>
 					</div>

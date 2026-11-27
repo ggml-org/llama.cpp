@@ -49,7 +49,6 @@ enum llm_graph_type {
 enum llm_fused_op {
     LLM_FUSED_OP_FLASH_ATTN,
     LLM_FUSED_OP_FLASH_ATTN_KV_ROWS,
-    LLM_FUSED_OP_LIGHTNING_INDEXER,
     LLM_FUSED_OP_DSV4_HC_PRE,
     LLM_FUSED_OP_DSV4_HC_COMB,
     LLM_FUSED_OP_DSV4_HC_POST,
@@ -323,6 +322,19 @@ public:
     // and shared across layers which use build_rs
     ggml_tensor * s_copy_main; // I32 [n_seqs]
     ggml_tensor * s_copy_tail; // I32 [n_rs - 1]
+
+    // rs_replay: the ubatch first replays the kept pending tokens of the last ubatch (none is a no-op)
+    bool          has_rep  = false;
+    int64_t       n_conv   = 0;       // conv window columns, the widest conv of the model
+    int64_t       n_pend   = 0;       // pending slots per seq
+    ggml_tensor * rep_n    = nullptr; // I32 [n_seqs], kept pending tokens
+    ggml_tensor * rep_cols = nullptr; // I32 [n_conv, n_seqs], conv history columns of the window after the kept tokens
+
+    // views of rep_cols for the delta-net conv and the PLE conv windows, computed once per graph and shared across layers
+    ggml_tensor * rep_cols_r = nullptr;
+    ggml_tensor * rep_cols_p = nullptr;
+
+    void set_input_rep(const llama_memory_recurrent_context * mctx, const llama_ubatch * ubatch);
 
     const llama_memory_recurrent_context * mctx;
 
@@ -1180,6 +1192,7 @@ struct llm_graph_context {
               ggml_tensor * cur) const;
 
     // do mat_mul, while optionally apply lora and per-tensor scale
+    // w_s defaults to the weight scale of w
     ggml_tensor * build_lora_mm(
               ggml_tensor * w,
               ggml_tensor * cur,
@@ -1191,7 +1204,6 @@ struct llm_graph_context {
               ggml_tensor * w,   // ggml_tensor * as
               ggml_tensor * cur, // ggml_tensor * b
               ggml_tensor * ids,
-              ggml_tensor * w_s    = nullptr,
               ggml_tensor * slots  = nullptr,
                      bool   cached = true) const;
 
@@ -1264,9 +1276,6 @@ struct llm_graph_context {
                      int   il,
              ggml_tensor * probs_in = nullptr,
              ggml_tensor * gate_up_exps = nullptr,
-             ggml_tensor * up_exps_s = nullptr,
-             ggml_tensor * gate_exps_s = nullptr,
-             ggml_tensor * down_exps_s = nullptr,
              ggml_tensor * selected_experts_in = nullptr,
              ggml_tensor * post_exp_norm = nullptr,
                    float   post_exp_norm_eps = 1e-5f) const;
@@ -1292,9 +1301,6 @@ struct llm_graph_context {
              ggml_tensor * probs_in = nullptr,
              ggml_tensor * gate_up_exps = nullptr,
              ggml_tensor * gate_up_exps_b = nullptr,
-             ggml_tensor * up_exps_s = nullptr,
-             ggml_tensor * gate_exps_s = nullptr,
-             ggml_tensor * down_exps_s = nullptr,
              ggml_tensor * selected_experts_in = nullptr,
              ggml_tensor * post_exp_norm = nullptr,
                    float   post_exp_norm_eps = 1e-5f) const;
@@ -1343,7 +1349,9 @@ struct llm_graph_context {
             ggml_tensor * v_mla,   // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                 int64_t   n_kv_max,
                   float   kq_scale,
-                    int   il) const;
+                    int   il,
+            ggml_tensor * bias_table = nullptr,   // [n_bins, n_head_q, n_tokens]
+            ggml_tensor * bias_indices = nullptr) const;
 
     llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
 
@@ -1541,7 +1549,6 @@ struct llm_graph_context {
             uint32_t extent,
             uint32_t extent_swa) const;
 
-    // kq_b is added to the KQ mask, after the KQ scale
     ggml_tensor * build_attn(
             llm_graph_input_mem_hybrid_iswa_rel * inp,
             ggml_tensor * wo,
@@ -1550,7 +1557,7 @@ struct llm_graph_context {
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
-            ggml_tensor * kq_b,  // [n_kv, n_tokens/n_stream, n_head_q, n_stream]
+            ggml_tensor * bias_table, // [n_bins, n_head_q, n_tokens]
             ggml_tensor * sinks, // [n_head_q]
                   float   kq_scale,
                     int   il) const;

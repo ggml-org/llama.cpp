@@ -171,6 +171,25 @@ static bool test_tensor_n(ggml_backend_buffer_type_t buft) {
     }
 
     {
+        uint8_t expected[24], out[24] = {};
+        memset(expected, 0x11, sizeof(expected));
+        ggml_backend_tensor_set(t_big, expected, 0, sizeof(expected));
+
+        // Verify memset of unaligned ranges, such as single F16 elements.
+        const size_t ranges[][2] = { { 2, 2 }, { 1, 1 }, { 5, 2 }, { 9, 13 }, { 22, 2 } };
+        for (const auto & range : ranges) {
+            const uint8_t value = (uint8_t) (0xA0 + range[0]);
+            memset(expected + range[0], value, range[1]);
+            ggml_backend_tensor_memset(t_big, value, range[0], range[1]);
+        }
+
+        ggml_backend_tensor_get(t_big, out, 0, sizeof(out));
+        if (memcmp(out, expected, sizeof(out)) != 0) {
+            return false;
+        }
+    }
+
+    {
         std::vector<ggml_tensor *> batch;
         ggml_backend_buffer_ptr scatter_buf = alloc_tensors(ctx.get(), buft, { 64 }, batch);
         if (!scatter_buf) {
@@ -201,6 +220,19 @@ static bool test_tensor_n(ggml_backend_buffer_type_t buft) {
             if (memcmp(out, expected, sizeof(out)) != 0) {
                 return false;
             }
+        }
+    }
+
+    {
+        uint8_t expected[24], out[24] = {};
+        memset(expected, 0x5A, sizeof(expected));
+
+        // Verify that clear fills every byte with a nonzero value.
+        ggml_backend_buffer_clear(buf.get(), 0x5A);
+
+        ggml_backend_tensor_get(t_big, out, 0, sizeof(out));
+        if (memcmp(out, expected, sizeof(out)) != 0) {
+            return false;
         }
     }
 
@@ -325,14 +357,17 @@ static bool test_buft(ggml_backend_buffer_type_t buft) {
 // Mock buffer type
 //
 // Ad-hoc host-backed buffer type used to exercise the dispatch logic in
-// ggml_backend_tensor_{set,get,copy}_n without relying on real backend hooks.
+// ggml_backend_tensor_{set,get,copy}_n and ggml_backend_tensor_memset
+// without relying on real backend hooks.
 //
 
 struct mock_config {
+    bool memset;
     bool set_n;
     bool get_n;
     bool cpy_n;
     bool cpy_n_result;
+    int  set_calls;
     int  set_n_calls;
     int  get_n_calls;
     int  cpy_n_calls;
@@ -341,10 +376,12 @@ struct mock_config {
 static mock_config g_mock = {};
 
 static void mock_config_reset(bool set_n, bool get_n, bool cpy_n, bool cpy_n_result) {
+    g_mock.memset = true;
     g_mock.set_n = set_n;
     g_mock.get_n = get_n;
     g_mock.cpy_n = cpy_n;
     g_mock.cpy_n_result = cpy_n_result;
+    g_mock.set_calls = 0;
     g_mock.set_n_calls = 0;
     g_mock.get_n_calls = 0;
     g_mock.cpy_n_calls = 0;
@@ -365,6 +402,7 @@ static void mock_buffer_memset_tensor(ggml_backend_buffer_t buffer, struct ggml_
 }
 
 static void mock_buffer_set_tensor(ggml_backend_buffer_t buffer, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    g_mock.set_calls++;
     memcpy((char *) tensor->data + offset, data, size);
 
     GGML_UNUSED(buffer);
@@ -434,7 +472,7 @@ static ggml_backend_buffer_t mock_buft_alloc_buffer(ggml_backend_buffer_type_t b
         /* .free_buffer     = */ mock_buffer_free_buffer,
         /* .get_base        = */ mock_buffer_get_base,
         /* .init_tensor     = */ NULL,
-        /* .memset_tensor   = */ mock_buffer_memset_tensor,
+        /* .memset_tensor   = */ NULL,
         /* .set_tensor      = */ mock_buffer_set_tensor,
         /* .get_tensor      = */ mock_buffer_get_tensor,
         /* .set_tensor_2d   = */ NULL,
@@ -446,6 +484,7 @@ static ggml_backend_buffer_t mock_buft_alloc_buffer(ggml_backend_buffer_type_t b
         /* .get_tensor_n    = */ NULL,
         /* .cpy_tensor_n    = */ NULL,
     };
+    if (g_mock.memset) iface.memset_tensor = mock_buffer_memset_tensor;
     if (g_mock.set_n) iface.set_tensor_n = mock_buffer_set_tensor_n;
     if (g_mock.get_n) iface.get_tensor_n = mock_buffer_get_tensor_n;
     if (g_mock.cpy_n) iface.cpy_tensor_n = mock_buffer_cpy_tensor_n;
@@ -633,13 +672,67 @@ static bool test_mock_grouping() {
     return true;
 }
 
+// verify that memset routes to memset_tensor when the buffer has it and to set_tensor otherwise
+static bool test_mock_memset(bool with_hook) {
+    mock_config_reset(false, false, false, true);
+    g_mock.memset = with_hook;
+
+    ggml_init_params params = {};
+    params.mem_size = ggml_tensor_overhead();
+    params.no_alloc = true;
+
+    ggml_context_ptr ctx(ggml_init(params));
+    if (!ctx) {
+        return false;
+    }
+
+    // the fallback writes in chunks of this size, see ggml_backend_tensor_memset
+    const size_t chunk_size = 1024*1024;
+    const int n_chunks = 2;
+
+    std::vector<ggml_tensor *> tensors;
+    ggml_backend_buffer_ptr buf = alloc_tensors(ctx.get(), mock_buft(), { n_chunks*chunk_size/sizeof(float) }, tensors);
+    if (!buf) {
+        return false;
+    }
+
+    const size_t n_bytes = ggml_nbytes(tensors[0]);
+
+    // leaves untouched bytes at both ends
+    const size_t offset  = 3;
+    const size_t size    = n_bytes - 2*offset;
+
+    std::vector<uint8_t> expected(n_bytes, 0), out(n_bytes, 0);
+    memset(expected.data() + offset, 0xA5, size);
+
+    ggml_backend_tensor_set(tensors[0], out.data(), 0, n_bytes);
+
+    g_mock.set_calls = 0;
+    ggml_backend_tensor_memset(tensors[0], 0xA5, offset, size);
+    ggml_backend_tensor_get(tensors[0], out.data(), 0, n_bytes);
+
+    if (out != expected) {
+        return false;
+    }
+
+    // the hook writes without set_tensor, the fallback with one set_tensor call per chunk
+    const int expected_calls = with_hook ? 0 : n_chunks;
+    if (g_mock.set_calls != expected_calls) {
+        return false;
+    }
+
+    return true;
+}
+
 static bool test_mock() {
     return
         test_mock_set_get_n(true)  &&
         test_mock_set_get_n(false) &&
         test_mock_copy_n(true)     &&
         test_mock_copy_n(false)    &&
-        test_mock_grouping();
+        test_mock_grouping()       &&
+        test_mock_memset(true)     &&
+        test_mock_memset(false);
 }
 
 int main() {

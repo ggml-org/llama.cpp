@@ -67,7 +67,7 @@
 				<ModelCapabilities hideModalities={deviceStore.isMobile} option={entry.base} />
 			</span>
 
-			<span class="block text-xs text-muted-foreground">{groupLabel}</span>
+			<span class="block text-caption text-muted-foreground">{groupLabel}</span>
 		</span>
 	</span>
 

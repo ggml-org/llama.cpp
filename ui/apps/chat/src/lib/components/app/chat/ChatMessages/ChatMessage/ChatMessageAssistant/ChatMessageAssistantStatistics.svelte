@@ -30,6 +30,7 @@
 		predictedTokens={liveLlm.predicted_n}
 		promptMs={liveLlm.prompt_ms}
 		promptTokens={liveLlm.prompt_n}
+		taskStartedAt={agenticStore.getStartedAt(message.convId)}
 	/>
 {:else if showMessageStats && message.timings?.compaction}
 	{@const summary = message.timings.compaction}

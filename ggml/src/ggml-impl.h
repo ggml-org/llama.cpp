@@ -105,7 +105,7 @@ static inline bool ggml_impl_is_view(const struct ggml_tensor * t) {
 }
 
 static inline float ggml_compute_softplus_f32(float input) {
-    return (input > 20.0f) ? input : logf(1 + expf(input));
+    return (input > 20.0f) ? input : log1pf(expf(input));
 }
 
 // compute correction dims for YaRN RoPE scaling
@@ -113,6 +113,8 @@ GGML_API void ggml_rope_yarn_corr_dims(
     int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, bool truncate, float dims[2]);
 
 GGML_API bool ggml_rope_get_truncate(const struct ggml_tensor * a);
+
+GGML_API bool ggml_validate_flash_attn_ext_indexed_bias(const struct ggml_tensor * a);
 
 //
 // logging

@@ -5,9 +5,11 @@
 	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
 	import { ICON_CLASS_DEFAULT, PDF_AS_IMAGES_LEGACY_CONTENT_REGEX } from '#lib/constants/index.ts';
 	import { AttachmentType, MimeTypeApplication, PdfViewMode } from '#lib/enums/index.ts';
+	import { settingsStore } from '#lib/stores/settings/index.svelte.ts';
 	import type { ChatAttachmentDisplayItem } from '#lib/types/index.ts';
 	import { convertPDFToImage, convertPDFToText } from '#lib/utils/browser-only.ts';
 	import { getLanguageFromFilename } from '#lib/utils/index.ts';
+	import { clampPdfDpi } from '#lib/utils/pdf-dpi.ts';
 
 	interface Props {
 		currentItem: ChatAttachmentDisplayItem | null;
@@ -23,7 +25,9 @@
 	let pdfViewMode = $state<PdfViewMode>(PdfViewMode.PAGES);
 	let pdfImages = $state<string[]>([]);
 	let pdfImagesLoading = $state(false);
-	// a failure stays on screen: the effect does not retry while an error is set
+	// DPI the last fresh render (or failed attempt) used; stored attachment images are shown as-is
+	let pdfImagesDpi = $state<number | null>(null);
+	// a failure stays on screen: the effect does not retry while an error is set at the current DPI
 	let pdfImagesError = $state<string | null>(null);
 	let pdfText = $state<string | null>(null);
 	let pdfTextLoading = $state(false);
@@ -64,7 +68,7 @@
 	}
 
 	async function loadPdfImages() {
-		if (pdfImages.length > 0 || pdfImagesLoading || !currentItem) return;
+		if (!currentItem) return;
 
 		if (
 			currentItem.attachment?.type === AttachmentType.PDF &&
@@ -75,9 +79,16 @@
 			return;
 		}
 
-		if (pdfImagesError) return;
+		const dpi = clampPdfDpi(settingsStore.config.pdfDpi);
+
+		if (pdfImagesLoading) return;
+
+		if (pdfImages.length > 0 && pdfImagesDpi === dpi) return;
+
+		if (pdfImagesError && pdfImagesDpi === dpi) return;
 
 		pdfImagesLoading = true;
+		pdfImagesError = null;
 
 		try {
 			const file = getPdfFile();
@@ -86,10 +97,12 @@
 				throw new Error('No PDF file available for conversion');
 			}
 
-			pdfImages = await convertPDFToImage(file);
+			pdfImages = await convertPDFToImage(file, dpi);
 		} catch (error) {
 			pdfImagesError = error instanceof Error ? error.message : 'Failed to load PDF images';
 		} finally {
+			// remember the attempt even on failure, so a DPI change is the one retry
+			pdfImagesDpi = dpi;
 			pdfImagesLoading = false;
 		}
 	}
@@ -123,6 +136,9 @@
 	}
 
 	$effect(() => {
+		// reaching the DPI here re-runs the effect when the setting changes
+		void settingsStore.config.pdfDpi;
+
 		if (pdfViewMode === PdfViewMode.PAGES) {
 			loadPdfImages();
 		} else {
@@ -206,7 +222,7 @@
 	{@render status('Failed to load PDF images', pdfImagesError)}
 {:else if pdfImages.length > 0}
 	{#each pdfImages as image, index (index)}
-		<p class="mb-2 text-sm text-white/50">Page {index + 1}</p>
+		<p class="mb-2 text-body-sm text-white/50">Page {index + 1}</p>
 
 		<img
 			alt="PDF Page {index + 1}"
@@ -240,7 +256,7 @@
 			<p class={['text-white/70', detail && 'mb-4']}>{message}</p>
 
 			{#if detail}
-				<p class="text-sm text-white/50">{detail}</p>
+				<p class="text-body-sm text-white/50">{detail}</p>
 			{/if}
 		</div>
 	</div>

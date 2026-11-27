@@ -31,7 +31,6 @@ struct htp_pool_2d_kernel_params {
     int32_t  pad_y;
     uint32_t n_hvx;
     uint32_t planes;
-    uint32_t planes_per_chunk;
     uint32_t pool_op;
     uint32_t avg_divide_count;
     uint32_t ox_lo;

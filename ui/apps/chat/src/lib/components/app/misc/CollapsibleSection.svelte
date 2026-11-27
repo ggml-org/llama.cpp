@@ -1,5 +1,5 @@
 <script lang="ts">
-	import CollapsibleRegion from './CollapsibleRegion.svelte';
+	import * as Collapsible from '@ggml-org/llama-ui/ui/collapsible';
 	import * as DropdownMenu from '@ggml-org/llama-ui/ui/dropdown-menu';
 	import { ChevronDown, ChevronUp } from '@lucide/svelte';
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
@@ -67,7 +67,7 @@
 		<!-- A menu item (for keyboard nav) wrapping the trigger via `child`;
 		     closeOnSelect keeps the menu open while the section toggles. -->
 		<DropdownMenu.Item
-			class="group w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-left text-sm"
+			class="group w-full min-w-0 cursor-pointer items-center gap-2 rounded-md text-left text-body-sm"
 			closeOnSelect={false}
 		>
 			{#snippet child({ props })}
@@ -95,9 +95,11 @@
 {/snippet}
 
 {#snippet region()}
-	<!-- Custom expand region instead of bits-ui Collapsible (whose conditional
-	     rendering kills the transition). -->
-	<CollapsibleRegion {open}>{@render children()}</CollapsibleRegion>
+	<Collapsible.Root {open}>
+		<Collapsible.Content>
+			{@render children()}
+		</Collapsible.Content>
+	</Collapsible.Root>
 {/snippet}
 
 {#if triggerPosition === 'top'}

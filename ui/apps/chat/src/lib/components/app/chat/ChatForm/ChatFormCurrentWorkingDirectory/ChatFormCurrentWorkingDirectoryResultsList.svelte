@@ -2,7 +2,7 @@
 	import { cn } from '@ggml-org/llama-ui/utils';
 	import { Folder } from '@lucide/svelte';
 	import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
-	import { highlightMatch } from '#lib/utils/index.ts';
+	import { hasPointerMoved, highlightMatch } from '#lib/utils/index.ts';
 	import { fly } from 'svelte/transition';
 
 	// Fly-in transition for the results list.
@@ -38,22 +38,24 @@
 	class="max-h-48 overflow-y-auto py-2"
 >
 	{#if isSearching && results.length === 0}
-		<div class="px-2 py-1.5 text-sm text-muted-foreground">Searching...</div>
+		<div class="px-2 py-1.5 text-body-sm text-muted-foreground">Searching...</div>
 	{:else if error}
-		<div class="px-2 py-1.5 text-sm text-destructive">{error}</div>
+		<div class="px-2 py-1.5 text-body-sm text-destructive">{error}</div>
 	{:else if results.length === 0}
-		<div class="px-2 py-1.5 text-sm text-muted-foreground">No matching folders</div>
+		<div class="px-2 py-1.5 text-body-sm text-muted-foreground">No matching folders</div>
 	{:else}
 		{#each results as path, index (path)}
 			<button
 				type="button"
 				{...{ [UI_DATA_ATTRS.RESULT_INDEX]: index }}
 				class={cn(
-					'relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground'
+					'relative flex w-full cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-body-sm outline-hidden select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground'
 				)}
 				data-highlighted={index === hoveredIndex ? '' : undefined}
 				onclick={() => onCommit?.(path)}
-				onmouseenter={() => onHover?.(index)}
+				onmousemove={(event) => {
+					if (hasPointerMoved(event)) onHover?.(index);
+				}}
 			>
 				<Folder class="size-4 shrink-0 text-muted-foreground" />
 
