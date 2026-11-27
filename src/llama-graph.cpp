@@ -3237,7 +3237,6 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         }
     } else {
         // add the bias to the mask
-        // TODO: check if this is correct or if we should add it to the `kq` before the `kq_scale`
         if (bias) {
             ggml_tensor * bias_dense = bias;
             if (bias_idxs) {
