@@ -607,6 +607,7 @@ extern "C" {
     GGML_API size_t  ggml_element_size(const struct ggml_tensor * tensor);
 
     GGML_API bool    ggml_is_quantized(enum ggml_type type);
+    GGML_API bool    ggml_needs_scale(enum ggml_type type);
 
     // TODO: temporary until model loading of ggml examples is refactored
     GGML_API enum ggml_type ggml_ftype_to_ggml_type(enum ggml_ftype ftype);
@@ -1322,6 +1323,16 @@ extern "C" {
             struct ggml_tensor  * a,
             struct ggml_tensor  * b);
 
+    // scale_weight is F32, either a scalar or one value per output channel.
+    // scale_activations is an optional F32 scalar for activation quantization.
+    // Divide activations by the scale before quantization, then multiply the matmul result by the scale.
+    GGML_API struct ggml_tensor * ggml_mul_mat_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * a,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * scale_weight,
+            struct ggml_tensor  * scale_activations);
+
     // change the hint of a matrix multiplication
     GGML_API void ggml_mul_mat_set_hint(
             struct ggml_tensor * a,
@@ -1334,6 +1345,16 @@ extern "C" {
             struct ggml_tensor  * as,
             struct ggml_tensor  * b,
             struct ggml_tensor  * ids);
+
+    // scale_weight:      [1], [n_as] or [n_out, n_as], selected by ids
+    // scale_activations: [1] or [n_as], selected by ids
+    GGML_API struct ggml_tensor * ggml_mul_mat_id_ext(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * as,
+            struct ggml_tensor  * b,
+            struct ggml_tensor  * ids,
+            struct ggml_tensor  * scale_weight,
+            struct ggml_tensor  * scale_activations);
 
     // A: m columns, n rows,
     // B: p columns, n rows,
@@ -2292,6 +2313,15 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
 
+    GGML_API bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a);
+
+    // Add table[indices[key, query], head, query] to the mask, in F32.
+    // Queries from all streams are flattened in stream order. Indices must be in [0, table->ne[0]).
+    GGML_API void ggml_flash_attn_ext_add_indexed_bias(
+            struct ggml_tensor * a,
+            struct ggml_tensor * table,
+            struct ggml_tensor * indices);
+
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
             struct ggml_context * ctx,
@@ -2426,11 +2456,17 @@ extern "C" {
     //   beta  : [1, H_v, n_tokens, n_seqs]
     //   state : [S_v, S_v, H_v, n_seqs] -- initial recurrent state s0
     //
-    // the output packs the attention scores [S_v, H_v, n_tokens, n_seqs] followed by K state
-    // snapshots, most-recent first (slot 0 = final state, slot s = state s tokens back). K == 1
-    // keeps only the final state; when n_tokens < K only slots 0..n_tokens-1 are written.
-    // when n_tokens > K only slot 0 is guaranteed; backends may leave slots 1..K-1 unwritten.
-    GGML_API struct ggml_tensor * ggml_gated_delta_net(
+    // the output packs the attention scores [S_v, H_v, n_tokens, n_seqs] followed by the final state [S_v, S_v, H_v, n_seqs]
+    //
+    // replay (optional, set all of pend_k, pend_v, pend_gb and n_rep, or none): first runs the pending tokens of the
+    // previous ubatch, so that a rollback only drops pending tokens instead of restoring a snapshot
+    //   pend_k  : [S_k, H_k, n_pend, n_seqs]
+    //   pend_v  : [S_v, H_v, n_pend, n_seqs]
+    //   pend_gb : [g0, H_v, 2*n_pend, n_seqs], the gates of the n_pend tokens, then their betas (in element 0)
+    //   n_rep   : I32 [n_seqs], number of pending tokens to replay (<= n_pend)
+    // the state output is the state after the replay if keep is true, else the final state.
+    // op param 1 is n_pend (0 without replay): backends that do not implement the replay reject the op when it is set
+    GGML_API struct ggml_tensor * ggml_gated_delta_net_ext(
             struct ggml_context * ctx,
             struct ggml_tensor  * q,
             struct ggml_tensor  * k,
@@ -2438,7 +2474,25 @@ extern "C" {
             struct ggml_tensor  * g,
             struct ggml_tensor  * beta,
             struct ggml_tensor  * state,
-            int64_t               K);
+            struct ggml_tensor  * pend_k,
+            struct ggml_tensor  * pend_v,
+            struct ggml_tensor  * pend_gb,
+            struct ggml_tensor  * n_rep,
+            bool                  keep);
+
+    // the output packs the attention scores followed by K state snapshots, most-recent first (slot 0 = final state,
+    // slot s = state s tokens back). when n_tokens < K only slots 0..n_tokens-1 are written. when n_tokens > K only
+    // slot 0 is guaranteed; backends may leave slots 1..K-1 unwritten.
+    GGML_DEPRECATED(GGML_API struct ggml_tensor * ggml_gated_delta_net(
+            struct ggml_context * ctx,
+            struct ggml_tensor  * q,
+            struct ggml_tensor  * k,
+            struct ggml_tensor  * v,
+            struct ggml_tensor  * g,
+            struct ggml_tensor  * beta,
+            struct ggml_tensor  * state,
+            int64_t               K),
+        "use ggml_gated_delta_net_ext instead");
 
     // DSA lightning indexer
     //
@@ -2780,12 +2834,14 @@ extern "C" {
     typedef void (*ggml_to_float_t)  (const void  * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
     typedef void (*ggml_from_float_t)(const float * GGML_RESTRICT x, void  * GGML_RESTRICT y, int64_t k);
 
+    // TODO: deprecate struct definition from the public API, replace with functions [TAG_GGML_AVOID_PUBLIC_STRUCTS]
     struct ggml_type_traits {
         const char             * type_name;
         int64_t                  blck_size;
         int64_t                  blck_size_interleave; // interleave elements in blocks
         size_t                   type_size;
-        bool                     is_quantized;
+        bool                     is_quantized; // whether it's a block-quantized data-type
+        //bool                     needs_scale; // add this flag in the next update [TAG_GGML_VERSION_MAJOR_UPDATE]
         ggml_to_float_t          to_float;
         ggml_from_float_t        from_float_ref;
     };
@@ -2807,6 +2863,7 @@ extern "C" {
 
     // threadpool params
     // Use ggml_threadpool_params_default() or ggml_threadpool_params_init() to populate the defaults
+    // TODO: deprecate struct definition from the public API, replace with functions [TAG_GGML_AVOID_PUBLIC_STRUCTS]
     struct ggml_threadpool_params {
         bool                cpumask[GGML_MAX_N_THREADS]; // mask of cpu cores (all-zeros means use default affinity settings)
         int                 n_threads;                   // number of threads

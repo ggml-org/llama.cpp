@@ -104,38 +104,41 @@ static __global__ void __launch_bounds__(CUDA_CONCAT_BLOCK_SIZE)
           uint64_t   nb13,
            int64_t   ne0,
            int64_t /*ne1*/,
-           int64_t /*ne2*/,
-           int64_t /*ne3*/,
+           int64_t   ne2,
+           int64_t   ne3,
           uint64_t   nb0,
           uint64_t   nb1,
           uint64_t   nb2,
           uint64_t   nb3) {
     static_assert(dim >= 0 && dim <= 3, "dim must be in [0, 3]");
 
-    const int64_t i3 = blockIdx.z;
-    const int64_t i2 = blockIdx.y;
     const int64_t i1 = blockIdx.x;
 
     const T * x;
 
-    for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
-        if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
-            x = (const T *)(src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
-        } else {
-            if constexpr (dim == 0) {
-                x = (const T *)(src1 + i3*nb13 + i2*nb12 + i1*nb11 + (i0 - ne00)*nb10);
-            } else if constexpr (dim == 1) {
-                x = (const T *)(src1 + i3*nb13 + i2*nb12 + (i1 - ne01)*nb11 + i0*nb10);
-            } else if constexpr (dim == 2) {
-                x = (const T *)(src1 + i3*nb13 + (i2 - ne02)*nb12 + i1*nb11 + i0*nb10);
-            } else if constexpr (dim == 3) {
-                x = (const T *)(src1 + (i3 - ne03)*nb13 + i2*nb12 + i1*nb11 + i0*nb10);
+    // gridDim.y and gridDim.z are capped at 65535, loop over the rest of ne2 and ne3
+    for (int64_t i3 = blockIdx.z; i3 < ne3; i3 += gridDim.z) {
+        for (int64_t i2 = blockIdx.y; i2 < ne2; i2 += gridDim.y) {
+            for (int64_t i0 = threadIdx.x; i0 < ne0; i0 += blockDim.x) {
+                if (i0 < ne00 && i1 < ne01 && i2 < ne02 && i3 < ne03) {
+                    x = (const T *)(src0 + i3*nb03 + i2*nb02 + i1*nb01 + i0*nb00);
+                } else {
+                    if constexpr (dim == 0) {
+                        x = (const T *)(src1 + i3*nb13 + i2*nb12 + i1*nb11 + (i0 - ne00)*nb10);
+                    } else if constexpr (dim == 1) {
+                        x = (const T *)(src1 + i3*nb13 + i2*nb12 + (i1 - ne01)*nb11 + i0*nb10);
+                    } else if constexpr (dim == 2) {
+                        x = (const T *)(src1 + i3*nb13 + (i2 - ne02)*nb12 + i1*nb11 + i0*nb10);
+                    } else if constexpr (dim == 3) {
+                        x = (const T *)(src1 + (i3 - ne03)*nb13 + i2*nb12 + i1*nb11 + i0*nb10);
+                    }
+                }
+
+                T * y = (T *)(dst + i3*nb3 + i2*nb2 + i1*nb1 + i0*nb0);
+
+                *y = *x;
             }
         }
-
-        T * y = (T *)(dst + i3*nb3 + i2*nb2 + i1*nb1 + i0*nb0);
-
-        *y = *x;
     }
 }
 
@@ -163,7 +166,7 @@ static void concat_cuda(const ggml_tensor * src0, const ggml_tensor * src1, ggml
     } else {
         GGML_ASSERT(!ggml_is_quantized(src0->type));
 
-        dim3 grid_dim(dst->ne[1], dst->ne[2], dst->ne[3]);
+        dim3 grid_dim(dst->ne[1], std::min<int64_t>(dst->ne[2], 65535), std::min<int64_t>(dst->ne[3], 65535));
         auto launch_kernel = [&](auto dim) {
             concat_non_cont<T, dim><<<grid_dim, CUDA_CONCAT_BLOCK_SIZE, 0, stream>>>(
                 (const char *) src0->data, (const char *) src1->data, (char *) dst->data,

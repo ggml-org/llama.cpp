@@ -31,6 +31,17 @@
 		 * message width on its own.
 		 */
 		flushBody?: boolean;
+		/** Shown at the end of the header row, before the chevron. */
+		trailing?: Snippet;
+		/** Shown right after the title, e.g. a live timer. */
+		titleSuffix?: Snippet;
+		/**
+		 * Keep the chevron visible at the end of the row, pointing right until
+		 * open, for rows that read as a line of text ( the tool call trace ).
+		 * The title takes the rest of the width, so a title that changes while
+		 * it streams never moves the chevron or the trailing content.
+		 */
+		pinnedChevron?: boolean;
 		onToggle?: () => void;
 		children: Snippet;
 	}
@@ -45,10 +56,13 @@
 		iconUrl = null,
 		onToggle,
 		open = $bindable(false),
+		pinnedChevron = false,
 		shimmerTitle = false,
 		subtitle,
 		title = '',
 		titleSnippet,
+		titleSuffix,
+		trailing,
 		variant = 'default'
 	}: Props = $props();
 
@@ -91,6 +105,22 @@
 	<span aria-hidden="true" class="h-px min-w-4 flex-1 bg-current opacity-25"></span>
 {/snippet}
 
+<!-- Pinned, it is always visible and points right until open; otherwise it
+     appears on hover and flips. -->
+{#snippet chevron()}
+	<ChevronDown
+		class={cn(
+			'shrink-0 text-muted-foreground/60 duration-150 ease-out',
+			pinnedChevron
+				? ['mt-1 size-3.5 transition-transform', !open && '-rotate-90']
+				: [
+						'mt-0.75 size-4 opacity-0 transition-all group-hover/collapsible:opacity-100',
+						open && 'rotate-180'
+					]
+		)}
+	/>
+{/snippet}
+
 {#snippet toggleTitle(layoutClass: string)}
 	<span
 		class={cn(
@@ -108,6 +138,15 @@
 
 	{#if subtitle}
 		<span class="text-caption italic text-muted-foreground/70">{subtitle}</span>
+	{/if}
+
+	{#if shimmerTitle}
+		<!-- the shimmer is the only sign that this is still running -->
+		<span class="sr-only">in progress</span>
+	{/if}
+
+	{#if titleSuffix}
+		<span class="shrink-0 text-body-sm empty:hidden">{@render titleSuffix()}</span>
 	{/if}
 {/snippet}
 
@@ -138,18 +177,24 @@
 				'py-1.5 pr-1'
 			)}
 		>
-			<div class="flex min-w-0 items-start gap-2 text-muted-foreground">
+			<div
+				class={cn(
+					'flex min-w-0 items-start gap-2 text-muted-foreground',
+					pinnedChevron && 'flex-1'
+				)}
+			>
 				{@render toggleIcon('mt-0.75')}
 
 				{@render toggleTitle('overflow-x-auto text-body-sm')}
 			</div>
 
-			<ChevronDown
-				class={cn(
-					'size-4 shrink-0 text-muted-foreground/60 transition-all duration-150 ease-out opacity-0 group-hover/collapsible:opacity-100 mt-0.75',
-					open && 'rotate-180'
-				)}
-			/>
+			{#if trailing}
+				<div class="ml-auto flex shrink-0 items-center">
+					{@render trailing()}
+				</div>
+			{/if}
+
+			{@render chevron()}
 
 			<span class="sr-only">Toggle content</span>
 		</Collapsible.Trigger>
@@ -162,6 +207,7 @@
 			<div class="pl-1.5 grid min-w-0" style="min-height: var(--min-message-height);">
 				<div
 					class={cn('min-w-0 pb-2 my-2', !flushBody && 'border-l border-muted-foreground/20 pl-4')}
+					data-slot="collapsible-body"
 				>
 					{@render children()}
 				</div>

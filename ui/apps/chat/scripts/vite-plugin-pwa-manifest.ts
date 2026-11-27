@@ -1,9 +1,9 @@
-import { HEADERS } from '../src/lib/constants/headers.constants';
+import { HEADERS } from '../src/lib/constants/headers.constants.ts';
 import {
 	PWA_FILE_PATHS,
 	PWA_MANIFEST_PLUGIN,
 	pwaManifest
-} from '../src/lib/constants/pwa.constants';
+} from '../src/lib/constants/pwa.constants.ts';
 import type { Plugin } from 'vite';
 
 // the build writes files relative to its output directory: the path without its leading slash

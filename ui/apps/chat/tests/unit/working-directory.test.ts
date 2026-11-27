@@ -1,11 +1,16 @@
 import { GLOB, SEARCH } from '#lib/constants/index.ts';
 import {
 	buildCaseInsensitiveGlob,
+	buildFuzzyGlobs,
 	buildGlobSearchArgs,
+	fuzzyDistance,
 	highlightMatch,
+	isHiddenPath,
 	joinPath,
 	rankEntries,
-	splitPathQuery
+	splitPathQuery,
+	toHomeRelativeQuery,
+	toScopeSeparators
 } from '#lib/utils/index.ts';
 import { describe, expect, it } from 'vitest';
 
@@ -169,5 +174,110 @@ describe('buildGlobSearchArgs', () => {
 		expect(args.maxDepth).toBe(SEARCH.PATH_NAV_MAX_DEPTH);
 		expect(args.rankQuery).toBe('bin');
 		expect(args.last).toBe('bin');
+	});
+});
+
+describe('toHomeRelativeQuery', () => {
+	it('anchors a plain query in home as if typed after `~/`', () => {
+		expect(toHomeRelativeQuery('docs')).toBe('~/docs');
+		expect(toHomeRelativeQuery('git/llama')).toBe('~/git/llama');
+	});
+
+	it('anchors a plain query under the resolved home when known', () => {
+		expect(toHomeRelativeQuery('docs', '/Users/al')).toBe('/Users/al/docs');
+		expect(toHomeRelativeQuery('docs', '/Users/al/')).toBe('/Users/al/docs');
+	});
+
+	it('keeps queries that start from a root or `~`', () => {
+		for (const q of [
+			'/',
+			'/usr/local',
+			'~',
+			'~/docs',
+			'C:\\repos',
+			'D:/repos',
+			'\\\\host\\share'
+		]) {
+			expect(toHomeRelativeQuery(q, '/Users/al')).toBe(q);
+		}
+	});
+
+	it('keeps an empty query empty', () => {
+		expect(toHomeRelativeQuery('', '/Users/al')).toBe('');
+	});
+
+	it('navigates home children for a plain query', () => {
+		const args = buildGlobSearchArgs(toHomeRelativeQuery('proj'), '/home', 6);
+
+		expect(args.path).toBe('~');
+		expect(args.include).toBe(buildCaseInsensitiveGlob('proj'));
+		expect(args.maxDepth).toBe(SEARCH.PATH_NAV_MAX_DEPTH);
+		expect(args.last).toBe('proj');
+	});
+});
+
+describe('buildFuzzyGlobs', () => {
+	it('swaps each pair of neighbouring characters for a wildcard', () => {
+		expect(buildFuzzyGlobs('lama')).toEqual(['*[mM][aA]*', '*[lL]*[aA]*', '*[lL][aA]*']);
+	});
+
+	it('skips queries too short or too long to match loosely', () => {
+		expect(buildFuzzyGlobs('abc')).toEqual([]);
+		expect(buildFuzzyGlobs('a'.repeat(SEARCH.FUZZY_MAX_QUERY_LENGTH + 1))).toEqual([]);
+	});
+});
+
+describe('fuzzyDistance', () => {
+	it('is zero when the text holds the query, in any case', () => {
+		expect(fuzzyDistance('Llama.cpp', 'llama')).toBe(0);
+	});
+
+	it('counts a wrong, missing, extra or swapped character as one edit', () => {
+		expect(fuzzyDistance('llama.cpp', 'llana')).toBe(1);
+		expect(fuzzyDistance('llama.cpp', 'lama.')).toBe(0);
+		expect(fuzzyDistance('llama.cpp', 'llma.')).toBe(1);
+		expect(fuzzyDistance('llama.cpp', 'llamma')).toBe(1);
+		expect(fuzzyDistance('llama.cpp', 'lalma')).toBe(1);
+	});
+
+	it('grows with every further edit', () => {
+		expect(fuzzyDistance('documents', 'llama')).toBeGreaterThan(SEARCH.FUZZY_MAX_EDITS);
+	});
+});
+
+describe('rankEntries with hidden folders', () => {
+	const entries = [
+		{ path: '.config/llama', type: 'dir' },
+		{ path: '.llama-app', type: 'dir' },
+		{ path: 'git/llama.cpp', type: 'dir' }
+	];
+
+	it('ranks regular folders above hidden ones, even an exact hidden match', () => {
+		expect(rankEntries(entries, 'llama').map((e) => e.path)).toEqual([
+			'git/llama.cpp',
+			'.config/llama',
+			'.llama-app'
+		]);
+	});
+
+	it('ranks by name alone when the query asks for a hidden name', () => {
+		expect(rankEntries(entries, '.llama')[0].path).toBe('.llama-app');
+	});
+
+	it('tells a hidden path by any of its segments', () => {
+		expect(isHiddenPath('git/.cache/x')).toBe(true);
+		expect(isHiddenPath('git/llama.cpp')).toBe(false);
+	});
+});
+
+describe('toScopeSeparators', () => {
+	it('reads a backslash as a separator under a Windows scope', () => {
+		expect(toScopeSeparators('git\\llama', 'C:/Users/al')).toBe('git/llama');
+		expect(toScopeSeparators('git\\llama', '//host/share/al')).toBe('git/llama');
+	});
+
+	it('leaves the backslash alone under a POSIX scope, where it is a filename character', () => {
+		expect(toScopeSeparators('git\\llama', '/home/al')).toBe('git\\llama');
+		expect(toScopeSeparators('git\\llama', '~')).toBe('git\\llama');
 	});
 });

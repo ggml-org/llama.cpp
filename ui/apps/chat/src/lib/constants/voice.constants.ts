@@ -47,6 +47,13 @@ export const VOICE_ELAPSED_TICK_MS = 200;
  */
 export const VOICE_PRESS_CLICK_MS = 1000;
 
+/**
+ * How long the pointer or the focus rests on the microphone button before the microphone
+ * opens ahead of a press, so a pointer only passing over it opens nothing (and the browser
+ * shows no recording indicator for it).
+ */
+export const VOICE_WARMUP_REST_MS = 300;
+
 /** How long a transcript that came back keeps looking for the message it belongs to. */
 export const VOICE_TRANSCRIPT_APPLY_RETRY_DELAYS_MS = [500, 1500, 4000] as const;
 
@@ -110,6 +117,10 @@ export const VOICE_DICTATION_MODEL_LABEL = {
 	automatic: 'Transcribes dictation, picked automatically. Click to keep it',
 	chosen: 'Transcribes dictation. Click to pick automatically',
 	current: 'transcribes dictation',
+	/** The phone menu's keep on the model Automatic picked. */
+	keep: 'Keep for dictation',
+	/** The phone menu's way back from a chosen model to Automatic. */
+	pickAutomatically: 'Pick dictation model automatically',
 	use: 'Use for dictation'
 } as const;
 

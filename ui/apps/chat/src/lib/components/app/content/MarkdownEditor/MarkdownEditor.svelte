@@ -89,7 +89,7 @@
 		{ fontStyle: 'italic', tag: tags.emphasis },
 		{ color: 'var(--fg-muted)', fontStyle: 'italic', tag: tags.quote },
 		{ opacity: '0.7', tag: tags.strikethrough, textDecoration: 'line-through' },
-		{ fontFamily: 'var(--font-mono)', fontSize: '0.875rem', tag: tags.monospace }
+		{ fontFamily: 'var(--font-mono)', tag: tags.monospace }
 	]);
 
 	// The markdown language alone: markdown() would also bring the html, css and
@@ -389,7 +389,6 @@
 	div :global(.cm-md-raw-code) {
 		padding-inline: 1rem;
 		font-family: var(--font-mono);
-		font-size: 0.875rem;
 		background: var(--surface-code);
 		border-inline: 1px solid color-mix(in oklch, var(--line-default) 30%, transparent);
 	}

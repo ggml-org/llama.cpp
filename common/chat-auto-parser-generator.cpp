@@ -225,13 +225,13 @@ common_peg_parser analyze_tools::build_tool_parser_json_native(parser_build_cont
         auto single_tool_parser = p.standard_json_tools(
             format.per_call_start, format.per_call_end, inputs.tools, inputs.parallel_tool_calls,
             inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
-            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger, inputs.tool_choice);
         tools_parser = p.trigger_rule("tool-calls", p.one_or_more(single_tool_parser + p.space()));
     } else {
         tools_parser = p.standard_json_tools(
             format.section_start, format.section_end, inputs.tools, inputs.parallel_tool_calls,
             inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_REQUIRED, name_field, args_field, format.tools_array_wrapped,
-            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger);
+            format.fun_name_is_key, format.id_field, format.gen_id_field, format.parameter_order, format.openai_wrapper_trigger, inputs.tool_choice);
     }
 
     // Handle content wrappers if present
@@ -304,7 +304,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_json(parser_build_context
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
+    common_chat_foreach_tool(inputs.tools, inputs.tool_choice, [&](size_t tool_index, const json & tool) {
         const auto & func   = tool.at("function");
         std::string  name   = func.at("name");
         const auto   schema = common_chat_tool_parameters(func);
@@ -379,7 +379,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     common_peg_parser tool_choice = p.choice();
 
-    foreach_function(inputs.tools, [&](size_t tool_index, const json & tool) {
+    common_chat_foreach_tool(inputs.tools, inputs.tool_choice, [&](size_t tool_index, const json & tool) {
         const auto & func = tool.at("function");
         std::string  name = func.at("name");
 

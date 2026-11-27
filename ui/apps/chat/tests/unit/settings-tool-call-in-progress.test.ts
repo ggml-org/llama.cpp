@@ -27,9 +27,9 @@ describe('showToolCallInProgress setting', () => {
 		expect(field?.label).toBe('Show tool call in progress');
 	});
 
-	it('ships enabled, like "Show thought in progress"', () => {
-		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS]).toBe(true);
-		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS]).toBe(true);
+	it('ships disabled, like "Show thought in progress", so the trace stays collapsed', () => {
+		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.SHOW_TOOL_CALL_IN_PROGRESS]).toBe(false);
+		expect(SETTING_CONFIG_DEFAULT[SETTINGS_KEYS.SHOW_THOUGHT_IN_PROGRESS]).toBe(false);
 	});
 
 	it('is listed next to its "always show" counterpart', () => {

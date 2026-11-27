@@ -5,8 +5,7 @@ description: >-
   Llama UI, the design system and components of Llama Chat, the chat client llama-server
   bundles. Neutral and quiet: frosted matte surfaces with faint
   blue-grey hairlines, near-flat fills, and status colours for success, warning, error and info. Tokens come in
-  three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs and a
-  "-matte" twin where the Matte light theme does) and components. The colors, typography and
+  three tiers: primitives, semantic tokens (with a "-dark" twin where dark mode differs) and components. The colors, typography and
   rounded sections are generated from ui/lib/ui/src/lib/styles by `npm run design:tokens` in
   ui/apps/chat; spacing, components and the prose are kept in sync with the CSS by hand.
 colors:
@@ -123,14 +122,6 @@ colors:
   highlight-inverse: '{colors.white-a12}'
   sheen-start: '{colors.white-a20}'
   elevation-ring: '{colors.black-a5}'
-  surface-page-matte: '{colors.neutral-0}'
-  surface-glass-matte: 'oklch(0.97 0 0 / 0.6)'
-  surface-code-matte: '{colors.neutral-50}'
-  surface-success-matte: 'color-mix(in oklab, {colors.fill-success} 11%, {colors.surface-page-matte})'
-  surface-warning-matte: 'color-mix(in oklab, {colors.fill-warning} 11%, {colors.surface-page-matte})'
-  surface-danger-matte: 'color-mix(in oklab, {colors.fill-danger} 11%, {colors.surface-page-matte})'
-  surface-info-matte: 'color-mix(in oklab, {colors.fill-info} 11%, {colors.surface-page-matte})'
-  field-background-matte: '{colors.surface-page-matte}'
   surface-page-dark: '{colors.neutral-925}'
   surface-muted-dark: '{colors.neutral-800}'
   surface-emphasis-dark: '{colors.neutral-750}'
@@ -724,6 +715,9 @@ here; if something really is missing, add it here first.
 - **Sizes:** Tailwind's 4px spacing scale. Icons are Lucide, `size-icon-md` (16px), or
   `size-icon-sm` (14px) in compact controls. Controls are `h-control-sm`, `h-control-md` or
   `h-control-lg` (32, 36, 40px).
+- **Sharing:** anything that shares out of the app (an action, a button, a dialog title) uses
+  one icon, Lucide's `Share`: a box with an arrow leaving it (`SHARE_ICON`). Never `Share2`,
+  the three joined dots.
 - **Surfaces:** one surface utility per element (`card-surface`, `matte-float`, `matte-key`,
   `matte-well`), never raw `shadow-*`, `border-*` and `backdrop-blur-*` combinations.
 - **Tokens:** read a semantic token directly. A component token is only for a value the
@@ -815,9 +809,8 @@ here. The `spacing` and `components` sections and the prose are written by hand;
 disagree with the CSS, the CSS wins and this file is updated to match. Storybook shows every
 tier under **Llama UI › Foundations › Colors**.
 
-Paper light mode is the base. A semantic token that resolves differently in dark mode has a
-`-dark` twin here, and one that resolves differently in Matte a `-matte` twin; components list
-a `-dark` entry wherever their colours change. Translucent component
+Light mode is the base. A semantic token that resolves differently in dark mode has a
+`-dark` twin here; components list a `-dark` entry wherever their colours change. Translucent component
 fills are given as they render over the page, so contrast checks see the real colour.
 
 ## Colors
@@ -841,12 +834,8 @@ creative (a shape, a numeral, an illustration). Artwork takes its colours from t
 the `art-*` primitives: the day sky and the night sky (llama.app's light and dark hero grounds) and
 cinder, the accent orange; never from the status colours, and never red.
 
-Light mode has two surface themes, which share everything else (the palette, buttons, fields,
-badges, shadows and dark mode): **Paper**, the default, sets white panels, fields and keys on a
-faint grey page (`neutral-25`); **Matte** sets grey glass on a white page. Matte is the
-`theme-matte` class on `<html>`, chosen with the Light surfaces setting (Settings → General) or
-the Surface switch in Storybook's toolbar, and only its surface tokens differ: `surface-page`,
-`surface-glass`, `surface-code`, `field-background` and `float-panel-background-modal`.
+Light mode sets white panels, fields and keys on a faint grey page (`neutral-25`). Dark mode shares the
+palette, buttons, fields, badges and shadows.
 
 - **Surfaces:** `surface-page` for the page, `surface-muted` for quiet panels,
   `surface-emphasis` and `surface-selected` for stronger fills and hover or selected rows,
@@ -1111,6 +1100,16 @@ screens. Status lamps, avatars and the round icon buttons in the chat form are f
   shade, which makes a field. Unlike the other `matte-glass` surfaces it does not blur: it
   already sits on glass, and a second backdrop blur re-paints the panel's fill behind it and
   turns the group visibly lighter, whatever its own fill.
+- **Inset lists:** a phone's sheets (settings, add to chat, the model picker) list their
+  options the native way. `inset-list` is an inset group of rows, `inset-list-row` a row a
+  finger tall (3rem) that is tappable as a whole, and `inset-list-row-body` its label and value,
+  whose top border is the divider: it starts at the label, past the row's icon, and the first
+  row has none. `inset-list-title` sits above a group and `inset-list-caption` below it. Inside
+  a drawer the groups take `--sheet-group-radius` (1.25rem, the chat form's single-row radius) in place of the card radius, to sit
+  with the sheet's own 2.5rem corners. A sheet's close or back key is `sheet-key`, a round key
+  1rem from the top and from the side, with the title centered on its middle. Build them with Llama UI's
+  `InsetList`, `InsetListRow`, `InsetListSplitRow`, `SheetHeader` and `SheetPages`
+  (`@ggml-org/llama-ui/app/sheets`) rather than with the utilities by hand.
 - **Selected rows:** `selected-row-surface` marks the row a sidebar list is on: a
   conversation, a project or a top action, on desktop and on a phone. It is a 5% tint of the
   text colour, under hover's 10%, with the inset group's edge and shade, so the selected row

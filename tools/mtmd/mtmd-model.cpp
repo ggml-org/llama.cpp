@@ -1263,6 +1263,23 @@ struct mtmd_model_loader {
                         get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels, false);
                         hparams.set_warmup_n_tokens(32*32);
                     } break;
+                    case PROJECTOR_TYPE_HY_V4_FLASH:
+                    {
+                        hparams.n_merge = 2;
+                        hparams.set_image_resize_algo(RESIZE_ALGO_BICUBIC, true); // HF processor replaces lanczos with bicubic
+                        hparams.image_round_half_even = true;
+                        hparams.image_resize_pad = PAD_NONE;
+                        hparams.ffn_op = FFN_GELU; // tanh gelu (bias_activation_fusion)
+                        log_ffn_op = "gelu";
+                        get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        if (hparams.n_merge == 0) {
+                            throw std::runtime_error(mtmd_format("%s: spatial_merge_size must be > 0\n", __func__));
+                        }
+                        hparams.set_limit_image_tokens(4, 4096);
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels, false);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels, false);
+                        hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
+                    } break;
                 case PROJECTOR_TYPE_LFM2A:
                 case PROJECTOR_TYPE_D1OMNI_A:
                     {
@@ -3885,8 +3902,21 @@ struct mtmd_model_loader {
                     model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
                     model.view_seperator    = get_tensor(TN_IMAGE_SEPERATOR, false);
                     // the position embedding is resampled on the host as F32
-                    if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32) {
-                        throw std::runtime_error(mtmd_format("%s: HunyuanVL requires an F32 %s\n", __func__, mtmd_format(TN_POS_EMBD, prefix).c_str()));
+                    if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32 || !ggml_is_matrix(model.position_embeddings) || model.position_embeddings->ne[0] != hparams.n_embd) {
+                        throw std::runtime_error(mtmd_format("%s: HunyuanVL requires a 2D F32 %s\n", __func__, mtmd_format(TN_POS_EMBD, prefix).c_str()));
+                    }
+                } break;
+            case PROJECTOR_TYPE_HY_V4_FLASH:
+                {
+                    model.mm_0_w            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "weight"));
+                    model.mm_0_b            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 0, "bias"));
+                    model.mm_1_w            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "weight"));
+                    model.mm_1_b            = get_tensor(mtmd_format(TN_LLAVA_PROJ, 2, "bias"));
+                    model.mm_pre_norm_w     = get_tensor(mtmd_format(TN_MM_PRE_NORM, "weight"));
+                    model.image_newline     = get_tensor(TN_IMAGE_NEWLINE);
+                    if (!model.position_embeddings || model.position_embeddings->type != GGML_TYPE_F32 || !ggml_is_matrix(model.position_embeddings) || model.position_embeddings->ne[0] != hparams.n_embd) {
+                        throw std::runtime_error(mtmd_format("%s: %s requires a 2D F32 %s\n", __func__,
+                                PROJECTOR_TYPE_NAMES[model.proj_type].c_str(), mtmd_format(TN_POS_EMBD, prefix).c_str()));
                     }
                 } break;
             case PROJECTOR_TYPE_JANUS_PRO:
@@ -4690,6 +4720,8 @@ int mtmd_model::n_output_tokens_x(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MUSE_GLIMMER:
         case PROJECTOR_TYPE_LFM3VL:
             return (img->nx() / params.patch_size) / 2;
+        case PROJECTOR_TYPE_HY_V4_FLASH:
+            return (img->nx() / params.patch_size) / params.n_merge + 1; // +1 for newline
         case PROJECTOR_TYPE_STEP3VL:
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
@@ -4725,6 +4757,8 @@ int mtmd_model::n_output_tokens_y(const mtmd_image_f32 * img) const {
         case PROJECTOR_TYPE_MUSE_GLIMMER:
         case PROJECTOR_TYPE_LFM3VL:
             return (img->ny() / params.patch_size) / 2;
+        case PROJECTOR_TYPE_HY_V4_FLASH:
+            return (img->ny() / params.patch_size) / params.n_merge;
         case PROJECTOR_TYPE_STEP3VL:
         case PROJECTOR_TYPE_MINICPMV4_6:
         case PROJECTOR_TYPE_MINICPMV4_7:
@@ -4998,6 +5032,13 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 int oh = (img->ny() / patch_size) / merge;
                 n_patches = (ow + 1) * oh + 2;
             } break;
+        case PROJECTOR_TYPE_HY_V4_FLASH:
+            {
+                int merge = hparams.n_merge;
+                int ow = (img->nx() / patch_size) / merge;
+                int oh = (img->ny() / patch_size) / merge;
+                n_patches = (ow + 1) * oh;
+            } break;
         case PROJECTOR_TYPE_DEEPSEEKOCR2:
         {
             // 1024 global view -> 256 query tokens + 1 view separator = 257;
@@ -5245,6 +5286,8 @@ int mtmd_model::n_mmproj_embd() const {
             return mm_2_w->ne[1];
         case PROJECTOR_TYPE_HUNYUANVL:
             return mm_model_proj->ne[1];
+        case PROJECTOR_TYPE_HY_V4_FLASH:
+            return mm_1_w->ne[3];
         case PROJECTOR_TYPE_COGVLM:
             return mm_4h_to_h_w->ne[1];
         case PROJECTOR_TYPE_DEEPSEEKOCR:

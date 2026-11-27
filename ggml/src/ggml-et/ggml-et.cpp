@@ -868,6 +868,10 @@ static bool et_ggml_is_row_contiguous(const ggml_tensor * t) {
 static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_UNUSED(dev);
 
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     bool supported = false;
     switch (op->op) {
         case GGML_OP_CUMSUM:
@@ -1277,6 +1281,7 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
             if (op->type == GGML_TYPE_F32 && op->src[0] && op->src[0]->type == GGML_TYPE_F32 && op->src[1] &&
                 (op->src[1]->type == GGML_TYPE_F32 || op->src[1]->type == GGML_TYPE_F16) && op->src[2] &&
                 (op->src[2]->type == GGML_TYPE_F32 || op->src[2]->type == GGML_TYPE_F16) && op->src[4] == nullptr && op->src[5] == nullptr &&
+                !ggml_flash_attn_ext_has_indexed_bias(op) &&
                 ggml_is_contiguous_rows(op) && ggml_is_contiguous_rows(op->src[0])) {
                 float max_bias      = 0.0f;
                 float logit_softcap = 0.0f;
@@ -1536,7 +1541,8 @@ static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggm
                 op->src[4]->ne[0] == 1 &&                                              // beta is scalar per position
                 et_ggml_is_row_contiguous(op->src[0]) && et_ggml_is_row_contiguous(op->src[1]) &&
                 et_ggml_is_row_contiguous(op->src[2]) && ggml_is_contiguous(op->src[3]) &&
-                ggml_is_contiguous(op->src[4]) && ggml_is_contiguous(op->src[5])) {
+                ggml_is_contiguous(op->src[4]) && ggml_is_contiguous(op->src[5]) &&
+                ggml_get_op_params_i32(op, 1) == 0) {                                  // no replay of pending tokens
                 supported = true;
             } else {
                 supported = false;
@@ -1657,6 +1663,7 @@ static void ggml_backend_et_device_get_props(ggml_backend_dev_t dev, struct ggml
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
         /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 

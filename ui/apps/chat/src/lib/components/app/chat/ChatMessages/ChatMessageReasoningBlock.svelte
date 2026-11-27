@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { Lightbulb } from '@lucide/svelte';
 	import { CollapsibleContentBlock, MarkdownContent } from '#lib/components/app/index.ts';
 	import { REASONING_SCROLL_AT_BOTTOM_THRESHOLD_PX } from '#lib/constants/index.ts';
 	import { AgenticSectionType } from '#lib/enums/index.ts';
@@ -125,10 +124,9 @@
 
 <CollapsibleContentBlock
 	class="my-2"
-	icon={Lightbulb}
-	iconClass="size-icon-sm"
 	{onToggle}
 	{open}
+	pinnedChevron
 	{shimmerTitle}
 	{subtitle}
 	{title}

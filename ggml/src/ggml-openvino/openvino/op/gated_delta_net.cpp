@@ -514,10 +514,6 @@ static OutputVector translate_gdn(const NodeContext & context, const OutputVecto
         g = std::make_shared<ov::op::v1::Multiply>(g, mask);
     }
 
-    // std::cout << "GatedDeltaNet input shapes: q=" << q.get_partial_shape() << ", k=" << k.get_partial_shape()
-    //           << ", v=" << v.get_partial_shape() << ", g=" << g.get_partial_shape()
-    //           << ", beta=" << beta.get_partial_shape() << ", state=" << state.get_partial_shape() << std::endl;
-
 #ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
     if (cache_inputs) {
         OutputVector args{q, k, v, (*cache_inputs)[0], g, beta};

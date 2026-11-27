@@ -1274,11 +1274,13 @@ struct server_tool_exec_shell_command : server_tool {
                 {"parameters", {
                     {"type", "object"},
                     {"properties", {
+                        // first, so a client can show it while the command still streams; the tool ignores it
+                        {"description",     {{"type", "string"},  {"description", "Short plain-language description of what this command does, starting with a verb, e.g. 'List files in the project root'. 3 to 10 words. Shown to the user."}}},
                         {"command",         {{"type", "string"},  {"description", "Shell command to execute"}}},
                         {"timeout",         {{"type", "integer"}, {"description", string_format("Timeout in seconds (default 10, max %d)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_TIMEOUT)}}},
                         {"max_output_size", {{"type", "integer"}, {"description", string_format("Maximum output size in bytes (default %zu)", SERVER_TOOL_EXEC_SHELL_COMMAND_MAX_OUTPUT_SIZE)}}},
                     }},
-                    {"required", json::array({"command"})},
+                    {"required", json::array({"description", "command"})},
                 }},
             }},
         };

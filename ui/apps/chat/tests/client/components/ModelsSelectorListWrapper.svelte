@@ -5,14 +5,22 @@
 
 	interface Props {
 		currentModel: string | null;
+		favorites?: ModelItem[];
 		groups: GroupedModelOptions;
 		loaded?: ModelItem[];
 	}
 
-	let { currentModel, groups, loaded = [] }: Props = $props();
+	let { currentModel, favorites = [], groups, loaded = [] }: Props = $props();
 </script>
 
 <!-- The rows mount tooltips, which need the provider +layout.svelte supplies. -->
 <Tooltip.Provider>
-	<ModelsSelectorList activeId={null} {currentModel} {groups} {loaded} onSelect={() => {}} />
+	<ModelsSelectorList
+		activeId={null}
+		{currentModel}
+		{favorites}
+		{groups}
+		{loaded}
+		onSelect={() => {}}
+	/>
 </Tooltip.Provider>

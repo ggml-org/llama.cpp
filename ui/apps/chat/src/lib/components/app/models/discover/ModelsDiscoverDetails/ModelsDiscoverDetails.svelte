@@ -23,9 +23,19 @@
 		loading?: boolean;
 		/** Error message when loading failed. */
 		error?: string | null;
+		/** Leaner pane for a narrow host such as Search: no Hugging Face link, no description. */
+		compact?: boolean;
 	}
 
-	let { details, error = null, files, loading = false, modelId, readme }: Props = $props();
+	let {
+		compact = false,
+		details,
+		error = null,
+		files,
+		loading = false,
+		modelId,
+		readme
+	}: Props = $props();
 
 	let gguf = $derived(details?.gguf);
 	let baseModels = $derived(HuggingFaceService.getBaseModels(details));
@@ -77,7 +87,7 @@
 </script>
 
 {#if loading}
-	<ModelsDiscoverDetailsSkeleton />
+	<ModelsDiscoverDetailsSkeleton {compact} />
 {:else if error}
 	<div class="flex h-full items-center justify-center py-20">
 		<p class="text-body-sm text-destructive">{error}</p>
@@ -86,6 +96,7 @@
 	<div class="@container space-y-6 p-6 pr-0">
 		<ModelsDiscoverDetailsHeader
 			{baseModels}
+			{compact}
 			{details}
 			{gguf}
 			{hasReasoning}

@@ -40,7 +40,7 @@ describe('nested surfaces', () => {
 
 		// Models and MCP wait behind their settings: show them, so every footer row is measured
 		settingsStore.updateConfig(SETTINGS_KEYS.SHOW_MODELS_MANAGER, true);
-		settingsStore.updateConfig(SETTINGS_KEYS.SHOW_MCP, true);
+		settingsStore.updateConfig(SETTINGS_KEYS.ENABLE_MCP, true);
 	});
 
 	it('round the footer group from its tokens', async () => {

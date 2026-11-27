@@ -1,11 +1,21 @@
 <script lang="ts">
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
-	import { BookOpenText, Clock, Gauge, Layers, Sparkles, WholeWord, Wrench } from '@lucide/svelte';
+	import {
+		BookOpenText,
+		Clock,
+		Gauge,
+		Hourglass,
+		Layers,
+		Sparkles,
+		WholeWord,
+		Wrench
+	} from '@lucide/svelte';
 	import { ChatMessageStatisticsBadge } from '#lib/components/app/index.ts';
 	import { DEFAULT_PERFORMANCE_TIME, MS_PER_SECOND } from '#lib/constants/index.ts';
 	import { ChatMessageStatisticsMode, ChatMessageStatsView } from '#lib/enums/index.ts';
+	import { useNow } from '#lib/hooks/use-now.svelte.ts';
 	import type { ChatMessageAgenticTimings } from '#lib/types/chat.js';
-	import { formatPerformanceTime } from '#lib/utils/index.ts';
+	import { formatElapsedTime, formatPerformanceTime } from '#lib/utils/index.ts';
 	import type { Component } from 'svelte';
 
 	interface Props {
@@ -20,6 +30,8 @@
 		onActiveViewChange?: (view: ChatMessageStatsView) => void;
 		hideSummary?: boolean;
 		mode?: ChatMessageStatisticsMode;
+		/** Start of a running task (ms since epoch): the task time ticks from it. */
+		taskStartedAt?: number | null;
 	}
 
 	let {
@@ -33,7 +45,8 @@
 		predictedMs,
 		predictedTokens,
 		promptMs,
-		promptTokens
+		promptTokens,
+		taskStartedAt = null
 	}: Props = $props();
 
 	let isSwitchable = $derived(mode === ChatMessageStatisticsMode.SWITCHABLE);
@@ -117,13 +130,29 @@
 		hasAgenticStats ? formatPerformanceTime(agenticTimings!.toolsMs) : DEFAULT_PERFORMANCE_TIME
 	);
 
+	// wall time of the whole task when recorded (permission waits included);
+	// older messages fall back to the sum of LLM and tool time
 	let agenticTotalTimeMs = $derived(
 		hasAgenticStats
-			? agenticTimings!.toolsMs + agenticTimings!.llm.predicted_ms + agenticTimings!.llm.prompt_ms
+			? (agenticTimings!.totalMs ??
+					agenticTimings!.toolsMs +
+						agenticTimings!.llm.predicted_ms +
+						agenticTimings!.llm.prompt_ms)
 			: 0
 	);
 
 	let formattedAgenticTotalTime = $derived(formatPerformanceTime(agenticTotalTimeMs));
+
+	const now = useNow(() => taskStartedAt !== null);
+
+	// the whole reply, from the prompt to the answer: live while it runs, then as recorded
+	let formattedTaskTime = $derived(
+		taskStartedAt !== null
+			? formatElapsedTime(now.current - taskStartedAt)
+			: agenticTimings?.totalMs !== undefined
+				? formatPerformanceTime(agenticTimings.totalMs)
+				: undefined
+	);
 
 	const fixedFormatter = new Intl.NumberFormat(undefined, {
 		maximumFractionDigits: 2,
@@ -226,6 +255,15 @@
 				value={formattedTime}
 			/>
 
+			{#if formattedTaskTime !== undefined}
+				<ChatMessageStatisticsBadge
+					class="bg-transparent"
+					icon={Hourglass}
+					tooltipLabel="Total task time, from the prompt to the answer"
+					value={formattedTaskTime}
+				/>
+			{/if}
+
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Gauge}
@@ -271,7 +309,7 @@
 			<ChatMessageStatisticsBadge
 				class="bg-transparent"
 				icon={Clock}
-				tooltipLabel="Total time (LLM + tools)"
+				tooltipLabel="Total task time"
 				value={formattedAgenticTotalTime}
 			/>
 		{:else if hasPromptStats && (mode === ChatMessageStatisticsMode.READING || isSwitchable)}

@@ -210,6 +210,7 @@ For the full list of features, please refer to [server's changelog](https://gith
 | `--mcp-servers-config PATH` | experimental: path to JSON file with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_CONFIG) |
 | `--mcp-servers-json JSON` | experimental: inline JSON with MCP server definitions (Cursor-compatible format) - do not enable in untrusted environments (default: none)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_MCP_SERVERS_JSON) |
 | `-ag, --agent, -no-ag, --no-agent` | whether to enable CORS proxy and all built-in tools - do not enable in untrusted environments (default: disabled)<br/>note: for security reasons, this will limit --cors-origins to localhost by default<br/>(env: LLAMA_ARG_AGENT) |
+| `--ui-agent` | enable agent mode in Llama Chat with nothing enabled on the server: the tools that run in the browser and MCP servers the browser reaches itself, no server tools and no MCP proxy (default: disabled)<br/>note: not needed with --agent, --tools or --ui-mcp-proxy, they enable agent mode in Llama Chat too<br/>(env: LLAMA_ARG_UI_AGENT) |
 | `--ui, --webui, --no-ui, --no-webui` | whether to enable Llama Chat, the built-in chat app (default: enabled)<br/>(env: LLAMA_ARG_UI) |
 | `--connect` | (experimental) open a peer-to-peer tunnel for server using llama-connect (default: disabled)<br/>(env: LLAMA_ARG_CONNECT) |
 | `--connect-code CODE` | manually specify a 40-character code for --connect (default: generate a new one for each run)<br/>(env: LLAMA_ARG_CONNECT_CODE) |
@@ -361,6 +362,8 @@ For more details, please refer to [multimodal documentation](../../docs/multimod
 The server includes a set of server tools that enable the LLM to access the local file system directly from Llama Chat.
 
 To use this feature, start the server with `--tools all`. You can also enable only specific tools by passing a comma-separated list: `--tools name1,name2,...`. Run `--help` for the full list of available tool names.
+
+To use the agent mode of Llama Chat with no access to the machine the server runs on, start the server with `--ui-agent` instead. The LLM then gets the tools that run in the browser (current time, JavaScript sandbox, ...) and the MCP servers the browser reaches itself.
 
 ### MCP servers
 
@@ -2666,6 +2669,12 @@ You can specify default preferences for Llama Chat using `--ui-config <JSON conf
 
 ```bash
 ./llama-server -m model.gguf --ui-config '{"pasteLongTextToFileLen": 0, "renderUserContentAsMarkdown": true}'
+```
+
+You can also set the DPI used when parsing a PDF as images (default 108), e.g. 216 for dense tables:
+
+```bash
+./llama-server -m model.gguf --ui-config '{"pdfAsImage": true, "pdfDpi": 216}'
 ```
 
 > **Note:** The old flags `--webui-config` and `--webui-config-file` are deprecated but still work as aliases.

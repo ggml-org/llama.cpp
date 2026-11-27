@@ -1,41 +1,24 @@
 <script lang="ts">
-	import SidebarNavigationGroupSubmenu from './SidebarNavigationGroupSubmenu.svelte';
 	import { Checkbox } from '@ggml-org/llama-ui/ui/checkbox';
 	import * as Tooltip from '@ggml-org/llama-ui/ui/tooltip';
+	import { GitBranch, Loader2, MoreHorizontal, Square } from '@lucide/svelte';
 	import {
-		Download,
-		FolderInput,
-		GitBranch,
-		ListChecks,
-		Loader2,
-		MoreHorizontal,
-		PanelTopOpen,
-		Pencil,
-		Pin,
-		PinOff,
-		Square,
-		Trash2,
-		Unlink
-	} from '@lucide/svelte';
-	import { ContextMenuActions, DropdownMenuActions } from '#lib/components/app/index.ts';
+		ContextMenuActions,
+		ConversationActions,
+		DropdownMenuActions
+	} from '#lib/components/app/index.ts';
 	import { TruncatedText } from '#lib/components/app/index.ts';
 	import {
 		FORK_TREE_DEPTH_PADDING,
 		ICON_CLASS_DEFAULT,
 		ROW_LONG_PRESS_MS,
-		SHORTCUT_DELETE_CONVERSATION,
-		SHORTCUT_EDIT_CONVERSATION,
-		SHORTCUT_EXPORT_CONVERSATION,
 		UI_DATA_ATTRS
 	} from '#lib/constants/index.ts';
-	import type { MenuKind } from '#lib/enums/index.ts';
 	import { useLongPress } from '#lib/hooks/use-long-press.svelte.ts';
 	import { RouterService } from '#lib/services/router.service.ts';
 	import {
 		chatStore,
-		conversationsStore,
 		deviceStore,
-		groupsStore,
 		settingsStore,
 		sidebarDragStore,
 		tabsStore,
@@ -51,8 +34,6 @@
 		conversation: DatabaseConversation;
 		isSelectionMode?: boolean;
 		isSelected?: boolean;
-		onDelete?: (id: string) => void;
-		onEdit?: (id: string) => void;
 		onSelect?: (id: string) => void;
 		onStop?: (id: string) => void;
 		onToggleSelect?: (id: string) => void;
@@ -67,8 +48,6 @@
 		isActive = false,
 		isSelected = false,
 		isSelectionMode = false,
-		onDelete,
-		onEdit,
 		onEnterSelectionMode,
 		onRowMouseDown,
 		onSelect,
@@ -111,16 +90,6 @@
 		sidebarDragStore.pressConversation(event, conversation.id);
 	}
 
-	function handleEdit(event: Event) {
-		event.stopPropagation();
-		onEdit?.(conversation.id);
-	}
-
-	function handleDelete(event: Event) {
-		event.stopPropagation();
-		onDelete?.(conversation.id);
-	}
-
 	function handleStop(event: Event) {
 		event.stopPropagation();
 		onStop?.(conversation.id);
@@ -140,102 +109,7 @@
 		openInNewTab();
 	}
 
-	function setGroup(groupId: string | null) {
-		void conversationsStore.setConversationGroup(conversation.id, groupId);
-	}
-
-	// a group the chat points at may be gone; then it is in none
-	let groupId = $derived(groupsStore.groupIdOf(conversation));
-
-	// the picker stands in for the submenu where a phone's menu shows no flyouts
-	function handlePickGroup(event: Event) {
-		event.stopPropagation();
-		uiStore.openGroupPicker({ currentGroupId: groupId, onSelect: setGroup });
-	}
-
-	// a chat in a group can move to another one or leave it, a loose chat can join one
-	let groupActions = $derived<MenuAction[]>([
-		{
-			icon: FolderInput,
-			label: 'Move to group',
-			onclick: handlePickGroup,
-			submenu: groupSubmenu
-		},
-		...(groupId
-			? [
-					{
-						icon: Unlink,
-						label: 'Remove from group',
-						onclick: (event: Event) => {
-							event.stopPropagation();
-							setGroup(null);
-						}
-					}
-				]
-			: [])
-	]);
-
-	// the "more actions" dropdown and the right-click menu offer the same actions; the
-	// shortcuts act on the active conversation, so only its row shows them
-	let actions = $derived<MenuAction[]>([
-		...(canOpenInNewTab
-			? [
-					{
-						icon: PanelTopOpen,
-						label: 'Open in new tab',
-						onclick: (e: Event) => {
-							e.stopPropagation();
-							openInNewTab();
-						}
-					}
-				]
-			: []),
-		{
-			icon: conversation.pinned ? PinOff : Pin,
-			label: conversation.pinned ? 'Unpin' : 'Pin',
-			onclick: (e: Event) => {
-				e.stopPropagation();
-				handleTogglePin();
-			},
-			separator: canOpenInNewTab
-		},
-		{
-			icon: Pencil,
-			label: 'Edit',
-			onclick: handleEdit,
-			shortcut: isActive ? SHORTCUT_EDIT_CONVERSATION : undefined
-		},
-		...groupActions,
-		{
-			icon: Download,
-			label: 'Export',
-			onclick: (e: Event) => {
-				e.stopPropagation();
-				conversationsStore.downloadConversation(conversation.id);
-			},
-			shortcut: isActive ? SHORTCUT_EXPORT_CONVERSATION : undefined
-		},
-		{
-			icon: ListChecks,
-			label: 'Select',
-			onclick: handleEnterSelectionMode
-		},
-		{
-			icon: Trash2,
-			label: 'Delete',
-			onclick: handleDelete,
-			separator: true,
-			shortcut: isActive ? SHORTCUT_DELETE_CONVERSATION : undefined,
-			variant: 'destructive'
-		}
-	]);
-
-	function handleTogglePin() {
-		conversationsStore.toggleConversationPin(conversation.id);
-	}
-
-	function handleEnterSelectionMode(event: Event) {
-		event.stopPropagation();
+	function handleEnterSelectionMode() {
 		onEnterSelectionMode?.(conversation.id);
 	}
 
@@ -243,7 +117,7 @@
 		const customEvent = event as CustomEvent<{ conversationId: string }>;
 
 		if (customEvent.detail.conversationId === conversation.id && isActive) {
-			handleEdit(event);
+			uiStore.openConversationRename(conversation.id);
 		}
 	}
 
@@ -316,142 +190,146 @@
 	});
 </script>
 
-<ContextMenuActions bind:open={contextMenuOpen} {actions} disabled={isSelectionMode}>
-	<button
-		bind:this={rowElement}
-		style:--row-hold-ms="{ROW_LONG_PRESS_MS}ms"
-		class={[
-			'group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-2 py-1.5 text-left select-none [-webkit-touch-callout:none] transition-[background-color,color,scale] hover:bg-foreground/10 hover:text-foreground max-md:min-h-12 max-md:rounded-2xl max-md:px-3.5 max-md:py-3 md:min-h-8 md:py-1',
-			isLanding && 'invisible',
-			isActive ? 'selected-row-surface text-accent-foreground' : 'text-foreground/75',
-			contextMenuOpen && 'bg-foreground/10',
-			isSelected && 'bg-primary/10 hover:bg-primary/15',
-			isSelectionMode && 'is-selection-mode',
-			// the row sinks while a finger holds it, and stays lit while its menu is open
-			longPress.isPressing && 'scale-97 bg-foreground/10 duration-(--row-hold-ms) ease-out',
-			deviceStore.isMobile && dropdownOpen && 'bg-foreground/10'
-		]}
-		{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
-		onauxclick={handleAuxClick}
-		onclick={(e) => handleSelect(e)}
-		onclickcapture={longPress.handleClickCapture}
-		oncontextmenu={longPress.handleContextMenu}
-		ondragstart={(e) => e.preventDefault()}
-		onfocusin={handleMouseOver}
-		onfocusout={(e) => {
-			if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
-				handleMouseLeave();
-			}
-		}}
-		onmousedown={(e) => handleRowMouseDown(e)}
-		onmouseleave={handleMouseLeave}
-		onmouseover={handleMouseOver}
-		onpointercancel={longPress.handlePointerEnd}
-		onpointerdown={(e) => {
-			// a mouse drags the row, a finger holds it for its menu
-			handlePointerDown(e);
-			longPress.handlePointerDown(e);
-		}}
-		onpointermove={longPress.handlePointerMove}
-		onpointerup={longPress.handlePointerEnd}
-	>
-		<div
-			style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
-			class="flex min-w-0 flex-1 items-center gap-2"
+<ConversationActions
+	{conversation}
+	{isActive}
+	onEnterSelectionMode={onEnterSelectionMode ? handleEnterSelectionMode : undefined}
+>
+	{#snippet children(actions)}
+		{@render row(actions)}
+	{/snippet}
+</ConversationActions>
+
+{#snippet row(actions: MenuAction[])}
+	<ContextMenuActions bind:open={contextMenuOpen} {actions} disabled={isSelectionMode}>
+		<button
+			bind:this={rowElement}
+			style:--row-hold-ms="{ROW_LONG_PRESS_MS}ms"
+			class={[
+				'group flex min-h-9 w-full cursor-pointer items-center justify-between space-x-3 rounded-lg px-2 py-1.5 text-left select-none [-webkit-touch-callout:none] transition-[background-color,color,scale] hover:bg-foreground/10 hover:text-foreground max-md:min-h-12 max-md:rounded-2xl max-md:px-3.5 max-md:py-3 md:min-h-8 md:py-1',
+				isLanding && 'invisible',
+				isActive ? 'selected-row-surface text-accent-foreground' : 'text-foreground/75',
+				contextMenuOpen && 'bg-foreground/10',
+				isSelected && 'bg-primary/10 hover:bg-primary/15',
+				isSelectionMode && 'is-selection-mode',
+				// the row sinks while a finger holds it, and stays lit while its menu is open
+				longPress.isPressing && 'scale-97 bg-foreground/10 duration-(--row-hold-ms) ease-out',
+				deviceStore.isMobile && dropdownOpen && 'bg-foreground/10'
+			]}
+			{...{ [UI_DATA_ATTRS.CONVERSATION_ROW]: conversation.id }}
+			onauxclick={handleAuxClick}
+			onclick={(e) => handleSelect(e)}
+			onclickcapture={longPress.handleClickCapture}
+			oncontextmenu={longPress.handleContextMenu}
+			ondragstart={(e) => e.preventDefault()}
+			onfocusin={handleMouseOver}
+			onfocusout={(e) => {
+				if (!e.currentTarget.contains(e.relatedTarget as Node | null)) {
+					handleMouseLeave();
+				}
+			}}
+			onmousedown={(e) => handleRowMouseDown(e)}
+			onmouseleave={handleMouseLeave}
+			onmouseover={handleMouseOver}
+			onpointercancel={longPress.handlePointerEnd}
+			onpointerdown={(e) => {
+				// a mouse drags the row, a finger holds it for its menu
+				handlePointerDown(e);
+				longPress.handlePointerDown(e);
+			}}
+			onpointermove={longPress.handlePointerMove}
+			onpointerup={longPress.handlePointerEnd}
 		>
-			{#if isSelectionMode}
-				<div
-					aria-checked={isSelected}
-					aria-label={isSelected ? `Deselect ${conversation.name}` : `Select ${conversation.name}`}
-					class="shrink-0"
-					onclick={(e) => handleCheckboxClick(e)}
-					onkeydown={handleCheckboxKeydown}
-					role="checkbox"
-					tabindex="-1"
-				>
-					<Checkbox
+			<div
+				style:padding-left="{depth * FORK_TREE_DEPTH_PADDING}px"
+				class="flex min-w-0 flex-1 items-center gap-2"
+			>
+				{#if isSelectionMode}
+					<div
+						aria-checked={isSelected}
 						aria-label={isSelected
 							? `Deselect ${conversation.name}`
 							: `Select ${conversation.name}`}
-						checked={isSelected}
+						class="shrink-0"
+						onclick={(e) => handleCheckboxClick(e)}
+						onkeydown={handleCheckboxKeydown}
+						role="checkbox"
+						tabindex="-1"
+					>
+						<Checkbox
+							aria-label={isSelected
+								? `Deselect ${conversation.name}`
+								: `Select ${conversation.name}`}
+							checked={isSelected}
+						/>
+					</div>
+				{/if}
+
+				{#if depth > 0}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<!-- prevent another nested button element -->
+							{#snippet child({ props })}
+								<a
+									{...props}
+									class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
+									href={RouterService.chat(conversation.forkedFromConversationId)}
+								>
+									<GitBranch class="h-3.5 w-3.5" />
+								</a>
+							{/snippet}
+						</Tooltip.Trigger>
+
+						<Tooltip.Content>
+							<p>See parent conversation</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+
+				{#if isLoading}
+					<Tooltip.Root>
+						<Tooltip.Trigger>
+							<div
+								aria-label="Stop generation"
+								class="stop-button flex {ICON_CLASS_DEFAULT} shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
+								onclick={handleStop}
+								onkeydown={(e) => e.key === 'Enter' && handleStop(e)}
+								role="button"
+								tabindex="0"
+							>
+								<Loader2 class="loading-icon h-3.5 w-3.5 animate-spin" />
+
+								<Square class="stop-icon hidden h-3 w-3 fill-current text-destructive" />
+							</div>
+						</Tooltip.Trigger>
+
+						<Tooltip.Content>
+							<p>Stop generation</p>
+						</Tooltip.Content>
+					</Tooltip.Root>
+				{/if}
+
+				<TruncatedText
+					class="text-body-sm max-md:text-body"
+					showTooltip={false}
+					text={conversation.name}
+				/>
+			</div>
+
+			{#if !isSelectionMode && renderActionsDropdown}
+				<!-- a phone opens the menu by holding the row, so it shows no trigger -->
+				<div class="actions flex items-center" hidden={deviceStore.isMobile}>
+					<DropdownMenuActions
+						bind:open={dropdownOpen}
+						{actions}
+						anchor={deviceStore.isMobile ? rowElement : null}
+						triggerIcon={MoreHorizontal}
+						triggerTooltip="More actions"
 					/>
 				</div>
 			{/if}
-
-			{#if depth > 0}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<!-- prevent another nested button element -->
-						{#snippet child({ props })}
-							<a
-								{...props}
-								class="flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
-								href={RouterService.chat(conversation.forkedFromConversationId)}
-							>
-								<GitBranch class="h-3.5 w-3.5" />
-							</a>
-						{/snippet}
-					</Tooltip.Trigger>
-
-					<Tooltip.Content>
-						<p>See parent conversation</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-
-			{#if isLoading}
-				<Tooltip.Root>
-					<Tooltip.Trigger>
-						<div
-							aria-label="Stop generation"
-							class="stop-button flex {ICON_CLASS_DEFAULT} shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground"
-							onclick={handleStop}
-							onkeydown={(e) => e.key === 'Enter' && handleStop(e)}
-							role="button"
-							tabindex="0"
-						>
-							<Loader2 class="loading-icon h-3.5 w-3.5 animate-spin" />
-
-							<Square class="stop-icon hidden h-3 w-3 fill-current text-destructive" />
-						</div>
-					</Tooltip.Trigger>
-
-					<Tooltip.Content>
-						<p>Stop generation</p>
-					</Tooltip.Content>
-				</Tooltip.Root>
-			{/if}
-
-			<TruncatedText
-				class="text-body-sm max-md:text-body"
-				showTooltip={false}
-				text={conversation.name}
-			/>
-		</div>
-
-		{#if !isSelectionMode && renderActionsDropdown}
-			<!-- a phone opens the menu by holding the row, so it shows no trigger -->
-			<div class="actions flex items-center" hidden={deviceStore.isMobile}>
-				<DropdownMenuActions
-					bind:open={dropdownOpen}
-					{actions}
-					anchor={deviceStore.isMobile ? rowElement : null}
-					triggerIcon={MoreHorizontal}
-					triggerTooltip="More actions"
-				/>
-			</div>
-		{/if}
-	</button>
-</ContextMenuActions>
-
-{#snippet groupSubmenu({ close, kind }: { close: () => void; kind: MenuKind })}
-	<SidebarNavigationGroupSubmenu
-		currentGroupId={groupId}
-		{kind}
-		label="Move to group"
-		onClose={close}
-		onSelect={setGroup}
-	/>
+		</button>
+	</ContextMenuActions>
 {/snippet}
 
 <style>

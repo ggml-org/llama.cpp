@@ -94,6 +94,9 @@ jobs:
         # This folder's .npmrc sets ignore-scripts, so npm never builds it: this step does.
         run: LLAMA_BUILD_NUMBER="b$(git rev-list --count HEAD)" npm run build
         working-directory: ${{ env.APP_DIR }}
+        env:
+          # the same app as the UI llama-server embeds, with the Hugging Face lib
+          VITE_PUBLIC_HUGGING_FACE: "true"
 
       - name: Test the CLI and the alias version
         run: npx vitest --project=unit --run tests/unit/cli.test.ts
