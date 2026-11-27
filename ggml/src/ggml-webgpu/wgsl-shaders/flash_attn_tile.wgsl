@@ -18,15 +18,23 @@ const V_CHUNKS: u32 = HEAD_DIM_V / 4u;
 const SCORE_REGS_PER_LANE: u32 = (KV_TILE + MIN_SUBGROUP_SIZE - 1u) / MIN_SUBGROUP_SIZE;
 const OUT_REGS_PER_LANE: u32 = (V_CHUNKS + MIN_SUBGROUP_SIZE - 1u) / MIN_SUBGROUP_SIZE;
 
+// pad K rows by one 32-bit bank: each lane reads its own K row, a power-of-two stride puts all lanes on the same bank
+#define K_ROW_STRIDE (HEAD_DIM_QK + 2)
+
 #if !defined(K_DIRECT) || !defined(V_DIRECT)
 #define STAGING_SHMEM kv_shmem
 #define STAGING_OUT_TYPE f16
 #include "flash_attn_staging.tmpl"
-const kv_shmem_size = KV_TILE * max(HEAD_DIM_QK, HEAD_DIM_V);
+const kv_shmem_size = KV_TILE * max(K_ROW_STRIDE, HEAD_DIM_V);
 var<workgroup> kv_shmem: array<f16, kv_shmem_size>;
 #endif
 
 var<workgroup> q_shmem: array<Q_TYPE, Q_TILE * HEAD_DIM_QK>;
+#ifdef MASK
+// skip KV tiles that the mask fully hides for all rows of the workgroup (causal, sliding window)
+var<workgroup> tile_visible_atomic: atomic<u32>;
+var<workgroup> tile_visible: u32;
+#endif
 var<workgroup> p_shmem: array<f16, Q_TILE * KV_TILE>;
 
 @compute @workgroup_size(WG_SIZE)
@@ -77,6 +85,12 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                 head < params.n_head_log2),
         params.max_bias > 0.0);
 
+#ifdef MASK
+    if (local_id.x == 0u) {
+        atomicStore(&tile_visible_atomic, 0u);
+    }
+#endif
+
     for (var elem_idx = local_id.x; elem_idx < Q_TILE * HEAD_DIM_QK; elem_idx += WG_SIZE) {
         let q_tile_row = elem_idx / HEAD_DIM_QK;
         let q_col = elem_idx % HEAD_DIM_QK;
@@ -104,6 +118,25 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
         let kv_count = min(KV_TILE, params.seq_len_kv - kv_tile);
         let score_slots = min(SCORE_REGS_PER_LANE, (kv_count + subgroup_size - 1u) / subgroup_size);
         let out_slots = min(OUT_REGS_PER_LANE, (V_CHUNKS + subgroup_size - 1u) / subgroup_size);
+
+#ifdef MASK
+        let n_rows = min(Q_TILE, params.seq_len_q - q_row_start);
+        for (var i = local_id.x; i < n_rows * kv_count; i += WG_SIZE) {
+            let m = f32(mask[mask_global_offset + (i / kv_count) * params.seq_len_kv + kv_tile + i % kv_count]);
+            if (m > -1e30) {
+                atomicOr(&tile_visible_atomic, 1u);
+            }
+        }
+        workgroupBarrier();
+        if (local_id.x == 0u) {
+            tile_visible = atomicLoad(&tile_visible_atomic);
+            atomicStore(&tile_visible_atomic, 0u);
+        }
+        if (workgroupUniformLoad(&tile_visible) == 0u) {
+            continue;
+        }
+#endif
+
         var local_scores: array<f32, SCORE_REGS_PER_LANE>;
         for (var slot = 0u; slot < SCORE_REGS_PER_LANE; slot += 1u) {
             local_scores[slot] = FLOAT_MIN;
@@ -134,7 +167,7 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>,
                         q_shmem[q_off + 1u],
                         q_shmem[q_off + 2u],
                         q_shmem[q_off + 3u]);
-                    let kv_off = kv_local * HEAD_DIM_QK + chunk * 4u;
+                    let kv_off = kv_local * K_ROW_STRIDE + chunk * 4u;
                     let kv = vec4<f16>(
                         kv_shmem[kv_off + 0u],
                         kv_shmem[kv_off + 1u],

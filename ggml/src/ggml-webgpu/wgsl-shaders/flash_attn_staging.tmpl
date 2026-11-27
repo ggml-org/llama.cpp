@@ -1,3 +1,7 @@
+#ifndef K_ROW_STRIDE
+#define K_ROW_STRIDE HEAD_DIM_QK
+#endif
+
 #if defined(K_Q4_0) || defined(K_Q8_0) || defined(V_Q4_0) || defined(V_Q8_0)
 #define QUANT_SHMEM STAGING_SHMEM
 #define QUANT_OUT_TYPE STAGING_OUT_TYPE
@@ -46,7 +50,7 @@ fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u
         let k_row = blck_idx / BLOCKS_K;
         let global_k_row = kv_tile + k_row;
         let block_k = blck_idx % BLOCKS_K;
-        let row_offset = k_row * HEAD_DIM_QK;
+        let row_offset = k_row * K_ROW_STRIDE;
         let global_block_idx = k_head_offset + global_k_row * params.stride_k1 + block_k;
         let block_byte_base = global_block_idx * K_BLOCK_SIZE_BYTES;
         let d = unpack2x16float(load_k_u16_at(block_byte_base)).x;
@@ -64,7 +68,7 @@ fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u
         let k_col = elem_idx % HEAD_DIM_QK;
         let global_k_row = kv_tile + k_row;
         let global_k_row_offset = k_head_offset + global_k_row * params.stride_k1;
-        STAGING_SHMEM[elem_idx] = STAGING_OUT_TYPE(select(
+        STAGING_SHMEM[k_row * K_ROW_STRIDE + k_col] = STAGING_OUT_TYPE(select(
             0.0,
             K[global_k_row_offset + k_col],
             global_k_row < params.seq_len_kv && k_col < HEAD_DIM_QK));
@@ -76,7 +80,7 @@ fn load_k_tile_block(local_x: u32, kv_count: u32, kv_tile: u32, k_head_offset: u
         let global_k_row = kv_tile + kv_local;
         let k_vec_index = (k_head_offset + global_k_row * params.stride_k1 + chunk * 4u) >> 2u;
         let k4 = K[k_vec_index];
-        let kv_off = kv_local * HEAD_DIM_QK + chunk * 4u;
+        let kv_off = kv_local * K_ROW_STRIDE + chunk * 4u;
         STAGING_SHMEM[kv_off + 0u] = STAGING_OUT_TYPE(k4.x);
         STAGING_SHMEM[kv_off + 1u] = STAGING_OUT_TYPE(k4.y);
         STAGING_SHMEM[kv_off + 2u] = STAGING_OUT_TYPE(k4.z);
