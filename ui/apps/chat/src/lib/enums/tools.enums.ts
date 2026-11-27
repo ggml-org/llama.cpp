@@ -44,6 +44,7 @@ export enum GlobSearchType {
 export enum BuiltInTool {
 	BROWSER_GET_DATETIME = 'get_datetime',
 	BROWSER_READ_MEDIA = 'read_media',
+	BROWSER_RUN_BASH = 'run_bash',
 	BROWSER_RUN_JAVASCRIPT = 'run_javascript',
 	BROWSER_SEARCH_CHATS = 'search_chats',
 	SERVER_EDIT_FILE = 'edit_file',
