@@ -82,7 +82,7 @@ void llama_model_clef::load_arch_tensors(llama_model_loader & ml) {
     load_norm(field_norm,          LLM_TENSOR_DECISION_FIELD_NORM,          n_embd_h);
     load_norm(option_norm,         LLM_TENSOR_DECISION_OPTION_NORM,         n_embd_h);
 
-    output_lexical = create_tensor(tn(LLM_TENSOR_OUTPUT_LEXICAL, "weight"), { n_embd, n_vocab }, TENSOR_NOT_REQUIRED);
+    output_lexical = create_tensor(tn(LLM_TENSOR_OUTPUT_LEXICAL, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
 
     if (output_lexical == nullptr) {
         output_lexical = tok_embd;
