@@ -5615,7 +5615,7 @@ void ggml_flash_attn_ext_set_n_kv_max(
     ggml_set_op_params_i32(a, 4, n_kv_max);
 }
 
-void ggml_flash_attn_ext_add_sinks(
+void ggml_flash_attn_ext_set_sinks(
         struct ggml_tensor * a,
         struct ggml_tensor * sinks) {
     if (!sinks) {
@@ -5624,7 +5624,6 @@ void ggml_flash_attn_ext_add_sinks(
     }
 
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-    GGML_ASSERT(a->src[4] == NULL);
     GGML_ASSERT(a->src[0]->ne[2] == sinks->ne[0]);
     GGML_ASSERT(sinks->type == GGML_TYPE_F32);
 
@@ -5632,11 +5631,18 @@ void ggml_flash_attn_ext_add_sinks(
 }
 
 // deprecated
+void ggml_flash_attn_ext_add_sinks(
+        struct ggml_tensor * a,
+        struct ggml_tensor * sinks) {
+    ggml_flash_attn_ext_set_sinks(a, sinks);
+}
+
+// deprecated
 bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
     return ggml_flash_attn_ext_bias_is_indexed(a);
 }
 
-static bool ggml_flash_attn_ext_add_bias_validate(const struct ggml_tensor * a) {
+static bool ggml_flash_attn_ext_set_bias_validate(const struct ggml_tensor * a) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
 
     if (!ggml_flash_attn_ext_has_bias(a)) {
@@ -5694,14 +5700,14 @@ static bool ggml_flash_attn_ext_add_bias_validate(const struct ggml_tensor * a) 
     return true;
 }
 
-void ggml_flash_attn_ext_add_bias(
+void ggml_flash_attn_ext_set_bias(
         struct ggml_tensor * a,
         struct ggml_tensor * bias,
         struct ggml_tensor * bias_idxs) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
     a->src[6] = bias;
     a->src[7] = bias_idxs;
-    GGML_ASSERT(ggml_flash_attn_ext_add_bias_validate(a));
+    GGML_ASSERT(ggml_flash_attn_ext_set_bias_validate(a));
 }
 
 // deprecated
@@ -5711,7 +5717,7 @@ void ggml_flash_attn_ext_add_indexed_bias(
         struct ggml_tensor * bias_idxs) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
     GGML_ASSERT((bias == NULL) == (bias_idxs == NULL));
-    ggml_flash_attn_ext_add_bias(a, bias, bias_idxs);
+    ggml_flash_attn_ext_set_bias(a, bias, bias_idxs);
 }
 
 // ggml_flash_attn_back

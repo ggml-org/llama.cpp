@@ -10303,7 +10303,7 @@ struct test_flash_attn_ext : public test_case {
         }
 
         ggml_tensor * out = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f/sqrtf(hsk), max_bias, logit_softcap);
-        ggml_flash_attn_ext_add_sinks(out, s);
+        ggml_flash_attn_ext_set_sinks(out, s);
         ggml_flash_attn_ext_set_n_kv_max(out, n_kv_max);
         ggml_prec_set_acc(out, prec);
         ggml_set_name(out, "out");
@@ -10379,7 +10379,7 @@ struct test_flash_attn_ext_mask_bcast : public test_flash_attn_ext {
         ggml_set_name(m, "m");
 
         ggml_tensor * out = ggml_flash_attn_ext(ctx, ref->src[0], ref->src[1], ref->src[2], m, 1.0f/sqrtf(hsk), max_bias, logit_softcap);
-        ggml_flash_attn_ext_add_sinks(out, ref->src[4]);
+        ggml_flash_attn_ext_set_sinks(out, ref->src[4]);
         ggml_prec_set_acc(out, prec);
         ggml_set_name(out, "out");
 
@@ -10545,9 +10545,9 @@ struct test_flash_attn_ext_bias_indexed : public test_case {
         if (sinks) {
             ggml_tensor * s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, nh*gqa);
             ggml_set_name(s, "s");
-            ggml_flash_attn_ext_add_sinks(out, s);
+            ggml_flash_attn_ext_set_sinks(out, s);
         }
-        ggml_flash_attn_ext_add_bias(out, bias, bias_idxs);
+        ggml_flash_attn_ext_set_bias(out, bias, bias_idxs);
         ggml_flash_attn_ext_set_n_kv_max(out, n_kv_max);
         ggml_prec_set_acc(out, GGML_PREC_F32);
         ggml_set_name(out, "out");

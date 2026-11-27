@@ -2309,15 +2309,20 @@ extern "C" {
             struct ggml_tensor * a,
             int32_t              n_kv_max);
 
-    GGML_API void ggml_flash_attn_ext_add_sinks(
+    GGML_API void ggml_flash_attn_ext_set_sinks(
             struct ggml_tensor * a,
             struct ggml_tensor * sinks);
+
+    GGML_DEPRECATED(GGML_API void ggml_flash_attn_ext_add_sinks(
+            struct ggml_tensor * a,
+            struct ggml_tensor * sinks),
+            "use ggml_flash_attn_ext_set_sinks instead");
 
     // Add bias[bias_idxs[key, query], head, query] to the mask, in F32.
     // The bias is added after the KQ scaling.
     // Queries from all streams are flattened in stream order. Indices must be in [0, bias->ne[0]).
     // If bias_idxs is NULL, bias is a dense K*Q bias with shape [n_kv, n_batch, n_head_kv, n_stream].
-    GGML_API void ggml_flash_attn_ext_add_bias(
+    GGML_API void ggml_flash_attn_ext_set_bias(
             struct ggml_tensor * a,
             struct ggml_tensor * bias,
             struct ggml_tensor * bias_idxs);
@@ -2329,7 +2334,7 @@ extern "C" {
             struct ggml_tensor * a,
             struct ggml_tensor * bias,
             struct ggml_tensor * bias_idxs),
-            "use ggml_flash_attn_ext_add_bias instead");
+            "use ggml_flash_attn_ext_set_bias instead");
 
     // TODO: needs to be adapted to ggml_flash_attn_ext
     GGML_API struct ggml_tensor * ggml_flash_attn_back(
