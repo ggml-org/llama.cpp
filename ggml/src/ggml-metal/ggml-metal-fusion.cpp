@@ -105,6 +105,14 @@ static bool ggml_metal_fusion_overlap(const ggml_tensor * a, const ggml_tensor *
         : bid_a.offs - bid_b.offs < ggml_nbytes(b);
 }
 
+// true if t is or views a tensor in a buffer marked as weights, such as a bias; the model loader marks its buffers before
+// any graph is optimized, and tensors in unmarked or not yet allocated buffers count as non-weights in both phases
+static bool ggml_metal_tensor_is_weight(const struct ggml_tensor * t) {
+    const ggml_tensor * base = t->view_src != NULL ? t->view_src : t;
+
+    return base->buffer != NULL && ggml_backend_buffer_get_usage(base->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+}
+
 // ---- pattern checks ------------------------------------------------------
 
 // NORM/RMS_NORM + MUL + ADD: the weight/bias of each fused step must match the norm input
@@ -208,6 +216,10 @@ static bool ggml_metal_fusion_check_add_chain(
         }
 
         if (!ggml_are_same_layout(nodes[j]->src[1], nodes[j - 1]->src[1])) {
+            return false;
+        }
+
+        if (ggml_metal_tensor_is_weight(nodes[j]->src[1]) != ggml_metal_tensor_is_weight(nodes[0]->src[1])) {
             return false;
         }
 
@@ -745,14 +757,6 @@ static bool ggml_metal_fusion_check_moe_reduce(
     }
 
     return true;
-}
-
-// true if t is or views a tensor in a buffer marked as weights, such as a bias; the model loader marks its buffers before
-// any graph is optimized, and tensors in unmarked or not yet allocated buffers count as non-weights in both phases
-static bool ggml_metal_tensor_is_weight(const struct ggml_tensor * t) {
-    const ggml_tensor * base = t->view_src != NULL ? t->view_src : t;
-
-    return base->buffer != NULL && ggml_backend_buffer_get_usage(base->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 }
 
 static const struct ggml_tensor * ggml_metal_mul_mat_add_operand(const struct ggml_tensor * mm, const struct ggml_tensor * add) {
