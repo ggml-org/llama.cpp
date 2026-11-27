@@ -22,6 +22,7 @@ bailingmoe3         ,1   ,any     ,GATED_DELTA_NET+CPY         ,      1
 bailingmoe3         ,1   ,any     ,MUL+ADD                     ,      2
 bailingmoe3         ,1   ,any     ,RMS_NORM+MUL                ,      8
 bailingmoe3         ,1   ,any     ,RMS_NORM+SCALE              ,      2
+bailingmoe3         ,1   ,any     ,SSM_CONV+UNARY              ,      3
 bailingmoe3         ,1   ,any     ,UNARY+ADD+ARGSORT+GET_ROWS  ,      1
 beam                ,1   ,any     ,MUL+ADD                     ,      6
 beam                ,1   ,any     ,RMS_NORM+MUL                ,     25
