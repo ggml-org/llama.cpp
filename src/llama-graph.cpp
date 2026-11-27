@@ -3172,22 +3172,6 @@ ggml_tensor * llm_graph_context::build_attn_mha(
     k = ggml_permute(ctx0, k, 0, 2, 1, 3);
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
-    auto dense_bias_mask = [&]() {
-        ggml_tensor * bias_table = ggml_cont(ctx0, ggml_permute(ctx0, bias, 1, 0, 2, 3));
-        ggml_tensor * bias_dense = ggml_get_rows(ctx0, bias_table, bias_idxs);
-        bias_dense = ggml_reshape_4d(ctx0, bias_dense, q->ne[2], bias_idxs->ne[0], q->ne[1], n_stream);
-        bias_dense = ggml_cont(ctx0, ggml_permute(ctx0, bias_dense, 2, 0, 1, 3));
-        cb(bias_dense, "kq_bias", il);
-
-        ggml_tensor * mask = kq_mask->type == GGML_TYPE_F32 ? kq_mask : ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
-        mask = ggml_add(ctx0, bias_dense, mask);
-        if (cparams.flash_attn) {
-            mask = ggml_cast(ctx0, mask, GGML_TYPE_F16);
-        }
-        cb(mask, "kq_mask_rel_pos", il);
-        return mask;
-    };
-
     ggml_tensor * cur;
 
     const bool use_flash_attn = cparams.flash_attn && (!bias || bias_idxs);
@@ -3252,8 +3236,20 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cur = ggml_mul(ctx0, cur, v_scale);
         }
     } else {
+        // convert the indexed bias to dense
         if (bias && bias_idxs) {
-            kq_mask = dense_bias_mask();
+            ggml_tensor * bias_table = ggml_cont(ctx0, ggml_permute(ctx0, bias, 1, 0, 2, 3));
+            ggml_tensor * bias_dense = ggml_get_rows(ctx0, bias_table, bias_idxs);
+            bias_dense = ggml_reshape_4d(ctx0, bias_dense, q->ne[2], bias_idxs->ne[0], q->ne[1], n_stream);
+            bias_dense = ggml_cont(ctx0, ggml_permute(ctx0, bias_dense, 2, 0, 1, 3));
+            cb(bias_dense, "kq_bias", il);
+
+            kq_mask = kq_mask->type == GGML_TYPE_F32 ? kq_mask : ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
+            kq_mask = ggml_add(ctx0, bias_dense, kq_mask);
+            if (cparams.flash_attn) {
+                kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
+            }
+            cb(kq_mask, "kq_mask_rel_pos", il);
         }
         // A cache without an exported scale uses a unit scale.
         if ((ggml_needs_scale(k->type) && !k_scale) || (ggml_needs_scale(v->type) && !v_scale)) {
