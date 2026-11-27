@@ -14167,6 +14167,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // add_id with more than 65535 tokens, exercises the gridDim.y limit
+    test_cases.emplace_back(new test_add_id(GGML_TYPE_F32, GGML_TYPE_F32, 32, 4, 2, 70000));
+
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_F32}) {
         test_cases.emplace_back(new test_sqr       (type));
         test_cases.emplace_back(new test_sqrt      (type));
