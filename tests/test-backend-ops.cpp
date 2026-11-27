@@ -10483,7 +10483,7 @@ struct test_flash_attn_ext_kv_rows : public test_case {
     }
 };
 
-// GGML_OP_FLASH_ATTN_EXT with an indexed bias: mask[key, query] += table[indices[key, query], head, query]
+// GGML_OP_FLASH_ATTN_EXT with an indexed bias: mask[key, query] += bias[bias_idxs[key, query], head, query]
 struct test_flash_attn_ext_bias_indexed : public test_case {
     const int64_t hs;
     const int64_t nh;       // K/V heads
@@ -10535,11 +10535,11 @@ struct test_flash_attn_ext_bias_indexed : public test_case {
             ggml_set_name(r, "r");
         }
 
-        ggml_tensor * table = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_bins, nh*gqa, nb*n_stream);
-        ggml_set_name(table, "table");
+        ggml_tensor * bias = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_bins, nh*gqa, nb*n_stream);
+        ggml_set_name(bias, "bias");
 
-        ggml_tensor * indices = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kv, nb*n_stream);
-        ggml_set_name(indices, "indices");
+        ggml_tensor * bias_idxs = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kv, nb*n_stream);
+        ggml_set_name(bias_idxs, "bias_idxs");
 
         ggml_tensor * out = ggml_flash_attn_ext_rows(ctx, q, k, v, m, r, 1.0f/sqrtf(hs), 0.0f, logit_softcap);
         if (sinks) {
@@ -10547,7 +10547,7 @@ struct test_flash_attn_ext_bias_indexed : public test_case {
             ggml_set_name(s, "s");
             ggml_flash_attn_ext_add_sinks(out, s);
         }
-        ggml_flash_attn_ext_add_bias_indexed(out, table, indices);
+        ggml_flash_attn_ext_add_bias(out, bias, bias_idxs);
         ggml_flash_attn_ext_set_n_kv_max(out, n_kv_max);
         ggml_prec_set_acc(out, GGML_PREC_F32);
         ggml_set_name(out, "out");
@@ -10606,7 +10606,7 @@ struct test_flash_attn_ext_bias_indexed : public test_case {
                 std::vector<ggml_fp16_t> h(f.size());
                 ggml_fp32_to_fp16_row(f.data(), h.data(), f.size());
                 ggml_backend_tensor_set(t, h.data(), 0, h.size()*sizeof(ggml_fp16_t));
-            } else if (strcmp(t->name, "indices") == 0) {
+            } else if (strcmp(t->name, "bias_idxs") == 0) {
                 std::vector<int32_t> idx(ggml_nelements(t));
                 std::uniform_int_distribution<int32_t> dis(0, n_bins - 1);
                 for (auto & i : idx) {
@@ -10621,7 +10621,7 @@ struct test_flash_attn_ext_bias_indexed : public test_case {
                     }
                 }
                 ggml_backend_tensor_set(t, idx.data(), 0, idx.size()*sizeof(int32_t));
-            } else if (strcmp(t->name, "table") == 0) {
+            } else if (strcmp(t->name, "bias") == 0) {
                 init_tensor_uniform(t, -4.0f, 4.0f);
             } else if (strcmp(t->name, "s") == 0) {
                 init_tensor_uniform(t, -10.0f, 10.0f);

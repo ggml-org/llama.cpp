@@ -9070,9 +9070,9 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     const uint32_t nem3 = mask ? mask->ne[3] : 0;
 
     const bool bias_indexed = ggml_flash_attn_ext_bias_is_indexed(dst);
-    const ggml_tensor * bias_table = bias_indexed ? dst->src[6] : nullptr;
-    const ggml_tensor * bias_idx   = bias_indexed ? dst->src[7] : nullptr;
-    const uint32_t bias_bins = bias_indexed ? (uint32_t)bias_table->ne[0] : 0;
+    const ggml_tensor * bias      = bias_indexed ? dst->src[6] : nullptr;
+    const ggml_tensor * bias_idxs = bias_indexed ? dst->src[7] : nullptr;
+    const uint32_t bias_bins = bias_indexed ? (uint32_t)bias->ne[0] : 0;
 
     const uint32_t HSK = nek0;
     const uint32_t HSV = nev0;
@@ -9486,8 +9486,8 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     vk_subbuffer dst_buf = ggml_vk_tensor_subbuffer(ctx, dst);
     vk_subbuffer mask_buf = mask ? ggml_vk_tensor_subbuffer(ctx, mask) : q_buf;
     vk_subbuffer sinks_buf = sinks ? ggml_vk_tensor_subbuffer(ctx, sinks) : q_buf;
-    vk_subbuffer bias_table_buf = bias_table ? ggml_vk_tensor_subbuffer(ctx, bias_table) : q_buf;
-    vk_subbuffer bias_idx_buf = bias_idx ? ggml_vk_tensor_subbuffer(ctx, bias_idx) : q_buf;
+    vk_subbuffer bias_buf = bias ? ggml_vk_tensor_subbuffer(ctx, bias) : q_buf;
+    vk_subbuffer bias_idxs_buf = bias_idxs ? ggml_vk_tensor_subbuffer(ctx, bias_idxs) : q_buf;
     vk_subbuffer mask_opt_buf = use_mask_opt ? ggml_vk_subbuffer(ctx, ctx->prealloc_y, 0) : q_buf;
     vk_subbuffer sparse_buf = use_sparse ? ggml_vk_subbuffer(ctx, ctx->prealloc_y, 0) : q_buf;
     if (use_mask_opt || use_sparse) {
@@ -9642,7 +9642,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
             ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline_dual_phases.first, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline_dual_phases.first,
-                { q_temp_buf, k_buf, mask_buf, p_temp_buf, max_temp_buf, bias_table_buf, bias_idx_buf },
+                { q_temp_buf, k_buf, mask_buf, p_temp_buf, max_temp_buf, bias_buf, bias_idxs_buf },
                 pc_xe_fa, { (uint32_t)ph1_wg, (uint32_t)nek1, (uint32_t)neq3 });
 
             ggml_vk_sync_buffers(ctx, subctx);
@@ -9655,7 +9655,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
         } else {
             ggml_pipeline_request_descriptor_sets(ctx, xe_fa_pipeline, 1);
             ggml_vk_dispatch_pipeline(ctx, subctx, xe_fa_pipeline,
-                { q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf, bias_table_buf, bias_idx_buf },
+                { q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf, bias_buf, bias_idxs_buf },
                 pc_xe_fa, { (uint32_t)neq2, (uint32_t)neq1, (uint32_t)neq3 });
         }
     } else if (split_k > 1) {
@@ -9677,7 +9677,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
 
         vk_subbuffer split_k_buf = ggml_vk_subbuffer(ctx, ctx->prealloc_split_k, 0);
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-                                    {q_buf, k_buf, v_buf, mask_buf, sinks_buf, split_k_buf, mask_opt_buf, sparse_buf, bias_table_buf, bias_idx_buf},
+                                    {q_buf, k_buf, v_buf, mask_buf, sinks_buf, split_k_buf, mask_opt_buf, sparse_buf, bias_buf, bias_idxs_buf},
                                     pc, { dispatch_x, workgroups_y, workgroups_z });
 
         ggml_vk_sync_buffers(ctx, subctx);
@@ -9692,7 +9692,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
             workgroups_x *= pipeline->wg_denoms[0];
         }
         ggml_vk_dispatch_pipeline(ctx, subctx, pipeline,
-                                    {q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf, mask_opt_buf, sparse_buf, bias_table_buf, bias_idx_buf},
+                                    {q_buf, k_buf, v_buf, mask_buf, sinks_buf, dst_buf, mask_opt_buf, sparse_buf, bias_buf, bias_idxs_buf},
                                     pc, { workgroups_x, workgroups_y, workgroups_z });
     }
 

@@ -21,19 +21,19 @@
 #define FATTN_KQ_MAX_OFFSET (3.0f*0.6931f)
 
 struct fattn_bias_indexed {
-    const float   * table;
-    const int32_t * indices;
+    const float   * bias;
+    const int32_t * bias_idxs;
     int64_t n_bins;
     int64_t n_keys;
     int64_t query_stride;
 
     __device__ fattn_bias_indexed for_head(int64_t first_query, int head) const {
-        return {table + first_query*query_stride + head*n_bins, indices + first_query*n_keys, n_bins, n_keys, query_stride};
+        return {bias + first_query*query_stride + head*n_bins, bias_idxs + first_query*n_keys, n_bins, n_keys, query_stride};
     }
 
     __device__ float add(float mask, int query, int key) const {
-        const int bin = indices[query*n_keys + key];
-        return bin >= 0 && bin < n_bins ? mask + table[query*query_stride + bin] : mask;
+        const int bin = bias_idxs[query*n_keys + key];
+        return bin >= 0 && bin < n_bins ? mask + bias[query*query_stride + bin] : mask;
     }
 };
 
@@ -1325,8 +1325,8 @@ void launch_fattn(
     const ggml_tensor * kv_rows = dst->src[5];
 
     const bool bias_indexed = ggml_flash_attn_ext_bias_is_indexed(dst);
-    const ggml_tensor * bias_table   = bias_indexed ? dst->src[6] : nullptr;
-    const ggml_tensor * bias_indices = bias_indexed ? dst->src[7] : nullptr;
+    const ggml_tensor * bias      = bias_indexed ? dst->src[6] : nullptr;
+    const ggml_tensor * bias_idxs = bias_indexed ? dst->src[7] : nullptr;
 
     // with kv_rows the kernel iterates over the mask columns and reads K/V rows through kv_rows
     const int64_t n_kv_cols = kv_rows ? kv_rows->ne[0] : K->ne[1];
@@ -1621,11 +1621,11 @@ void launch_fattn(
         mask ? int32_t(mask->nb[1] / sizeof(half)) : 0,
         mask ? int64_t(mask->nb[2] / sizeof(half)) : 0,
         mask ? int64_t(mask->nb[3] / sizeof(half)) : 0,
-        fattn_bias_indexed{bias_indexed ? (const float   *) bias_table->data : nullptr,
-                           bias_indexed ? (const int32_t *) bias_indices->data : nullptr,
-                           bias_indexed ? bias_table->ne[0] : 0,
-                           bias_indexed ? bias_indices->ne[0] : 0,
-                           bias_indexed ? bias_table->ne[0]*bias_table->ne[1] : 0}
+        fattn_bias_indexed{bias_indexed ? (const float   *) bias->data : nullptr,
+                           bias_indexed ? (const int32_t *) bias_idxs->data : nullptr,
+                           bias_indexed ? bias->ne[0] : 0,
+                           bias_indexed ? bias_idxs->ne[0] : 0,
+                           bias_indexed ? bias->ne[0]*bias->ne[1] : 0}
     );
     CUDA_CHECK(cudaGetLastError());
 
