@@ -4,6 +4,8 @@
    which this Storybook shows as well */
 @source '../tests/stories';
 @source '../../../lib/ui/tests/stories';
+/* Llama Hugging Face's components (ui/lib/huggingface), compiled as part of this app */
+@source '../../../lib/huggingface/src';
 @plugin '@tailwindcss/forms';
 @plugin '@tailwindcss/typography';
 @import 'tw-animate-css';

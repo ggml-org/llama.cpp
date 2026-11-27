@@ -15,11 +15,9 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <limits>
 #include <map>
 #include <memory>
-#include <set>
 #include <openvino/core/node.hpp>
 #include <openvino/core/preprocess/pre_post_process.hpp>
 #include <openvino/core/shape.hpp>
@@ -53,6 +51,7 @@
 #include <openvino/op/unsqueeze.hpp>
 #include <openvino/pass/constant_folding.hpp>
 #include <openvino/pass/make_stateful.hpp>
+#include <set>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -325,7 +324,7 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
         auto it = m_translator_map.find(operation_type);
         FRONT_END_OP_CONVERSION_CHECK(it != m_translator_map.end(), "Translation for operation type ", operation_type,
                                       " is not implemented.");
-        NodeContext node_context(decoder, tensor_map, node_idx, this);
+        NodeContext node_context(decoder, tensor_map, node_idx);
         ov::OutputVector converted_outputs;
 #ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
         converted_outputs = recurrent_fusion.translate(node_idx, node_context);
@@ -451,9 +450,6 @@ std::shared_ptr<Model> TranslateSession::translate_graph(const frontend::InputMo
             used_params.push_back(param);
         }
     }
-    // if (auto diff = params.size() - used_params.size()) {
-    //     GGML_LOG_INFO("%zu parameters are not used in the model.", diff);
-    // }
     resulting_model = std::make_shared<Model>(results, used_params);
 
     apply_transformations(resulting_model);

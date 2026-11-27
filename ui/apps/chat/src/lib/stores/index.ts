@@ -44,6 +44,9 @@ export { mcpStore } from './mcp/index.svelte';
 // GROUPS (named sidebar sections for chats)
 export { groupsStore } from './groups.svelte';
 
+// HUGGING FACE ACCOUNT (sharing conversations as traces)
+export { huggingFace } from './huggingface.svelte';
+
 // MODELS
 export { modelsStore } from './models/index.svelte';
 

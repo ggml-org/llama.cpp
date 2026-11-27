@@ -5,6 +5,9 @@ import type { ReasoningEffortLevel } from '#lib/types/index.ts';
  * Reasoning effort UI labels.
  * Keys match the ReasoningEffort enum values for type-safe lookups.
  */
+/** The reasoning effort row's label, in the desktop and phone model pickers. */
+export const REASONING_EFFORT_ROW_LABEL = 'Reasoning';
+
 export const REASONING_EFFORT_LABELS: Record<string, string> = {
 	[ReasoningEffort.DEFAULT]: 'Default',
 	[ReasoningEffort.HIGH]: 'High',

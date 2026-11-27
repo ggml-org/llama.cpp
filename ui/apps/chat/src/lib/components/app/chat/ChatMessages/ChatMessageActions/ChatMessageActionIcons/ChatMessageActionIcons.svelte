@@ -9,6 +9,7 @@
 		ChatMessageActionIconsBranchingControls,
 		DialogConfirmation
 	} from '#lib/components/app/index.ts';
+	import { SHARE_ACTION } from '#lib/constants/index.ts';
 	import { getChatMessageActionsContext, getChatMessageEditContext } from '#lib/contexts/index.ts';
 	import { conversationsStore } from '#lib/stores/index.ts';
 	import { untrack } from 'svelte';
@@ -94,6 +95,14 @@
 					icon={GitBranch}
 					onclick={() => messageActions.setShowForkDialog(true)}
 					tooltip="Fork conversation"
+				/>
+			{/if}
+
+			{#if messageActions.share}
+				<ActionIcon
+					icon={SHARE_ACTION.icon}
+					onclick={messageActions.share}
+					tooltip={SHARE_ACTION.label}
 				/>
 			{/if}
 

@@ -9722,6 +9722,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 void ggml_compute_forward_flash_attn_ext(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
+    GGML_ASSERT(ggml_validate_flash_attn_ext_indexed_bias(dst));
     switch (ggml_prec_get_acc(dst)) {
         case GGML_PREC_UNDEFINED:
         case GGML_PREC_F32:

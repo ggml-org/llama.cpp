@@ -20,6 +20,7 @@ import { AgenticSectionType, BuiltInTool } from '#lib/enums/index.ts';
 import type { AgenticSection, WriteFileMeta } from '#lib/types/index.ts';
 import {
 	abbreviateHome,
+	abbreviateWorkingDir,
 	formatCwdMessage,
 	lastPathSegment,
 	parseCwdMessage
@@ -85,6 +86,21 @@ describe('abbreviateHome', () => {
 
 	it('returns the path unchanged when home is unknown', () => {
 		expect(abbreviateHome('/Users/al/Documents', null)).toBe('/Users/al/Documents');
+	});
+});
+
+describe('abbreviateWorkingDir', () => {
+	it('shows a directory under home from ~/', () => {
+		expect(abbreviateWorkingDir('/Users/al/git/llama.cpp', '/Users/al')).toBe('~/git/llama.cpp');
+	});
+
+	it('keeps a directory already written from ~', () => {
+		expect(abbreviateWorkingDir('~/git/llama.cpp', '/Users/al')).toBe('~/git/llama.cpp');
+		expect(abbreviateWorkingDir('~/git/llama.cpp', null)).toBe('~/git/llama.cpp');
+	});
+
+	it('shows the last segment of a directory outside home', () => {
+		expect(abbreviateWorkingDir('/opt/project', '/Users/al')).toBe('project');
 	});
 });
 

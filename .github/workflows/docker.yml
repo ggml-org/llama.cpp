@@ -269,6 +269,7 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.build_date.outputs.date }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            VITE_PUBLIC_HUGGING_FACE=true
             APP_REVISION=${{ steps.checkout.outputs.commit }}
             IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
             IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
@@ -306,6 +307,7 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.build_date.outputs.date }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            VITE_PUBLIC_HUGGING_FACE=true
             APP_REVISION=${{ steps.checkout.outputs.commit }}
             IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
             IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
@@ -343,6 +345,7 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.build_date.outputs.date }}
             APP_VERSION=${{ needs.create_tag.outputs.source_tag }}
+            VITE_PUBLIC_HUGGING_FACE=true
             APP_REVISION=${{ steps.checkout.outputs.commit }}
             IMAGE_URL=${{ github.server_url }}/${{ github.repository }}
             IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}

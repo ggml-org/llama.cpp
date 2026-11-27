@@ -5549,27 +5549,38 @@ bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
     return a->op == GGML_OP_FLASH_ATTN_EXT && ggml_get_op_params_i32(a, 5) != 0;
 }
 
+bool ggml_validate_flash_attn_ext_indexed_bias(const struct ggml_tensor * a) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    const struct ggml_tensor * table   = a->src[6];
+    const struct ggml_tensor * indices = a->src[7];
+    if (!ggml_flash_attn_ext_has_indexed_bias(a)) {
+        return !table && !indices;
+    }
+
+    const struct ggml_tensor * q    = a->src[0];
+    const struct ggml_tensor * k    = a->src[1];
+    const struct ggml_tensor * mask = a->src[3];
+    const struct ggml_tensor * rows = a->src[5];
+    return q && k && a->src[2] && mask && table && indices &&
+        mask->type == GGML_TYPE_F16 && ggml_is_contiguous(mask) &&
+        mask->ne[0] == (rows ? rows->ne[0] : k->ne[1]) && mask->ne[1] == q->ne[1] &&
+        mask->ne[2] == 1 && mask->ne[3] == q->ne[3] &&
+        (!rows || (rows->type == GGML_TYPE_I32 && ggml_is_contiguous(rows) && ggml_is_matrix(rows) && rows->ne[1] == q->ne[3])) &&
+        table->type == GGML_TYPE_F32 && ggml_is_contiguous(table) && table->ne[0] > 0 && table->ne[1] == q->ne[2] &&
+        (q->ne[1] == 0 || q->ne[3] <= INT64_MAX/q->ne[1]) && table->ne[2] == q->ne[1]*q->ne[3] && table->ne[3] == 1 &&
+        indices->type == GGML_TYPE_I32 && ggml_is_contiguous(indices) && ggml_is_matrix(indices) &&
+        indices->ne[0] == mask->ne[0] && indices->ne[1] == table->ne[2];
+}
+
 void ggml_flash_attn_ext_add_indexed_bias(
         struct ggml_tensor * a,
         struct ggml_tensor * table,
         struct ggml_tensor * indices) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-    GGML_ASSERT((table == NULL) == (indices == NULL));
     a->src[6] = table;
     a->src[7] = indices;
     ggml_set_op_params_i32(a, 5, table != NULL);
-    if (!table) {
-        return;
-    }
-
-    const struct ggml_tensor * q = a->src[0];
-    const struct ggml_tensor * mask = a->src[3];
-    GGML_ASSERT(mask && mask->ne[0] == (a->src[5] ? a->src[5]->ne[0] : a->src[1]->ne[1]) && mask->ne[1] == q->ne[1]);
-    GGML_ASSERT(mask->ne[2] == 1 && mask->ne[3] == q->ne[3]);
-    GGML_ASSERT(table->type == GGML_TYPE_F32 && ggml_is_contiguous(table));
-    GGML_ASSERT(table->ne[1] == q->ne[2] && table->ne[0] > 0 && table->ne[2] == q->ne[1]*q->ne[3] && table->ne[3] == 1);
-    GGML_ASSERT(indices->type == GGML_TYPE_I32 && ggml_is_contiguous(indices) && ggml_is_matrix(indices));
-    GGML_ASSERT(indices->ne[0] == mask->ne[0] && indices->ne[1] == table->ne[2]);
+    GGML_ASSERT(ggml_validate_flash_attn_ext_indexed_bias(a));
 }
 
 // ggml_flash_attn_back

@@ -1461,6 +1461,22 @@ int32_t llama_memory_recurrent_context::get_rs_z() const {
     return is_full ? 0 : mem->rs_z;
 }
 
+bool llama_memory_recurrent_context::get_rs_in_place() const {
+    // rollback snapshots, zeroed states and extra states go through the gather
+    if (is_full || get_rs_snapshots() || mem->rs_z >= 0 || mem->n != get_ubatch().n_seqs) {
+        return false;
+    }
+
+    for (uint32_t i = 0; i < mem->n; ++i) {
+        // s_copy() would also reset the rollback idx, which set_input reads later
+        if (mem->cells[mem->head + i].src0 != (int32_t) (mem->head + i)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 uint32_t llama_memory_recurrent_context::get_size() const {
     return mem->size;
 }
@@ -1491,6 +1507,11 @@ ggml_tensor * llama_memory_recurrent_context::get_spgb_l(int32_t il) const {
 
 bool llama_memory_recurrent_context::get_rs_replay() const {
     return mem->rs_replay;
+}
+
+bool llama_memory_recurrent_context::get_rs_snapshots() const {
+    // rs_replay keeps one state plane, so its states can be in place like without rollback
+    return mem->n_rs_seq != 0 && !mem->rs_replay;
 }
 
 uint32_t llama_memory_recurrent_context::get_rs_rep(int i) const {

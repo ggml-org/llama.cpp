@@ -62,7 +62,7 @@ Stories: `Llama Chat/Chat/ChatForm/ChatFormActionAddDrawer`.
 	<SheetFlow flow={MODELS_FLOW} />
 </Figure>
 
-The sheet opens short, with up to six models: the chat's, the one that transcribes dictation, then the loaded, favorite and recent ones. A tap switches the chat to a model and loads it if need be. Holding a row opens its menu: Unload, or More details over the sheet. The search stays at the sheet's foot, under the reasoning effort, and shows its results in place at full height.
+The sheet opens short, with up to six models: the chat's, the one that transcribes dictation, then the loaded, favorite and recent ones. A tap switches the chat to a model and loads it if need be. Holding a row opens its menu: Unload, Use for dictation on a model that hears (Keep for dictation on the one picked automatically, Pick dictation model automatically on the one chosen), or More details over the sheet. The search stays at the sheet's foot, under the reasoning effort, and shows its results in place at full height.
 
 Stories: `Llama Chat/Models/ModelsSelectorSheet`.
 

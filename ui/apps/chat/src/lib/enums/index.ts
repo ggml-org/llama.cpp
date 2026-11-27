@@ -22,6 +22,7 @@ export {
 	StreamConnectionState,
 	ContentPartType,
 	ConversationSelectionMode,
+	ConversationShareScope,
 	ErrorDialogType,
 	MessageRole,
 	MessageType,

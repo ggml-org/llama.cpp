@@ -599,16 +599,16 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_NONE;
 #endif// FLASH_ATTN_AVAILABLE
 
-    if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
-        return BEST_FATTN_KERNEL_NONE;
-    }
-
     const ggml_tensor * KQV   = dst;
     const ggml_tensor * Q     = dst->src[0];
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * kv_rows = dst->src[5];
+
+    if (!ggml_validate_flash_attn_ext_indexed_bias(dst)) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
 
     // with kv_rows the kernel iterates over the mask columns
     const int64_t n_kv = kv_rows ? kv_rows->ne[0] : K->ne[1];
@@ -690,6 +690,20 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
+    // the tile and vec kernels implement the indexed bias, the mma kernel does not
+    if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
+        float logit_softcap;
+        memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+        if (Q->ne[0] != 128 && !(Q->ne[0] == 64 && logit_softcap == 0.0f)) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        if (logit_softcap == 0.0f && Q->ne[1] == 1 && n_kv % FATTN_KQ_STRIDE == 0 &&
+                ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type)) {
+            return BEST_FATTN_KERNEL_VEC;
+        }
+        return BEST_FATTN_KERNEL_TILE;
+    }
+
     if (mask && mask->ne[2] != 1) {
         // the kv_rows mask is compacted per sequence, it has no head dimension
         if (kv_rows) {
@@ -703,7 +717,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
     }
 
-    // only the MMA kernel reads K/V through kv_rows
+    // without a bias only the MMA kernel reads K/V through kv_rows
     if (kv_rows) {
         return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72 ?
             BEST_FATTN_KERNEL_MMA_F16 : BEST_FATTN_KERNEL_NONE;
