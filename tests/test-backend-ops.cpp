@@ -14166,6 +14166,17 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         exponent <<= 1;
     }
 #endif
+    for (int64_t ne0 : {1, 3, 4, 8}) {
+        for (bool mask : {false, true}) {
+            for (bool sinks : {false, true}) {
+                for (float max_bias : {0.0f, 8.0f}) {
+                    if (!mask && max_bias > 0.0f) continue;
+                    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {ne0, 37, 2, 3}, mask, sinks, GGML_TYPE_F16, {1, 1}, 0.1f, max_bias));
+                }
+            }
+        }
+    }
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4, 300000, 1, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     for (bool mask : {false, true}) {
         for (bool sinks : {false, true}) {
             for (float max_bias : {0.0f, 8.0f}) {
@@ -14557,6 +14568,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 1024, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 33, 256, 1, 1 }));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 1, 37, 2, 3 }));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 4, 37, 2, 3 }));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 8, 37, 2, 3 }));
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 4, 300000, 1, 1 }));
     test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 17, 65537, 1, 1 }));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {64, 64, 320, 1}));
     test_cases.emplace_back(new test_group_norm(GGML_TYPE_F32, {9, 9, 1280, 1}));

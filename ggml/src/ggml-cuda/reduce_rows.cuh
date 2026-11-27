@@ -33,6 +33,27 @@ static __device__ __forceinline__ float reduce_row_f32(const float * x, const in
     return sum;
 }
 
+#define CUDA_REDUCE_ROWS_SHORT_NCOLS 8
+
+template <bool norm>
+static __global__ void reduce_rows_f32_short(const float * x_ptr, float * dst_ptr, const int ncols, const int64_t nrows) {
+    const int64_t row = (int64_t) blockIdx.x*blockDim.x + threadIdx.x;
+
+    ggml_cuda_pdl_sync();
+    if (row >= nrows) {
+        return;
+    }
+
+    const float * GGML_CUDA_RESTRICT x = x_ptr + row*ncols;
+
+    float sum = 0.0f;
+    for (int i = 0; i < ncols; ++i) {
+        sum += x[i];
+    }
+
+    dst_ptr[row] = norm ? sum / ncols : sum;
+}
+
 // Row reduction kernel template - compute sum (norm=false) or mean (norm=true)
 template <bool norm>
 static __global__ void reduce_rows_f32(const float * x_ptr, float * dst_ptr, const int ncols) {
