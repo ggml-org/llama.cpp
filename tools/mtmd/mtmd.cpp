@@ -1005,7 +1005,11 @@ struct mtmd_context {
         if (ctx_v && ctx_a) {
             int n_embd_v = ctx_v->model.n_mmproj_embd();
             int n_embd_a = ctx_a->model.n_mmproj_embd();
-            if (n_embd_a <= 0 || n_embd_v != (int64_t) n_embd_a * (1 + ctx_v->model.n_deepstack_layers)) {
+            if (n_embd_a <= 0) {
+                throw std::runtime_error(mtmd_format(
+                    "invalid audio mmproj, its width is %d\n", n_embd_a));
+            }
+            if (n_embd_v != (int64_t) n_embd_a * (1 + ctx_v->model.n_deepstack_layers)) {
                 throw std::runtime_error(mtmd_format(
                     "mismatch between vision and audio mmproj (n_embd_v = %d, n_embd_a = %d),"
                     " the vision width must be the audio width times (1 + deepstack layers of the vision model)\n",
@@ -2745,6 +2749,8 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         }
         if (track) {
             if (track->embd.empty()) {
+                // no padding here: this path requires n_embd_out() to equal the audio width
+                // (soundtrack tracks are LFM3-only today, models without deepstack vision)
                 track->embd.resize((size_t) track->n_tokens * ctx->n_embd_out());
                 if (!mtmd_audio_batch_encode(ctx, track->batch_f32, track->source.get(), 0, track->embd)) {
                     track->embd.clear();
