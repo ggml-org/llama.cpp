@@ -212,7 +212,8 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
             if (V->ne[0] != 512) {
                 return BEST_FATTN_KERNEL_NONE;
             }
-            if (!gqa_opt_applies) {
+            // the tile kernel only has GQA-packed variants of 4, 8 and 16 heads for this shape
+            if (!gqa_opt_applies || gqa_ratio % 4 != 0) {
                 return BEST_FATTN_KERNEL_NONE;
             }
             break;
@@ -226,22 +227,24 @@ static best_fattn_kernel ggml_sycl_get_best_fattn_kernel(const int device, const
     }
 #endif // GGML_SYCL_FA_ALL_QUANTS
 
-    switch (K->type) {
-        case GGML_TYPE_F32:
-        case GGML_TYPE_F16:
-        case GGML_TYPE_BF16:
-            break;
-        case GGML_TYPE_Q4_1:
-        case GGML_TYPE_Q5_0:
-        case GGML_TYPE_Q5_1:
+    for (const ggml_tensor * t : { K, V }) {
+        switch (t->type) {
+            case GGML_TYPE_F32:
+            case GGML_TYPE_F16:
+            case GGML_TYPE_BF16:
+                break;
+            case GGML_TYPE_Q4_1:
+            case GGML_TYPE_Q5_0:
+            case GGML_TYPE_Q5_1:
 #ifndef GGML_SYCL_FA_ALL_QUANTS
-            return BEST_FATTN_KERNEL_NONE;
+                return BEST_FATTN_KERNEL_NONE;
 #endif // GGML_SYCL_FA_ALL_QUANTS
-        case GGML_TYPE_Q4_0:
-        case GGML_TYPE_Q8_0:
-            break;
-        default:
-            return BEST_FATTN_KERNEL_NONE;
+            case GGML_TYPE_Q4_0:
+            case GGML_TYPE_Q8_0:
+                break;
+            default:
+                return BEST_FATTN_KERNEL_NONE;
+        }
     }
 
     if (mask && mask->ne[2] != 1) {
