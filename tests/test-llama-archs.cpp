@@ -1248,6 +1248,7 @@ static bool moe_implemented(const llm_arch arch) {
     }
     switch (arch) {
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_GEMMA4:
         case LLM_ARCH_REFACT:
         case LLM_ARCH_MINICPM:
         case LLM_ARCH_GRANITE:
@@ -1554,7 +1555,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
-                        if (nmse_val > 1e-4) {
+                        // hrm_text repeats its stacks, which accumulates rounding error
+                        const double nmse_max = arch == LLM_ARCH_HRM_TEXT ? 5e-4 : 1e-4;
+                        if (nmse_val > nmse_max) {
                             test_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
                         }
@@ -1866,8 +1869,11 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
             }
             const char * config_name = moe ? "MoE" : "Dense";
 
-            // the attention scale depends on the absolute position, so the hidden states of the prefix do too
-            const double thold = arch == LLM_ARCH_MISTRAL_LARGE4 ? 1e-4 : 1e-6;
+            // the hidden states of the prefix depend on the absolute position:
+            // mistral-large4 scales attention by position, hunyuan/maincoder apply q/k norm weights after RoPE
+            const bool pos_dependent = arch == LLM_ARCH_MISTRAL_LARGE4 || arch == LLM_ARCH_HUNYUAN_MOE ||
+                                       arch == LLM_ARCH_HUNYUAN_DENSE  || arch == LLM_ARCH_MAINCODER;
+            const double thold = pos_dependent ? 1e-4 : 1e-6;
 
             // at least 4 layers, so that "every 4th layer" patterns (NoPE, full attention) are covered
             // exaone4 is SWA only with 64 layers, smallthinker always ropes with 4

@@ -86,7 +86,7 @@ llama_model_talkie::graph::graph(const llm_graph_params & params) : llm_graph_co
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    model.layers[il].wo, nullptr, model.layers[il].wo_s,
+                    model.layers[il].wo, nullptr,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
         }
@@ -104,9 +104,9 @@ llama_model_talkie::graph::graph(const llm_graph_params & params) : llm_graph_co
         cb(cur, "ffn_norm", il);
 
         cur = build_ffn(cur,
-                model.layers[il].ffn_up,   nullptr, nullptr,
-                model.layers[il].ffn_gate, nullptr, nullptr,
-                model.layers[il].ffn_down, nullptr, model.layers[il].ffn_down_s,
+                model.layers[il].ffn_up,   nullptr,
+                model.layers[il].ffn_gate, nullptr,
+                model.layers[il].ffn_down, nullptr,
                 nullptr,
                 LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);

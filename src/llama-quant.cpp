@@ -235,7 +235,7 @@ static void llama_tensor_dequantize_impl(ggml_type type,
     const int nthread
 ) {
     const ggml_type_traits * qtype = ggml_get_type_traits(type);
-    if (ggml_is_quantized(type) || type == GGML_TYPE_F8_E4M3) {
+    if (ggml_is_quantized(type) || ggml_needs_scale(type)) {
         if (qtype->to_float == nullptr) {
             throw std::runtime_error(format("type %s unsupported for integer quantization: no dequantization available", ggml_type_name(type)));
         }
@@ -246,7 +246,7 @@ static void llama_tensor_dequantize_impl(ggml_type type,
     if (nthread < 2) {
         if (type == GGML_TYPE_F16) { ggml_fp16_to_fp32_row((const ggml_fp16_t *)data, f32_output, nelements); }
         else if (type == GGML_TYPE_BF16) { ggml_bf16_to_fp32_row((const ggml_bf16_t *)data, f32_output, nelements); }
-        else if (ggml_is_quantized(type) || type == GGML_TYPE_F8_E4M3) { qtype->to_float(data, f32_output, nelements); }
+        else if (ggml_is_quantized(type) || ggml_needs_scale(type)) { qtype->to_float(data, f32_output, nelements); }
         else { GGML_ABORT("fatal error"); }
 
         return;
@@ -3414,6 +3414,11 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
             metadata[i].target_type = tensor_type_fallback(qs, tensor, GGML_TYPE_Q4_0);
             LLAMA_LOG_INFO("%s: unused tensor (%s shares an earlier layer's kv cache) - converting to %s\n",
                 __func__, metadata[i].name.c_str(), ggml_type_name(metadata[i].target_type));
+        }
+
+        if (metadata[i].target_type != tensor->type && ggml_needs_scale(metadata[i].target_type)) {
+            throw std::runtime_error(format("cannot quantize %s to %s: this type needs a weight scale that llama-quantize does not compute",
+                metadata[i].name.c_str(), ggml_type_name(metadata[i].target_type)));
         }
 
         metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);

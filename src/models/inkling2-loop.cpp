@@ -53,7 +53,7 @@ void llama_model_inkling2_loop::load_arch_tensors(llama_model_loader & ml) {
     for (uint32_t il = core_start; il < core_end; ++il) {
         auto & l = loop_layers[il - core_start];
         // the q, k, v and ffn message queries
-        l.msg_query = create_tensor(tn(LLM_TENSOR_LOOP_MSG_QUERY, "weight", il), {n_embd, LOOP_CTRL_COUNT}, 0);
+        l.msg_query = create_tensor(tn(LLM_TENSOR_LOOP_MSG_QUERY, "weight", il), {n_embd, LOOP_CTRL_COUNT}, TENSOR_NO_SCALE);
         for (int c = 0; c < LOOP_CTRL_COUNT; ++c) {
             l.ctrl_down[c]   = create_tensor(tn(down[c],   "weight", il), {2*n_embd, rank}, 0);
             l.ctrl_gain[c]   = create_tensor(tn(gain[c],   "weight", il), {rank, n_embd}, 0);
