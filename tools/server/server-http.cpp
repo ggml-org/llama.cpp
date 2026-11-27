@@ -361,6 +361,10 @@ bool server_http_context::init_listener(const common_params & params) {
             // retry with anthropic header
             req_api_key = req.get_header_value("X-Api-Key");
         }
+        if (req_api_key.empty() && httplib::detail::is_websocket_upgrade(req)) {
+            // a browser cannot set headers on a WebSocket, so its key comes in the query
+            req_api_key = req.get_param_value("api_key");
+        }
 
         // remove the "Bearer " prefix if needed
         static std::string prefix = "Bearer ";

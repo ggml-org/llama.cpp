@@ -131,6 +131,8 @@ class ServerProcess:
     log_path: str | None = None
     ui_mcp_proxy: bool = False
     ui_mcp_proxy_allow_private_urls: bool = False
+    ui_linux_net: bool = False
+    ui_linux_net_allow_private_urls: bool = False
     media_allow_private_urls: bool = False
     allow_unauthenticated_tools: bool = False
     backend_sampling: bool = False
@@ -318,6 +320,10 @@ class ServerProcess:
             server_args.append("--ui-mcp-proxy")
         if self.ui_mcp_proxy_allow_private_urls:
             server_args.append("--ui-mcp-proxy-allow-private-urls")
+        if self.ui_linux_net:
+            server_args.append("--ui-linux-net")
+        if self.ui_linux_net_allow_private_urls:
+            server_args.append("--ui-linux-net-allow-private-urls")
         if self.media_allow_private_urls:
             server_args.append("--media-allow-private-urls")
         if self.allow_unauthenticated_tools:

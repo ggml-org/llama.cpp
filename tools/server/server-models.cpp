@@ -2120,6 +2120,7 @@ void server_models_routes::init_routes() {
                 {"build_info",           std::string(llama_build_info())},
                 {"cors_proxy_enabled",   params.ui_mcp_proxy},
                 {"ui_agent",             params.ui_agent},
+                {"ui_linux_net",         params.ui_linux_net},
             };
             if (!params.server_connect_code.empty()) {
                 props["connect_code"] = params.server_connect_code;

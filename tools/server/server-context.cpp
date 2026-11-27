@@ -5682,6 +5682,7 @@ static json get_res_props(const server_context_meta & meta, const common_params 
         { "is_sleeping",                 is_sleeping },
         { "cors_proxy_enabled",          params.ui_mcp_proxy },
         { "ui_agent",                    params.ui_agent },
+        { "ui_linux_net",                params.ui_linux_net },
     };
 
     if (!params.server_connect_code.empty()) {
