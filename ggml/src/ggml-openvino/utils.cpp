@@ -3250,14 +3250,23 @@ bool is_model_splitted(ggml_cgraph * cgraph) {
 }
 
 bool is_naive(ggml_cgraph * cgraph) {
+    // Small graphs, and graphs without model weights (whole-graph op tests), are translated op by op; the model
+    // path relies on LLM graph patterns.
     constexpr int naive_graph_size_threshold = 20;
     int count = 0;
+    bool has_weights = false;
     for (int i = 0; i < cgraph->n_nodes; i++) {
-        if (cgraph->nodes[i]->op != GGML_OP_NONE) {
+        const ggml_tensor * node = cgraph->nodes[i];
+        if (node->op != GGML_OP_NONE) {
             count++;
         }
+        for (int j = 0; j < GGML_MAX_SRC && !has_weights; j++) {
+            const ggml_tensor * src = node->src[j];
+            has_weights =
+                src != nullptr && src->buffer != nullptr && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
+        }
     }
-    return count < naive_graph_size_threshold;
+    return count < naive_graph_size_threshold || !has_weights;
 }
 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & input) {

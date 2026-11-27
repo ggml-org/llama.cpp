@@ -1647,6 +1647,13 @@ static bool cpy_output_view_is_supported(const ggml_tensor * op) {
            GgmlOvDecoder::is_gdn_snapshot_writeback(op) || GgmlOvDecoder::is_ssm_state_writeback(op);
 }
 
+// SET_ROWS writes whole rows of a contiguous destination. Other destination views (e.g. a permuted view of a
+// state tensor) are supported only for the recognized cache writes.
+static bool set_rows_output_view_is_supported(const ggml_tensor * op) {
+    return op->view_src == nullptr || ggml_nbytes(op) == 0 || ggml_is_contiguous(op) ||
+           GgmlOvDecoder::is_column_set_rows(op) || GgmlOvDecoder::is_conv_state_snapshot_writeback(op);
+}
+
 static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
     const ggml_tensor * as = op->src[0];
     const ggml_tensor * ids = op->src[2];
@@ -1756,6 +1763,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         }
         if (op->op == GGML_OP_SET_ROWS && op->src[0]->type == GGML_TYPE_BF16) {
             return {false, "SET_ROWS with BF16 src0 is not supported"};
+        }
+        if (op->op == GGML_OP_SET_ROWS && !set_rows_output_view_is_supported(op)) {
+            return {false, "SET_ROWS with non-contiguous output view is not supported"};
         }
         if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K ||
                                  op->src[0]->type == GGML_TYPE_Q4_1 || op->src[0]->type == GGML_TYPE_Q5_1)) {
