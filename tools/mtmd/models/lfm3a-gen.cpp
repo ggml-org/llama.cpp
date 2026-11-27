@@ -9,7 +9,7 @@
 // GEN_WAV : a window of frames -> polar STFT frames of the liquid-codec decoder, the ISTFT runs on the host
 
 // state carried between GEN_WAV calls: rope offset, short-conv taps and attention window of the codec decoder
-std::vector<c2w_state_slot> list_lfm3a_gen_state_slots(const clip_hparams & hparams, const clip_model & model) {
+std::vector<c2w_state_slot> list_lfm3a_gen_state_slots(const mtmd_hparams & hparams, const mtmd_model & model) {
     std::vector<c2w_state_slot> slots;
     if (model.c2w.tfm_layers.empty()) {
         return slots;
@@ -29,7 +29,7 @@ std::vector<c2w_state_slot> list_lfm3a_gen_state_slots(const clip_hparams & hpar
 }
 
 // pre-norm LFM block, with the LFM3 sandwich norms when the layer has them
-ggml_tensor * clip_graph_lfm3a_gen::build_lfm_layer(ggml_tensor * inpL, const clip_layer & layer, float eps, int il,
+ggml_tensor * mtmd_graph_lfm3a_gen::build_lfm_layer(ggml_tensor * inpL, const mtmd_layer & layer, float eps, int il,
                                                     const std::function<ggml_tensor *(ggml_tensor *)> & op) {
     ggml_tensor * cur = build_norm(inpL, layer.ln_1_w, nullptr, NORM_TYPE_RMS, eps, il);
     cur = op(cur);
@@ -47,7 +47,7 @@ ggml_tensor * clip_graph_lfm3a_gen::build_lfm_layer(ggml_tensor * inpL, const cl
 }
 
 // GQA with q/k RMSNorm, NEOX rope, an optional cached K/V prefix and the LFM3 per-head sigmoid gate
-ggml_tensor * clip_graph_lfm3a_gen::build_lfm_attn(ggml_tensor * cur, const clip_layer & layer, int n_head, int n_head_kv,
+ggml_tensor * mtmd_graph_lfm3a_gen::build_lfm_attn(ggml_tensor * cur, const mtmd_layer & layer, int n_head, int n_head_kv,
                                                    float eps, float rope_theta, int il, ggml_tensor * inp_pos,
                                                    ggml_tensor * kq_mask, ggml_tensor * k_cache, ggml_tensor * v_cache,
                                                    ggml_tensor ** k_all, ggml_tensor ** v_all) {
@@ -89,7 +89,7 @@ ggml_tensor * clip_graph_lfm3a_gen::build_lfm_attn(ggml_tensor * cur, const clip
 }
 
 // short conv: in_proj -> b * x -> causal depthwise conv over [conv_state | x] -> c * conv -> out_proj
-ggml_tensor * clip_graph_lfm3a_gen::build_lfm_conv(ggml_tensor * cur, const clip_layer & layer, int il,
+ggml_tensor * mtmd_graph_lfm3a_gen::build_lfm_conv(ggml_tensor * cur, const mtmd_layer & layer, int il,
                                                    ggml_tensor * conv_state, ggml_tensor ** conv_state_out) {
     const int64_t n_embd_c = cur->ne[0];
     const int64_t n_pos    = cur->ne[1];
@@ -110,7 +110,7 @@ ggml_tensor * clip_graph_lfm3a_gen::build_lfm_conv(ggml_tensor * cur, const clip
     return build_mm(layer.conv_pw2_w, cur);
 }
 
-ggml_tensor * clip_graph_lfm3a_gen::build_gen_code() {
+ggml_tensor * mtmd_graph_lfm3a_gen::build_gen_code() {
     ggml_tensor * embd_w = model.gen_code_embd_w; // [n_embd, n_vocab, n_codebooks], tied to the output head
     const int64_t n_cb    = embd_w->ne[2];
     const int64_t n_vocab = embd_w->ne[1];
@@ -169,7 +169,7 @@ ggml_tensor * clip_graph_lfm3a_gen::build_gen_code() {
     return fb;
 }
 
-ggml_tensor * clip_graph_lfm3a_gen::build_gen_wav() {
+ggml_tensor * mtmd_graph_lfm3a_gen::build_gen_wav() {
     const auto & c2w = model.c2w;
     const int64_t n_cb   = model.gen_code_embd_w->ne[2];
     const int64_t n_fs   = hparams.wav_frame_stack;
@@ -201,7 +201,7 @@ ggml_tensor * clip_graph_lfm3a_gen::build_gen_wav() {
     cur = ggml_repeat_4d(ctx0, ggml_reshape_3d(ctx0, cur, n_embd_dec, 1, n_frames), n_embd_dec, n_fs, n_frames, 1);
     cur = ggml_reshape_2d(ctx0, cur, n_embd_dec, n_pos);
 
-    // positions continue across calls from the "pos" slot, see clip_encode()
+    // positions continue across calls from the "pos" slot, see mtmd_subcontext::encode()
     ggml_tensor * inp_pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_pos);
     ggml_set_name(inp_pos, "positions");
     ggml_set_input(inp_pos);
@@ -250,8 +250,8 @@ ggml_tensor * clip_graph_lfm3a_gen::build_gen_wav() {
     return cur;
 }
 
-ggml_cgraph * clip_graph_lfm3a_gen::build() {
-    ggml_tensor * out = gen_process == CLIP_GEN_PROCESS_GEN_WAV ? build_gen_wav() : build_gen_code();
+ggml_cgraph * mtmd_graph_lfm3a_gen::build() {
+    ggml_tensor * out = gen_process == MTMD_SUBCTX_GEN_PROCESS_GEN_WAV ? build_gen_wav() : build_gen_code();
     ggml_build_forward_expand(gf, out);
     return gf;
 }

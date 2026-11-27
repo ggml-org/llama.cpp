@@ -10,7 +10,7 @@ server: ServerProcess
 
 # a model name with slashes exercises the query string routing of the stream routes: the id
 # cannot travel as a path param because the decoded slash would split it before capture
-MODEL = "ggml-org/tinygemma3-GGUF:Q8_0"
+MODEL = "ggml-org-dev/tinygemma3-GGUF:Q8_0"
 STREAM_ID = f"conv-stream-test::{MODEL}"
 QS = "conv_id=" + quote(STREAM_ID, safe="")
 

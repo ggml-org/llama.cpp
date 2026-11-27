@@ -52,8 +52,8 @@ static __device__ __forceinline__ int ggml_cuda_movmatrix(const int x) {
     const int shift_low  = ((src_j + 0) % 2) * 16;
     const int shift_high = ((src_j + 1) % 2) * 16;
 
-    const int ret_low  = (__shfl_sync(0xFFFFFFFF, x, src_laneid_low,  WARP_SIZE) >> shift_low)  & 0x0000FFFF;
-    const int ret_high = (__shfl_sync(0xFFFFFFFF, x, src_laneid_high, WARP_SIZE) << shift_high) & 0xFFFF0000;
+    const int ret_low  = (ggml_cuda_shfl(x, src_laneid_low,  WARP_SIZE) >> shift_low)  & 0x0000FFFF;
+    const int ret_high = (ggml_cuda_shfl(x, src_laneid_high, WARP_SIZE) << shift_high) & 0xFFFF0000;
 
     return ret_low | ret_high;
 }
@@ -736,7 +736,7 @@ namespace ggml_cuda_mma {
             int i = threadIdx.x / 16;
             tmp[i] = tile_float.x[l];
             i ^= 1;
-            tmp[i] = __shfl_xor_sync(0xFFFFFFFF, tile_float.x[l], 16, WARP_SIZE);
+            tmp[i] = ggml_cuda_shfl_xor(tile_float.x[l], 16, WARP_SIZE);
             ret.x[l] = make_half2(tmp[0], tmp[1]);
         }
         return ret;
@@ -767,8 +767,8 @@ namespace ggml_cuda_mma {
 
             // On Volta FP16 and FP32 tiles have a different memory layout,
             //     for the conversion threads with an offset of 2 need to exchange half their values:
-            ret.x[l0/2 + (((threadIdx.x % 4) / 2) ^ 1)] = __shfl_xor_sync(
-                0xFFFFFFFF, ret.x[l0/2 + (((threadIdx.x % 4) / 2) ^ 1)], 2, WARP_SIZE);
+            ret.x[l0/2 + (((threadIdx.x % 4) / 2) ^ 1)] = ggml_cuda_shfl_xor(
+                ret.x[l0/2 + (((threadIdx.x % 4) / 2) ^ 1)], 2, WARP_SIZE);
         }
         return ret;
     }
@@ -1430,14 +1430,14 @@ namespace ggml_cuda_mma {
         using floatx4_t = __attribute__((ext_vector_type(4))) float;
         floatx4_t& acc_frag = reinterpret_cast<floatx4_t&>(D.x[0]);
 #if defined(CDNA4) || defined(CDNA3) || defined(CDNA2)
-        using bf16x4_t = __attribute__((ext_vector_type(4))) __bf16;
+        using bf16x4_t = __attribute__((ext_vector_type(4))) short;
         const bf16x4_t& a_frag = reinterpret_cast<const bf16x4_t&>(A.x[0]);
         const bf16x4_t& b_frag = reinterpret_cast<const bf16x4_t&>(B.x[0]);
         acc_frag = __builtin_amdgcn_mfma_f32_16x16x16bf16_1k(a_frag, b_frag, acc_frag, 0, 0, 0);
 #elif defined(CDNA1)
 #pragma unroll
         for (int i = 0; i < 2; ++i) {
-            using bf16x2_t = __attribute__((ext_vector_type(2))) __bf16;
+            using bf16x2_t = __attribute__((ext_vector_type(2))) short;
             const bf16x2_t& a_frag = reinterpret_cast<const bf16x2_t&>(A.x[i]);
             const bf16x2_t& b_frag = reinterpret_cast<const bf16x2_t&>(B.x[i]);
             acc_frag = __builtin_amdgcn_mfma_f32_16x16x8bf16(a_frag, b_frag, acc_frag, 0, 0, 0);

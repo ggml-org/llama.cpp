@@ -2,6 +2,7 @@
 #define HTP_KPARAMS_H
 
 #include "htp-common.h"
+#include "htp-lower.h"
 
 #include "htp/allreduce-ops.h"
 #include "htp/argsort-ops.h"
@@ -11,12 +12,14 @@
 #include "htp/cpy-ops.h"
 #include "htp/cumsum-ops.h"
 #include "htp/diag-ops.h"
+#include "htp/dsv4-hc-ops.h"
 #include "htp/fill-ops.h"
 #include "htp/flash-attn-ops.h"
 #include "htp/gated-delta-net-ops.h"
 #include "htp/get-rows-ops.h"
 #include "htp/glu-ops.h"
 #include "htp/im2col-ops.h"
+#include "htp/lightning-indexer-ops.h"
 #include "htp/matmul-ops.h"
 #include "htp/pad-ops.h"
 #include "htp/pool-ops.h"
@@ -26,18 +29,16 @@
 #include "htp/set-rows-ops.h"
 #include "htp/softmax-ops.h"
 #include "htp/solve-tri-ops.h"
+#include "htp/timestep-ops.h"
 #include "htp/ssm-conv.h"
+#include "htp/ssm-scan-ops.h"
 #include "htp/sum-rows-ops.h"
+#include "htp/top-k-mask-ops.h"
 #include "htp/unary-ops.h"
 #include "htp/upscale-ops.h"
 
 #include <type_traits>
 #include <utility>
-
-bool        htp_rows_stride(const int64_t * ne, const size_t * nb, size_t * stride);
-bool        htp_matmul_can_collapse(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst);
-bool        htp_matmul_add_can_collapse(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * src2, const struct ggml_tensor * dst);
-ggml_tensor htp_tensor_collapse_rows(const struct ggml_tensor * t);
 
 template <typename... Args>
 auto htp_kparams_type(bool (*)(Args...)) -> std::remove_pointer_t<std::remove_reference_t<decltype((std::declval<Args>(), ...))>>;
@@ -51,11 +52,6 @@ static inline bool htp_kparams_check(Args &&... args) {
 struct htp_opnode;
 
 bool htp_kparams_solve(
-    const struct ggml_hexagon_session * sess,
-    struct htp_opnode & node
-);
-
-void htp_opnode_collapse(
     const struct ggml_hexagon_session * sess,
     struct htp_opnode & node
 );
@@ -92,11 +88,20 @@ bool htp_kparams_solve_rms_norm_mul(
     struct htp_unary_kernel_params * kparams
 );
 
-bool htp_kparams_solve_matmul_add(
+bool htp_kparams_solve_rms_norm_mul_add(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
     const struct ggml_tensor * src2,
+    const struct ggml_tensor * dst,
+    struct htp_unary_kernel_params * kparams
+);
+
+bool htp_kparams_solve_matmul_add(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * bias,
     const struct ggml_tensor * dst,
     struct htp_mm_kernel_params * kparams
 );
@@ -105,7 +110,18 @@ bool htp_kparams_solve_mmnx(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * act,
+    const struct ggml_tensor * dst,
     int32_t n_weights,
+    struct htp_mm_kernel_params * kparams
+);
+
+bool htp_kparams_solve_mmnx_glu(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * w_gate,
+    const struct ggml_tensor * w_up,
+    const struct ggml_tensor * act,
+    const struct ggml_tensor * dst,
+    uint8_t glu_op,
     struct htp_mm_kernel_params * kparams
 );
 

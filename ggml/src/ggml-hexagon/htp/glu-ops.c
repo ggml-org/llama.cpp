@@ -1,13 +1,10 @@
-#pragma clang diagnostic ignored "-Wunused-variable"
-#pragma clang diagnostic ignored "-Wunused-function"
-#pragma clang diagnostic ignored "-Wunused-but-set-variable"
-
 #include <HAP_farf.h>
 
 #include <math.h>
 #include <string.h>
 
 #include "dma-queue.h"
+#include "dma-pipeline.h"
 #include "hvx-utils.h"
 
 #define GGML_COMMON_DECL_C
@@ -96,7 +93,7 @@ struct htp_glu_context {
 
     uint32_t                 block;
     uint32_t                 src0_nrows;
-    uint32_t                 src0_nrows_per_thread;
+    uint32_t                 src0_nrows_per_hvx;
     uint32_t                 row_start;
     int                      nc;
 
@@ -104,9 +101,9 @@ struct htp_glu_context {
     uint8_t *                vtcm_src1;
     uint8_t *                vtcm_dst;
 
-    size_t                   vtcm_src0_size_per_thread;
-    size_t                   vtcm_src1_size_per_thread;
-    size_t                   vtcm_dst_size_per_thread;
+    size_t                   vtcm_src0_size_per_hvx;
+    size_t                   vtcm_src1_size_per_hvx;
+    size_t                   vtcm_dst_size_per_hvx;
 };
 
 #define htp_glu_op_preamble                                            \
@@ -185,53 +182,6 @@ static void swiglu_clamp_f32(const float * restrict src0,
 
 static const float GELU_COEF_A     = 0.044715f;
 static const float SQRT_2_OVER_PI  = 0.79788456080286535587989211986876f;
-
-static inline HVX_Vector hvx_vec_fast_sigmoid_f32_2it(HVX_Vector v) {
-    v = Q6_Vqf32_vmpy_VsfVsf(v, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
-    v = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(v), Q6_V_vsplat_R(FAST_SIGMOID_C3));
-
-    HVX_Vector in_int = hvx_vec_truncate_f32(Q6_Vsf_equals_Vqf32(v));
-    HVX_Vector x      = Q6_Vqf32_vsub_Vqf32Vsf(v, Q6_Vsf_equals_Vw(in_int));
-    HVX_Vector xx     = Q6_Vqf32_vmpy_Vqf32Vqf32(x, x);
-
-    HVX_Vector v1 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(xx), Q6_V_vsplat_R(FAST_SIGMOID_C2));
-    v1            = Q6_Vqf32_vadd_Vqf32Vsf(v1, Q6_V_vsplat_R(FAST_SIGMOID_LOG2F));
-
-    HVX_Vector v2 = Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(x), Q6_V_vsplat_R(FAST_SIGMOID_C1));
-    v2            = Q6_Vqf32_vmpy_Vqf32Vqf32(v2, xx);
-    v2            = Q6_Vqf32_vadd_Vqf32Vqf32(v2, x);
-
-    HVX_Vector v3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vqf32(v2, v1));
-    v3            = Q6_Vw_vaslacc_VwVwR(v3, in_int, 24);
-
-    HVX_Vector v4 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_Vqf32Vqf32(v2, v1));
-    HVX_Vector v5 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(v3, v4));
-
-    // Newton-Raphson with 2 iterations
-    HVX_Vector two_sf = hvx_vec_splat_f32(2.0f);
-    HVX_Vector i_sf   = Q6_Vw_vsub_VwVw(Q6_V_vsplat_R(0x7EEEEBB3), v5);
-    HVX_Vector r_qf   = Q6_Vqf32_vmpy_VsfVsf(
-        i_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(i_sf, v5)))));
-    r_qf = Q6_Vqf32_vmpy_Vqf32Vqf32(
-        r_qf, Q6_Vqf32_vsub_VsfVsf(two_sf, Q6_Vsf_equals_Vqf32(Q6_Vqf32_vmpy_VsfVsf(Q6_Vsf_equals_Vqf32(r_qf), v5))));
-    HVX_Vector res = Q6_Vsf_equals_Vqf32(r_qf);
-
-    res = Q6_Vqf32_vmpy_VsfVsf(v3, res);
-
-    return Q6_Vsf_equals_Vqf32(res);
-}
-
-static inline HVX_Vector hvx_vec_fast_sigmoid_f32_guard_2it(HVX_Vector v,
-                                                            HVX_Vector one,
-                                                            HVX_Vector max_exp,
-                                                            HVX_Vector min_exp) {
-    const HVX_VectorPred pred_max = Q6_Q_vcmp_gt_VsfVsf(max_exp, v);
-    const HVX_VectorPred pred_min = Q6_Q_vcmp_gt_VsfVsf(v, min_exp);
-
-    HVX_Vector out = hvx_vec_fast_sigmoid_f32_2it(v);
-    out            = Q6_V_vmux_QVV(pred_max, out, one);
-    return Q6_V_vmux_QVV(pred_min, out, Q6_V_vzero());
-}
 
 static inline void hvx_geglu_f32_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
     assert((unsigned long) dst  % 128 == 0);
@@ -522,6 +472,7 @@ static __attribute__((noinline)) void hvx_sigglu_f32_vec(HVX_Vector * restrict v
     const HVX_Vector v_max_exp = hvx_vec_splat_f32(87.0f);
     const HVX_Vector v_min_exp = hvx_vec_splat_f32(-87.0f);
 
+    _Pragma("unroll(2)")
     for (uint32_t i = 0; i < nvec; i++) {
         HVX_Vector sig = hvx_vec_fast_sigmoid_f32_guard(vsrc0[i], v_one, v_max_exp, v_min_exp);
         vdst[i]        = hvx_vec_mul_f32_f32(sig, vsrc1[i]);
@@ -570,6 +521,11 @@ static void sigglu_f32(const float * restrict src0,
                        const struct htp_glu_context * gctx) {
     htp_glu_op_preamble;
 
+    if ((size_t) nc * sizeof(float) == src0_row_size_aligned) {
+        hvx_sigglu_f32_aa((uint8_t *) dst, (const uint8_t *) src0, (const uint8_t *) src1, num_rows * (uint32_t) nc);
+        return;
+    }
+
     for (uint32_t ib = 0; ib < num_rows; ib++) {
         const uint8_t * restrict src0_ptr = (const uint8_t *) src0 + (ib * src0_row_size_aligned);
         const uint8_t * restrict src1_ptr = (const uint8_t *) src1 + (ib * src1_row_size_aligned);
@@ -579,7 +535,58 @@ static void sigglu_f32(const float * restrict src0,
     }
 }
 
-// swiglu(x) = x1 * sigmoid(x0)
+static __attribute__((noinline)) void hvx_swiglu_f16_vec(HVX_Vector * restrict vdst,
+                                                         const HVX_Vector * restrict vsrc0,
+                                                         const HVX_Vector * restrict vsrc1,
+                                                         uint32_t nvec) {
+    _Pragma("clang loop pipeline(disable) unroll(disable)")
+    for (uint32_t i = 0; i + 1 < nvec; i += 2) {
+        HVX_Vector     x0   = vsrc0[i + 0];
+        HVX_Vector     x1   = vsrc0[i + 1];
+        HVX_VectorPair sigp = hvx_vec_fast_sigmoid_f16_pair(x0, x1);
+        vdst[i + 0]         = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(x0, Q6_V_lo_W(sigp)), vsrc1[i + 0]);
+        vdst[i + 1]         = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(x1, Q6_V_hi_W(sigp)), vsrc1[i + 1]);
+    }
+}
+
+static __attribute__((noinline)) void hvx_swiglu_f16_tail(HVX_Vector * restrict vdst,
+                                                          const HVX_Vector * restrict vsrc0,
+                                                          const HVX_Vector * restrict vsrc1,
+                                                          uint32_t nloe) {
+    HVX_Vector x   = vsrc0[0];
+    HVX_Vector sig = hvx_vec_fast_sigmoid_f16(x);
+    HVX_Vector res = hvx_vec_mul_f16_f16(hvx_vec_mul_f16_f16(x, sig), vsrc1[0]);
+    hvx_vec_store_a((void *) vdst, nloe * sizeof(_Float16), res);
+}
+
+static inline void hvx_swiglu_f16_aa(uint8_t * restrict dst, const uint8_t * restrict src0, const uint8_t * restrict src1, uint32_t n) {
+    assert((unsigned long) dst  % 128 == 0);
+    assert((unsigned long) src0 % 128 == 0);
+    assert((unsigned long) src1 % 128 == 0);
+
+    HVX_Vector * restrict vdst        = (HVX_Vector *) dst;
+    const HVX_Vector * restrict vsrc0 = (const HVX_Vector *) src0;
+    const HVX_Vector * restrict vsrc1 = (const HVX_Vector *) src1;
+
+    const uint32_t epv  = 128 / sizeof(_Float16);
+    const uint32_t nvec = n / epv;
+    const uint32_t nloe = n % epv;
+    uint32_t       i    = 0;
+
+    if (nvec >= 2) {
+        const uint32_t nvec2 = nvec & ~1u;
+        hvx_swiglu_f16_vec(vdst, vsrc0, vsrc1, nvec2);
+        i = nvec2;
+    }
+    if (i < nvec) {
+        hvx_swiglu_f16_tail(vdst + i, vsrc0 + i, vsrc1 + i, epv);
+    }
+    if (nloe) {
+        hvx_swiglu_f16_tail(vdst + nvec, vsrc0 + nvec, vsrc1 + nvec, nloe);
+    }
+}
+
+// swiglu(x, g) = x * sigmoid(x) * g
 static void swiglu_f16(const _Float16 * restrict src0,
                        const _Float16 * restrict src1,
                        _Float16 * restrict dst,
@@ -587,13 +594,17 @@ static void swiglu_f16(const _Float16 * restrict src0,
                        const struct htp_glu_context * gctx) {
     htp_glu_op_preamble;
 
+    if ((size_t) nc * sizeof(_Float16) == src0_row_size_aligned) {
+        hvx_swiglu_f16_aa((uint8_t *) dst, (const uint8_t *) src0, (const uint8_t *) src1, num_rows * (uint32_t) nc);
+        return;
+    }
+
     for (uint32_t ib = 0; ib < num_rows; ib++) {
         const uint8_t * restrict src0_ptr = (const uint8_t *) src0 + (ib * src0_row_size_aligned);
         const uint8_t * restrict src1_ptr = (const uint8_t *) src1 + (ib * src1_row_size_aligned);
         uint8_t * restrict dst_ptr        = (uint8_t *) dst + (ib * dst_row_size_aligned);
 
-        hvx_sigmoid_f16_aa(dst_ptr, src0_ptr, nc);
-        hvx_mul_mul_f16_aa(dst_ptr, src0_ptr, dst_ptr, src1_ptr, nc);
+        hvx_swiglu_f16_aa(dst_ptr, src0_ptr, src1_ptr, nc);
     }
 }
 
@@ -715,9 +726,13 @@ static __attribute__((noinline)) void hvx_sigglu_f16_vec(HVX_Vector * restrict v
                                                          const HVX_Vector * restrict vsrc0,
                                                          const HVX_Vector * restrict vsrc1,
                                                          uint32_t nvec) {
-    for (uint32_t i = 0; i < nvec; i++) {
-        HVX_Vector sig = hvx_vec_fast_sigmoid_f16(vsrc0[i]);
-        vdst[i]        = hvx_vec_mul_f16_f16(sig, vsrc1[i]);
+    for (uint32_t i = 0; i + 2 < nvec; i += 3) {
+        HVX_Vector sig0 = hvx_vec_fast_sigmoid_f16(vsrc0[i + 0]);
+        HVX_Vector sig1 = hvx_vec_fast_sigmoid_f16(vsrc0[i + 1]);
+        HVX_Vector sig2 = hvx_vec_fast_sigmoid_f16(vsrc0[i + 2]);
+        vdst[i + 0]     = hvx_vec_mul_f16_f16(sig0, vsrc1[i + 0]);
+        vdst[i + 1]     = hvx_vec_mul_f16_f16(sig1, vsrc1[i + 1]);
+        vdst[i + 2]     = hvx_vec_mul_f16_f16(sig2, vsrc1[i + 2]);
     }
 }
 
@@ -742,9 +757,15 @@ static inline void hvx_sigglu_f16_aa(uint8_t * restrict dst, const uint8_t * res
     const uint32_t epv  = 128 / sizeof(_Float16);
     const uint32_t nvec = n / epv;
     const uint32_t nloe = n % epv;
+    uint32_t       i    = 0;
 
-    if (nvec) {
-        hvx_sigglu_f16_vec(vdst, vsrc0, vsrc1, nvec);
+    if (nvec >= 3) {
+        const uint32_t nvec3 = nvec - (nvec % 3);
+        hvx_sigglu_f16_vec(vdst, vsrc0, vsrc1, nvec3);
+        i = nvec3;
+    }
+    for (; i < nvec; i++) {
+        hvx_sigglu_f16_tail(vdst + i, vsrc0 + i, vsrc1 + i, epv);
     }
     if (nloe) {
         hvx_sigglu_f16_tail(vdst + nvec, vsrc0 + nvec, vsrc1 + nvec, nloe);
@@ -759,6 +780,11 @@ static void sigglu_f16(const _Float16 * restrict src0,
                        const struct htp_glu_context * gctx) {
     htp_glu_op_preamble;
 
+    if ((size_t) nc * sizeof(_Float16) == src0_row_size_aligned) {
+        hvx_sigglu_f16_aa((uint8_t *) dst, (const uint8_t *) src0, (const uint8_t *) src1, num_rows * (uint32_t) nc);
+        return;
+    }
+
     for (uint32_t ib = 0; ib < num_rows; ib++) {
         const uint8_t * restrict src0_ptr = (const uint8_t *) src0 + (ib * src0_row_size_aligned);
         const uint8_t * restrict src1_ptr = (const uint8_t *) src1 + (ib * src1_row_size_aligned);
@@ -768,99 +794,85 @@ static void sigglu_f16(const _Float16 * restrict src0,
     }
 }
 
-#define DEFINE_GLU_PER_THREAD(TYPE, SUFFIX)                                                                            \
-    static void glu_##SUFFIX##_per_thread(unsigned int nth, unsigned int ith, void * data) {                           \
-        struct htp_glu_context * gctx = (struct htp_glu_context *) data;                                               \
-        htp_glu_preamble;                                                                                              \
-                                                                                                                       \
-        struct htp_thread_trace * tr = gctx->octx->ctx ? &gctx->octx->ctx->trace[ith] : NULL;                          \
-                                                                                                                       \
-        size_t src0_row_size = gctx->src0_row_size;                                                                    \
-        size_t src1_row_size = gctx->src1_row_size;                                                                    \
-        size_t dst_row_size  = gctx->dst_row_size;                                                                     \
-                                                                                                                       \
-        size_t src0_row_stride = gctx->src0_row_stride;                                                                \
-        size_t src1_row_stride = gctx->src1_row_stride;                                                                \
-                                                                                                                       \
-        const uint32_t src0_nrows            = gctx->src0_nrows;                                                       \
-        const uint32_t src0_nrows_per_thread = gctx->src0_nrows_per_thread;                                            \
-                                                                                                                       \
-        const uint32_t src0_start_row = gctx->row_start + src0_nrows_per_thread * ith;                                 \
-        const uint32_t src0_end_row   = MIN(src0_start_row + src0_nrows_per_thread, gctx->row_start + src0_nrows);     \
-                                                                                                                       \
-        /* no work for this thread */                                                                                  \
-        if (src0_start_row >= src0_end_row) {                                                                          \
-            return;                                                                                                    \
-        }                                                                                                              \
-                                                                                                                       \
-        const dma_addr_t data_src0 = gctx->data_src0;                                                                  \
-        const dma_addr_t data_src1 = gctx->data_src1;                                                                  \
-        const dma_addr_t data_dst  = gctx->data_dst;                                                                   \
-                                                                                                                       \
-        const size_t src0_row_size_aligned = gctx->src0_row_size_aligned;                                              \
-        const size_t src1_row_size_aligned = gctx->src1_row_size_aligned;                                              \
-        const size_t dst_row_size_aligned  = gctx->dst_row_size_aligned;                                               \
-                                                                                                                       \
-        uint8_t * restrict src0_spad_data = gctx->vtcm_src0 + (ith * gctx->vtcm_src0_size_per_thread);                 \
-        uint8_t * restrict src1_spad_data = gctx->vtcm_src1 + (ith * gctx->vtcm_src1_size_per_thread);                 \
-        uint8_t * restrict dst_spad_data  = gctx->vtcm_dst  + (ith * gctx->vtcm_dst_size_per_thread);                  \
-                                                                                                                       \
-        size_t src0_spad_half_size = gctx->src0_spad_half_size;                                                        \
-        size_t src1_spad_half_size = gctx->src1_spad_half_size;                                                        \
-        size_t dst_spad_half_size  = gctx->dst_spad_half_size;                                                         \
-                                                                                                                       \
-        const int BLOCK = gctx->block;                                                                                 \
-                                                                                                                       \
-        dma_queue * dma_q = gctx->octx->ctx->dma[ith];                                                                 \
-        glu_compute_##SUFFIX##_fn_t compute = (glu_compute_##SUFFIX##_fn_t) gctx->compute;                             \
-                                                                                                                       \
-        for (uint32_t ir = src0_start_row, spad_idx = 0; ir < src0_end_row && spad_idx < 2; ir += BLOCK, spad_idx++) { \
-            const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);                                                 \
-                                                                                                                       \
-            /* Dummy DMA transation for sequencing (interleaving dst,src,dst,...) */                                   \
-            dma_queue_push(dma_q,                                                                                      \
-                           dma_make_data(data_dst, dst_spad_data + (spad_idx * dst_spad_half_size)),                   \
-                           dst_row_size, dst_row_size_aligned, dst_row_size, 0);                                       \
-                                                                                                                       \
-            dma_queue_push(dma_q,                                                                                      \
-                dma_make_data(src0_spad_data + (spad_idx * src0_spad_half_size), data_src0 + (ir * src0_row_stride)),  \
-                src0_row_size_aligned, src0_row_stride, src0_row_size, block_size);                                    \
-                                                                                                                       \
-            dma_queue_push(dma_q,                                                                                      \
-                dma_make_data(src1_spad_data + (spad_idx * src1_spad_half_size), data_src1 + (ir * src1_row_stride)),  \
-                src1_row_size_aligned, src1_row_stride, src1_row_size, block_size);                                    \
-        }                                                                                                              \
-                                                                                                                       \
-        for (uint32_t ir = src0_start_row; ir < src0_end_row; ir += BLOCK) {                                           \
-            const uint32_t block_size = MIN(BLOCK, src0_end_row - ir);                                                 \
-                                                                                                                       \
-            TYPE * dst_spad  = (TYPE *) dma_queue_pop(dma_q).src;                                                      \
-            TYPE * src0_spad = (TYPE *) dma_queue_pop(dma_q).dst;                                                      \
-            TYPE * src1_spad = (TYPE *) dma_queue_pop(dma_q).dst;                                                      \
-                                                                                                                       \
-            htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, ir);                                                     \
-            compute(src0_spad, src1_spad, dst_spad, block_size, gctx);                                                 \
-            htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, ir);                                                      \
-                                                                                                                       \
-            dma_queue_push(dma_q, dma_make_data(data_dst + (ir * dst_row_size), dst_spad),                             \
-                           dst_row_size, dst_row_size_aligned, dst_row_size, block_size);                              \
-                                                                                                                       \
-            /* prefetch N+2 loop iteration if any */                                                                   \
-            const uint32_t pref_block = (ir + BLOCK * 2);                                                              \
-            if (pref_block < src0_end_row) {                                                                           \
-                const uint32_t pref_block_size = MIN(BLOCK, src0_end_row - pref_block);                                \
-                dma_queue_push(dma_q, dma_make_data(src0_spad, data_src0 + (pref_block * src0_row_stride)),            \
-                               src0_row_size_aligned, src0_row_stride, src0_row_size, pref_block_size);                \
-                dma_queue_push(dma_q, dma_make_data(src1_spad, data_src1 + (pref_block * src1_row_stride)),            \
-                               src1_row_size_aligned, src1_row_stride, src1_row_size, pref_block_size);                \
-            }                                                                                                          \
-        }                                                                                                              \
-                                                                                                                       \
-        dma_queue_flush(dma_q);                                                                                        \
+struct glu_pipe_state {
+    const struct htp_glu_context * gctx;
+    uint32_t                       ir;
+    uint32_t                       ir_end;
+};
+
+static bool glu_next_task(void * ctx, struct dma_pipe_task * task) {
+    struct glu_pipe_state * s = (struct glu_pipe_state *) ctx;
+    if (s->ir >= s->ir_end) {
+        return false;
+    }
+    const uint32_t block_size = MIN((uint32_t) s->gctx->block, s->ir_end - s->ir);
+    task->row = s->ir;
+    task->off = 0;
+    task->len = block_size;
+    task->aux = 0;
+    s->ir += block_size;
+    return true;
+}
+
+static void glu_push_in(dma_queue * dma_q, void * ctx, const struct dma_pipe_task * task, void * in0_spad, void * in1_spad) {
+    const struct htp_glu_context * gctx = ((struct glu_pipe_state *) ctx)->gctx;
+    dma_queue_push(dma_q, dma_make_data(in0_spad, gctx->data_src0 + (size_t) task->row * gctx->src0_row_stride),
+                   gctx->src0_row_size_aligned, gctx->src0_row_stride, gctx->src0_row_size, task->len);
+    dma_queue_push(dma_q, dma_make_data(in1_spad, gctx->data_src1 + (size_t) task->row * gctx->src1_row_stride),
+                   gctx->src1_row_size_aligned, gctx->src1_row_stride, gctx->src1_row_size, task->len);
+}
+
+static void glu_push_out(dma_queue * dma_q, void * ctx, const struct dma_pipe_task * task, void * out_spad) {
+    const struct htp_glu_context * gctx = ((struct glu_pipe_state *) ctx)->gctx;
+    dma_queue_push(dma_q, dma_make_data(gctx->data_dst + (size_t) task->row * gctx->dst_row_size, out_spad),
+                   gctx->dst_row_size, gctx->dst_row_size_aligned, gctx->dst_row_size, task->len);
+}
+
+static void glu_compute_f32(void * ctx, const struct dma_pipe_task * task, void * out_spad, void * in0_spad, void * in1_spad) {
+    const struct htp_glu_context * gctx = ((struct glu_pipe_state *) ctx)->gctx;
+    glu_compute_f32_fn_t compute = (glu_compute_f32_fn_t) gctx->compute;
+    compute((const float *) in0_spad, (const float *) in1_spad, (float *) out_spad, task->len, gctx);
+}
+
+static void glu_compute_f16(void * ctx, const struct dma_pipe_task * task, void * out_spad, void * in0_spad, void * in1_spad) {
+    const struct htp_glu_context * gctx = ((struct glu_pipe_state *) ctx)->gctx;
+    glu_compute_f16_fn_t compute = (glu_compute_f16_fn_t) gctx->compute;
+    compute((const _Float16 *) in0_spad, (const _Float16 *) in1_spad, (_Float16 *) out_spad, task->len, gctx);
+}
+
+static void glu_thread_run(const htp_thread_t * th, unsigned int ith, const struct htp_glu_context * gctx, dma_pipe_compute_io2_fn compute) {
+    const uint32_t src0_start_row = gctx->row_start + gctx->src0_nrows_per_hvx * ith;
+    const uint32_t src0_end_row   = MIN(src0_start_row + gctx->src0_nrows_per_hvx, gctx->row_start + gctx->src0_nrows);
+    if (src0_start_row >= src0_end_row) {
+        return;
     }
 
-DEFINE_GLU_PER_THREAD(float, f32)
-DEFINE_GLU_PER_THREAD(_Float16, f16)
+    uint8_t * src0_spad_data = gctx->vtcm_src0 + (ith * gctx->vtcm_src0_size_per_hvx);
+    uint8_t * src1_spad_data = gctx->vtcm_src1 + (ith * gctx->vtcm_src1_size_per_hvx);
+    uint8_t * dst_spad_data  = gctx->vtcm_dst  + (ith * gctx->vtcm_dst_size_per_hvx);
+    void *    in0_buf[2]     = { src0_spad_data, src0_spad_data + gctx->src0_spad_half_size };
+    void *    in1_buf[2]     = { src1_spad_data, src1_spad_data + gctx->src1_spad_half_size };
+    void *    out_buf[2]     = { dst_spad_data,  dst_spad_data  + gctx->dst_spad_half_size };
+
+    struct glu_pipe_state s = {
+        .gctx   = gctx,
+        .ir     = src0_start_row,
+        .ir_end = src0_end_row,
+    };
+
+    dma_pipe_io2_run(th->dma_q, th->trace, &s, in0_buf, in1_buf, out_buf,
+                     glu_next_task, glu_push_in, compute, glu_push_out);
+}
+
+static void glu_f32_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    (void) nth;
+    glu_thread_run(th, ith, (const struct htp_glu_context *) data, glu_compute_f32);
+}
+
+static void glu_f16_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    (void) nth;
+    glu_thread_run(th, ith, (const struct htp_glu_context *) data, glu_compute_f16);
+}
 
 static int execute_op_glu_f32(struct htp_ops_context * octx) {
     const struct htp_tensor * src0 = octx->src[0];
@@ -918,7 +930,7 @@ static int execute_op_glu_f32(struct htp_ops_context * octx) {
 
     const struct htp_glu_kernel_params * kparams = (const struct htp_glu_kernel_params *) octx->kernel_params;
 
-    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
@@ -929,9 +941,7 @@ static int execute_op_glu_f32(struct htp_ops_context * octx) {
     uint32_t nrows     = src0_nrows;
 
     if (octx->ctx->mdev.count > 1) {
-        uint32_t rows_per_chunk = 0;
-        htp_tensor_mdev_rows_per_chunk(dst, sizeof(float), (uint32_t) dst_row_size, &rows_per_chunk);
-        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_start = range.start;
         nrows     = range.count;
     }
@@ -940,7 +950,7 @@ static int execute_op_glu_f32(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
 
     // row_size   = bytes of useful data per row (what the kernel touches / what DMA copies).
     // row_stride = bytes between successive rows in DDR (may exceed row_size for non-contig src).
@@ -951,28 +961,28 @@ static int execute_op_glu_f32(struct htp_ops_context * octx) {
     const size_t src1_row_stride = src1 ? src1->nb[1] : src0->nb[1];
 
     struct htp_glu_vtcm_layout L;
-    htp_glu_vtcm_layout_build(&L, dst_row_size, n_threads, kparams->vtcm_row_per_thread);
+    htp_glu_vtcm_layout_build(&L, dst_row_size, n_hvx, kparams->vtcm_row_per_hvx);
 
     const size_t src0_row_size_aligned = L.row_size_aligned;
     const size_t src1_row_size_aligned = L.row_size_aligned;
     const size_t dst_row_size_aligned  = L.row_size_aligned;
 
     // Make sure the reserved vtcm size is sufficient
-    if (kparams->vtcm_row_per_thread == 0 || octx->ctx->vtcm_size < kparams->vtcm_size) {
+    if (kparams->vtcm_row_per_hvx == 0 || octx->ctx->vtcm_size < kparams->vtcm_size) {
         FARF(ERROR, "glu-%s : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n", op_type, octx->ctx->vtcm_size,
-             (src0_row_size_aligned + src1_row_size_aligned + dst_row_size_aligned) * n_threads);
+             (src0_row_size_aligned + src1_row_size_aligned + dst_row_size_aligned) * n_hvx);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
     if (src1) {
         FARF(HIGH, "%s: %ux%ux%ux%u x %ux%ux%ux%u -> %ux%ux%ux%u : src0-vtcm-size %zu src1-vtcm-size %zu dst-vtcm-size %zu\n",
              op_type, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2],
-             src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], L.src0_bytes_per_thread * n_threads,
-             L.src1_bytes_per_thread * n_threads, L.dst_bytes_per_thread * n_threads);
+             src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], L.src0_bytes_per_hvx * n_hvx,
+             L.src1_bytes_per_hvx * n_hvx, L.dst_bytes_per_hvx * n_hvx);
     } else {
         FARF(HIGH, "%s: %ux%ux%ux%u -> %ux%ux%ux%u : src0-vtcm-size %zu src1-vtcm-size %zu dst-vtcm-size %zu\n", op_type,
              src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-             L.src0_bytes_per_thread * n_threads, L.src1_bytes_per_thread * n_threads, L.dst_bytes_per_thread * n_threads);
+             L.src0_bytes_per_hvx * n_hvx, L.src1_bytes_per_hvx * n_hvx, L.dst_bytes_per_hvx * n_hvx);
     }
 
     // Prepare context
@@ -981,7 +991,7 @@ static int execute_op_glu_f32(struct htp_ops_context * octx) {
     gctx.compute = (void *) compute_fn;
     gctx.op_str  = op_type;
 
-    gctx.src0_nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
+    gctx.src0_nrows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
 
     gctx.src0_row_size = src0_row_size;
     gctx.src1_row_size = src1_row_size;
@@ -999,13 +1009,13 @@ static int execute_op_glu_f32(struct htp_ops_context * octx) {
     gctx.vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src1);
     gctx.vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
 
-    gctx.vtcm_src0_size_per_thread = (uint32_t) L.src0_bytes_per_thread;
-    gctx.vtcm_src1_size_per_thread = (uint32_t) L.src1_bytes_per_thread;
-    gctx.vtcm_dst_size_per_thread  = (uint32_t) L.dst_bytes_per_thread;
+    gctx.vtcm_src0_size_per_hvx = (uint32_t) L.src0_bytes_per_hvx;
+    gctx.vtcm_src1_size_per_hvx = (uint32_t) L.src1_bytes_per_hvx;
+    gctx.vtcm_dst_size_per_hvx  = (uint32_t) L.dst_bytes_per_hvx;
 
-    gctx.src0_spad_half_size = gctx.vtcm_src0_size_per_thread >> 1;
-    gctx.src1_spad_half_size = gctx.vtcm_src1_size_per_thread >> 1;
-    gctx.dst_spad_half_size  = gctx.vtcm_dst_size_per_thread  >> 1;
+    gctx.src0_spad_half_size = gctx.vtcm_src0_size_per_hvx >> 1;
+    gctx.src1_spad_half_size = gctx.vtcm_src1_size_per_hvx >> 1;
+    gctx.dst_spad_half_size  = gctx.vtcm_dst_size_per_hvx  >> 1;
 
     gctx.block      = L.block;
     gctx.src0_nrows = nrows;
@@ -1034,7 +1044,7 @@ static int execute_op_glu_f32(struct htp_ops_context * octx) {
     gctx.data_src1 = data_src1;
     gctx.data_dst  = dst->data;
 
-    work_queue_run(octx->ctx->work_queue, (worker_callback_t)glu_f32_per_thread, &gctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, glu_f32_thread, &gctx, n_hvx);
     return HTP_STATUS_OK;
 }
 
@@ -1084,7 +1094,7 @@ static int execute_op_glu_f16(struct htp_ops_context * octx) {
 
     const struct htp_glu_kernel_params * kparams = (const struct htp_glu_kernel_params *) octx->kernel_params;
 
-    if (!htp_ops_context_set_n_threads(octx, kparams->n_threads)) {
+    if (!htp_ops_context_set_n_hvx(octx, kparams->n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
@@ -1095,9 +1105,7 @@ static int execute_op_glu_f16(struct htp_ops_context * octx) {
     uint32_t nrows     = src0_nrows;
 
     if (octx->ctx->mdev.count > 1) {
-        uint32_t rows_per_chunk = 0;
-        htp_tensor_mdev_rows_per_chunk(dst, sizeof(_Float16), (uint32_t) dst_row_size, &rows_per_chunk);
-        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, rows_per_chunk, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
+        const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(src0_nrows, 1, octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         row_start = range.start;
         nrows     = range.count;
     }
@@ -1106,7 +1114,7 @@ static int execute_op_glu_f16(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = octx->n_threads;
+    const uint32_t n_hvx = octx->n_hvx;
 
     // row_size   = bytes of useful data per row (what the kernel touches / what DMA copies).
     // row_stride = bytes between successive rows in DDR (may exceed row_size for non-contig src).
@@ -1117,28 +1125,28 @@ static int execute_op_glu_f16(struct htp_ops_context * octx) {
     const size_t src1_row_stride = src1 ? src1->nb[1] : src0->nb[1];
 
     struct htp_glu_vtcm_layout L;
-    htp_glu_vtcm_layout_build(&L, dst_row_size, n_threads, kparams->vtcm_row_per_thread);
+    htp_glu_vtcm_layout_build(&L, dst_row_size, n_hvx, kparams->vtcm_row_per_hvx);
 
     const size_t src0_row_size_aligned = L.row_size_aligned;
     const size_t src1_row_size_aligned = L.row_size_aligned;
     const size_t dst_row_size_aligned  = L.row_size_aligned;
 
     // Make sure the reserved vtcm size is sufficient
-    if (kparams->vtcm_row_per_thread == 0 || octx->ctx->vtcm_size < kparams->vtcm_size) {
+    if (kparams->vtcm_row_per_hvx == 0 || octx->ctx->vtcm_size < kparams->vtcm_size) {
         FARF(ERROR, "glu-%s : current VTCM reservation %zu is too small for even 1 row per thread, needed at least %zu\n", op_type, octx->ctx->vtcm_size,
-             (src0_row_size_aligned + src1_row_size_aligned + dst_row_size_aligned) * n_threads);
+             (src0_row_size_aligned + src1_row_size_aligned + dst_row_size_aligned) * n_hvx);
         return HTP_STATUS_VTCM_TOO_SMALL;
     }
 
     if (src1) {
         FARF(HIGH, "%s: %ux%ux%ux%u x %ux%ux%ux%u -> %ux%ux%ux%u : src0-vtcm-size %zu src1-vtcm-size %zu dst-vtcm-size %zu\n",
              op_type, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], src1->ne[0], src1->ne[1], src1->ne[2],
-             src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], L.src0_bytes_per_thread * n_threads,
-             L.src1_bytes_per_thread * n_threads, L.dst_bytes_per_thread * n_threads);
+             src1->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], L.src0_bytes_per_hvx * n_hvx,
+             L.src1_bytes_per_hvx * n_hvx, L.dst_bytes_per_hvx * n_hvx);
     } else {
         FARF(HIGH, "%s: %ux%ux%ux%u -> %ux%ux%ux%u : src0-vtcm-size %zu src1-vtcm-size %zu dst-vtcm-size %zu\n", op_type,
              src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3], dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3],
-             L.src0_bytes_per_thread * n_threads, L.src1_bytes_per_thread * n_threads, L.dst_bytes_per_thread * n_threads);
+             L.src0_bytes_per_hvx * n_hvx, L.src1_bytes_per_hvx * n_hvx, L.dst_bytes_per_hvx * n_hvx);
     }
 
     // Prepare context
@@ -1147,7 +1155,7 @@ static int execute_op_glu_f16(struct htp_ops_context * octx) {
     gctx.compute = (void *) compute_fn;
     gctx.op_str  = op_type;
 
-    gctx.src0_nrows_per_thread = fastdiv(nrows + n_threads - 1, &octx->n_threads_div);
+    gctx.src0_nrows_per_hvx = fastdiv(nrows + n_hvx - 1, &octx->n_hvx_div);
 
     gctx.src0_row_size = src0_row_size;
     gctx.src1_row_size = src1_row_size;
@@ -1165,13 +1173,13 @@ static int execute_op_glu_f16(struct htp_ops_context * octx) {
     gctx.vtcm_src1 = VTCM_LAYOUT_PTR(uint8_t, base, L.off_src1);
     gctx.vtcm_dst  = VTCM_LAYOUT_PTR(uint8_t, base, L.off_dst);
 
-    gctx.vtcm_src0_size_per_thread = (uint32_t) L.src0_bytes_per_thread;
-    gctx.vtcm_src1_size_per_thread = (uint32_t) L.src1_bytes_per_thread;
-    gctx.vtcm_dst_size_per_thread  = (uint32_t) L.dst_bytes_per_thread;
+    gctx.vtcm_src0_size_per_hvx = (uint32_t) L.src0_bytes_per_hvx;
+    gctx.vtcm_src1_size_per_hvx = (uint32_t) L.src1_bytes_per_hvx;
+    gctx.vtcm_dst_size_per_hvx  = (uint32_t) L.dst_bytes_per_hvx;
 
-    gctx.src0_spad_half_size = gctx.vtcm_src0_size_per_thread >> 1;
-    gctx.src1_spad_half_size = gctx.vtcm_src1_size_per_thread >> 1;
-    gctx.dst_spad_half_size  = gctx.vtcm_dst_size_per_thread  >> 1;
+    gctx.src0_spad_half_size = gctx.vtcm_src0_size_per_hvx >> 1;
+    gctx.src1_spad_half_size = gctx.vtcm_src1_size_per_hvx >> 1;
+    gctx.dst_spad_half_size  = gctx.vtcm_dst_size_per_hvx  >> 1;
 
     gctx.block      = L.block;
     gctx.src0_nrows = nrows;
@@ -1200,7 +1208,7 @@ static int execute_op_glu_f16(struct htp_ops_context * octx) {
     gctx.data_src1 = data_src1;
     gctx.data_dst  = dst->data;
 
-    work_queue_run(octx->ctx->work_queue, (worker_callback_t)glu_f16_per_thread, &gctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, glu_f16_thread, &gctx, n_hvx);
     return HTP_STATUS_OK;
 }
 

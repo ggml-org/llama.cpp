@@ -8,16 +8,23 @@
 
 // Op-specific struct for precomputed unary params
 struct htp_unary_kernel_params {
-    uint32_t  n_threads;
+    uint32_t  n_hvx;
     uint32_t  col_tile;
     uint32_t  block;
-    uint32_t  broadcast_weight;
+    uint32_t  broadcast_src1;
 
     uint32_t  src0_contig;
     uint32_t  src1_contig;
+    uint32_t  src0_slice_dma;
 
     uint32_t  vtcm_size;
     uint32_t  tiles_per_row;
+
+    uint32_t  has_scale_bias;
+    float     in_scale;
+    float     in_bias;
+    float     out_scale;
+    float     out_bias;
 
     // Fastdiv helpers
     struct fastdiv_values div_ne01;
@@ -39,6 +46,7 @@ static inline bool htp_op_is_unary(uint32_t opcode) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_MUL_ADD:
         case HTP_OP_SCALE:
         case HTP_OP_SQR:
         case HTP_OP_SQRT:
@@ -74,6 +82,7 @@ static inline bool htp_unary_is_elementwise(uint32_t opcode) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_MUL_ADD:
         case HTP_OP_L2_NORM:
         case HTP_OP_HADAMARD:
         case HTP_OP_TRI:
@@ -87,14 +96,17 @@ struct htp_unary_vtcm_layout {
     size_t total_bytes;
     size_t off_src0;
     size_t off_src1;
+    size_t off_src2;
     size_t off_dst;
 
     size_t src0_row_size_aligned;
     size_t src1_row_size_aligned;
+    size_t src2_row_size_aligned;
     size_t dst_row_size_aligned;
 
     size_t src0_bytes;
     size_t src1_bytes;
+    size_t src2_bytes;
     size_t dst_bytes;
 };
 
@@ -104,35 +116,46 @@ static inline void htp_unary_vtcm_layout_build(
     size_t src0_data_row_size,
     size_t dst_data_row_size,
     size_t src1_data_row_size,
-    size_t elem_size,
+    size_t src2_data_row_size,
+    size_t src0_elem_size,
+    size_t dst_elem_size,
+    size_t src1_elem_size,
+    size_t src2_elem_size,
     uint32_t col_tile,
     uint32_t block,
-    bool broadcast_weight,
-    uint32_t n_threads
+    bool broadcast_src1,
+    uint32_t src1_nrows,
+    uint32_t n_hvx
 ) {
+    const bool has_src1_mul = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool has_src2_add = (op == HTP_OP_RMS_NORM_MUL_ADD);
+
     L->src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
     L->dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
-    L->src1_row_size_aligned = (op == HTP_OP_RMS_NORM_MUL) ? hex_round_up(src1_data_row_size, 128) : 0;
+    L->src1_row_size_aligned = has_src1_mul ? hex_round_up(src1_data_row_size, 128) : 0;
+    L->src2_row_size_aligned = has_src2_add ? hex_round_up(src2_data_row_size, 128) : 0;
 
     if (col_tile > 0) {
-        const size_t col_tile_bytes = col_tile * elem_size;
-        L->src0_bytes = col_tile_bytes * 2;
-        L->dst_bytes  = col_tile_bytes * 2;
-        L->src1_bytes = 0;
+        L->src0_bytes = (size_t) col_tile * src0_elem_size * 2;
+        L->dst_bytes  = (size_t) col_tile * dst_elem_size  * 2;
+        L->src1_bytes = has_src1_mul ? ((size_t) col_tile * src1_elem_size * 2) : 0;
+        L->src2_bytes = has_src2_add ? ((size_t) col_tile * src2_elem_size * 2) : 0;
     } else {
         L->src0_bytes = L->src0_row_size_aligned * block * 2;
+        L->src2_bytes = has_src2_add ? (L->src2_row_size_aligned * block * 2) : 0;
         L->dst_bytes  = L->dst_row_size_aligned  * block * 2;
-        if (op == HTP_OP_RMS_NORM_MUL) {
-            L->src1_bytes = broadcast_weight ? L->src1_row_size_aligned : (L->src1_row_size_aligned * block * 2);
+        if (has_src1_mul) {
+            L->src1_bytes = broadcast_src1 ? (L->src1_row_size_aligned * src1_nrows) : (L->src1_row_size_aligned * block * 2);
         } else {
             L->src1_bytes = 0;
         }
     }
 
     size_t off = 0;
-    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes * n_threads);
-    VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_src1, L->src1_bytes * n_threads, L->src1_bytes > 0);
-    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes * n_threads);
+    VTCM_LAYOUT_ALLOC(off, off_src0, L->src0_bytes * n_hvx);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_src1, L->src1_bytes * n_hvx, L->src1_bytes > 0);
+    VTCM_LAYOUT_ALLOC_OPTIONAL(off, off_src2, L->src2_bytes * n_hvx, L->src2_bytes > 0);
+    VTCM_LAYOUT_ALLOC(off, off_dst,  L->dst_bytes * n_hvx);
     L->total_bytes = off;
 }
 
@@ -143,73 +166,82 @@ static inline void htp_unary_solve_layout(
     uint32_t ne10,
     uint32_t ne11,
     uint32_t max_block,
-    bool broadcast_weight,
-    uint32_t n_threads,
+    bool broadcast_src1,
+    uint32_t src1_nrows,
+    uint32_t n_hvx,
     size_t vtcm_size,
-    size_t elem_size,
+    size_t src0_elem_size,
+    size_t dst_elem_size,
+    size_t src1_elem_size,
+    size_t src2_elem_size,
     uint32_t * out_col_tile,
-    uint32_t * out_vtcm_row_per_thread
+    uint32_t * out_vtcm_row_per_hvx
 ) {
-    const size_t dst_elem_size      = (op == HTP_OP_HADAMARD) ? sizeof(float) : elem_size;
-    const size_t src0_data_row_size = ne00 * elem_size;
-    const size_t dst_data_row_size  = ne10 * dst_elem_size;
-    const size_t src1_data_row_size = (op == HTP_OP_RMS_NORM_MUL) ? (ne11 * sizeof(float)) : 0;
+    const bool has_src1_mul = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool has_src2_add = (op == HTP_OP_RMS_NORM_MUL_ADD);
+
+    const size_t eff_dst_elem_size  = (op == HTP_OP_HADAMARD) ? sizeof(float) : dst_elem_size;
+    const size_t src0_data_row_size = ne00 * src0_elem_size;
+    const size_t dst_data_row_size  = ne10 * eff_dst_elem_size;
+    const size_t src1_data_row_size = has_src1_mul ? (ne11 * src1_elem_size) : 0;
+    const size_t src2_data_row_size = has_src2_add ? (ne00 * src2_elem_size) : 0;
 
     const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
     const size_t dst_row_size_aligned  = hex_round_up(dst_data_row_size,  128);
-    const size_t src1_row_size_aligned = (op == HTP_OP_RMS_NORM_MUL) ? hex_round_up(src1_data_row_size, 128) : 0;
+    const size_t src1_row_size_aligned = has_src1_mul ? hex_round_up(src1_data_row_size, 128) : 0;
+    const size_t src2_row_size_aligned = has_src2_add ? hex_round_up(src2_data_row_size, 128) : 0;
 
     size_t vtcm_size_per_row = 0;
-    size_t vtcm_row_per_thread = 0;
+    size_t vtcm_row_per_hvx = 0;
 
-    if (op == HTP_OP_RMS_NORM_MUL) {
-        if (broadcast_weight) {
+    if (op == HTP_OP_RMS_NORM_MUL_ADD) {
+        size_t src1_vtcm_total = n_hvx * src1_row_size_aligned * src1_nrows;
+        size_t available_vtcm  = (vtcm_size > src1_vtcm_total) ? (vtcm_size - src1_vtcm_total) : 0;
+        vtcm_size_per_row      = 2 * (src0_row_size_aligned + src2_row_size_aligned + dst_row_size_aligned);
+        vtcm_row_per_hvx       = available_vtcm / (n_hvx * vtcm_size_per_row);
+    } else if (op == HTP_OP_RMS_NORM_MUL) {
+        if (broadcast_src1) {
             size_t available_vtcm = vtcm_size;
-            size_t src1_vtcm_total = n_threads * src1_row_size_aligned;
+            size_t src1_vtcm_total = n_hvx * src1_row_size_aligned * src1_nrows;
             if (available_vtcm > src1_vtcm_total) {
                 available_vtcm -= src1_vtcm_total;
             } else {
                 available_vtcm = 0;
             }
             vtcm_size_per_row = 2 * (src0_row_size_aligned + dst_row_size_aligned);
-            vtcm_row_per_thread = available_vtcm / (n_threads * vtcm_size_per_row);
+            vtcm_row_per_hvx = available_vtcm / (n_hvx * vtcm_size_per_row);
         } else {
             vtcm_size_per_row = 2 * (src0_row_size_aligned + dst_row_size_aligned + src1_row_size_aligned);
-            vtcm_row_per_thread = vtcm_size / (n_threads * vtcm_size_per_row);
+            vtcm_row_per_hvx = vtcm_size / (n_hvx * vtcm_size_per_row);
         }
     } else {
         vtcm_size_per_row   = 2 * (src0_row_size_aligned + dst_row_size_aligned);
-        vtcm_row_per_thread = vtcm_size / (n_threads * vtcm_size_per_row);
+        vtcm_row_per_hvx    = vtcm_size / (n_hvx * vtcm_size_per_row);
     }
 
-    if (max_block > 0 && vtcm_row_per_thread > max_block) {
-        vtcm_row_per_thread = max_block;
+    if (max_block > 0 && vtcm_row_per_hvx > max_block) {
+        vtcm_row_per_hvx = max_block;
     }
 
-    const bool is_reduction = (op == HTP_OP_NORM || op == HTP_OP_RMS_NORM ||
-                               op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_L2_NORM ||
-                               op == HTP_OP_HADAMARD);
-    // The tiled fallback path below only has F32 task functions (unary_task_f32_tiled_*);
-    // F16 has no tiled kernels, so it must stay on the row-block path like reduction ops.
-    // NOTE: if F16 ends up with vtcm_row_per_thread == 0 here (row too large for the VTCM
-    // budget), execute_op_unary() will see BLOCK == 0 and skip computation for that op
-    // (logged via FARF(ERROR, ...)) since there is no F16 tiled fallback. This is a known
-    // limitation; supporting it would require adding F16 tiled kernels.
-    const bool is_f16 = (elem_size == sizeof(_Float16));
+    const bool is_rms_norm  = (op == HTP_OP_RMS_NORM || op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool is_reduction = (op == HTP_OP_NORM || is_rms_norm || op == HTP_OP_L2_NORM || op == HTP_OP_HADAMARD);
     uint32_t col_tile = 0;
 
-    if (vtcm_row_per_thread == 0 && !is_reduction && !is_f16) {
-        const size_t per_thread_budget = vtcm_size / n_threads;
-        const size_t col_tile_bytes = hex_align_down(per_thread_budget / 4, 128);
-        col_tile = (uint32_t) (col_tile_bytes / elem_size);
+    if (vtcm_row_per_hvx == 0 && (!is_reduction || is_rms_norm)) {
+        const size_t per_hvx_budget = vtcm_size / n_hvx;
+        const size_t tile_elem_bytes = 2 * (src0_elem_size + eff_dst_elem_size +
+                                            (has_src1_mul ? src1_elem_size : 0) +
+                                            (has_src2_add ? src2_elem_size : 0));
+        col_tile = (uint32_t) hex_align_down(per_hvx_budget / tile_elem_bytes, 64);
     }
 
-    const uint32_t block = col_tile ? 0 : (uint32_t) vtcm_row_per_thread;
-    htp_unary_vtcm_layout_build(L, op, src0_data_row_size, dst_data_row_size, src1_data_row_size,
-                                elem_size, col_tile, block, broadcast_weight, n_threads);
+    const uint32_t block = col_tile ? 0 : (uint32_t) vtcm_row_per_hvx;
+    htp_unary_vtcm_layout_build(L, op, src0_data_row_size, dst_data_row_size, src1_data_row_size, src2_data_row_size,
+                                src0_elem_size, eff_dst_elem_size, src1_elem_size, src2_elem_size,
+                                col_tile, block, broadcast_src1, src1_nrows, n_hvx);
 
     *out_col_tile = col_tile;
-    *out_vtcm_row_per_thread = (uint32_t) vtcm_row_per_thread;
+    *out_vtcm_row_per_hvx = (uint32_t) vtcm_row_per_hvx;
 }
 
 #endif /* HTP_UNARY_OPS_H */

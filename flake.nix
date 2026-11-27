@@ -112,7 +112,6 @@
         systems = [
           "aarch64-darwin"
           "aarch64-linux"
-          "x86_64-darwin" # x86_64-darwin isn't tested (and likely isn't relevant)
           "x86_64-linux"
         ];
 
@@ -164,6 +163,11 @@
               }
               // lib.optionalAttrs (system == "x86_64-linux") {
                 rocm = config.legacyPackages.llamaPackagesRocm.llama-cpp;
+
+                sycl = config.packages.default.override {
+                  useSycl = true;
+                  syclToolkit = pkgs.intel-oneapi-toolkit;
+                };
               };
 
             # Packages exposed in `.#checks` will be built by the CI and by

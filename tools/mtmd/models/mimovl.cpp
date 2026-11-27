@@ -1,8 +1,8 @@
 #include "models.h"
 
-ggml_tensor * clip_graph_mimovl::build_mm(ggml_tensor * w, ggml_tensor * x) const {
+ggml_tensor * mtmd_graph_mimovl::build_mm(ggml_tensor * w, ggml_tensor * x) const {
     ggml_tensor * cur = ggml_mul_mat(ctx0, w, x);
-    ggml_prec_set_acc(cur, GGML_PREC_F32);
+    ggml_prec_set_acc(cur, GGML_PREC_BF16);
     return cur;
 }
 
@@ -19,7 +19,7 @@ ggml_tensor * clip_graph_mimovl::build_mm(ggml_tensor * w, ggml_tensor * x) cons
 //   4. 1D banded sliding window (|q-k| > window_size -> -inf) as a
 //      single 2D mask broadcast across heads.
 //   5. Per-block MLP biases.
-ggml_cgraph * clip_graph_mimovl::build() {
+ggml_cgraph * mtmd_graph_mimovl::build() {
     GGML_ASSERT(model.patch_embeddings_0 != nullptr);
     GGML_ASSERT(model.patch_embeddings_1 != nullptr);
     GGML_ASSERT(model.class_embedding == nullptr);

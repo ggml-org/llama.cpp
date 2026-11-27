@@ -1,8 +1,3 @@
-#pragma clang diagnostic ignored "-Wgnu-zero-variadic-macro-arguments"
-#pragma clang diagnostic ignored "-Wunused-function"
-#pragma clang diagnostic ignored "-Wunused-variable"
-#pragma clang diagnostic ignored "-Wunused-but-set-variable"
-
 #include <HAP_farf.h>
 #include <HAP_perf.h>
 #include <AEEStdErr.h>
@@ -20,7 +15,9 @@
 #include <string.h>
 #include <stdatomic.h>
 
+#include "htp-thread.h"
 #include "hex-utils.h"
+#include "dma-proxy.h"
 #include "dma-queue.h"
 #include "hmx-queue.h"
 
@@ -28,22 +25,23 @@
 #include "ggml-common.h"
 #include "hex-bitmap.h"
 #include "htp-ctx.h"
-#include "htp-dcache.h"
 #include "htp-ops.h"
+#include "htp-vtcm.h"
 #include "htp_iface.h"
 #include "work-queue.h"
-#include "hex-profile.h"
+#include "htp-trace.h"
 #include "allreduce-ops.h"
+#include "dsv4-hc-ops.h"
 #include "htp-fence.h"
 
+#define DMA_PROXY_CAPACITY     64
+#define DMA_PROXY_STACK_SIZE   16384
 #define HMX_QUEUE_CAPACITY     128
 #define HMX_QUEUE_STACK_SIZE   16384
-#define WORK_QUEUE_CAPACITY    16
 #define WORK_QUEUE_STACK_SIZE  16384
 #define MAIN_THREAD_STACK_SIZE 32768
 
-_Static_assert(WORK_QUEUE_MAX_N_THREADS >= HTP_MAX_NTHREADS,
-               "work-queue thread cap must be >= HTP_MAX_NTHREADS");
+atomic_uint htp_thread_count = 0;
 
 struct htp_handle {
     struct htp_context * ctx;
@@ -347,14 +345,14 @@ static int vtcm_alloc(struct htp_context * ctx, uint64_t size_override) {
     }
 
     void * vtcm_ptr;
-    if (HAP_compute_res_attr_get_vtcm_ptr_v2(&attr, &vtcm_ptr, &vtcm_size) != 0) {
+    if (HAP_compute_res_attr_get_vtcm_ptr_v2(&attr, &vtcm_ptr, &vtcm_size) != 0 || vtcm_size < 2 * HTP_VTCM_GUARD_SIZE) {
         HAP_compute_res_release(rctx);
         FARF(ERROR, "failed to allocate %zu bytes VTCM (new)\n", ctx->vtcm_size);
         return AEE_ENOMEMORY;
     }
 
     ctx->vtcm_base          = (uint8_t *) vtcm_ptr;
-    ctx->vtcm_size          = vtcm_size;
+    ctx->vtcm_size          = htp_vtcm_usable_size(vtcm_size);
     ctx->vtcm_rctx          = rctx;
     atomic_store(&ctx->vtcm_valid, false);
     atomic_store(&ctx->vtcm_needs_release, false);
@@ -490,16 +488,22 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     qurt_sysenv_max_hthreads_t hw_threads;
     qurt_sysenv_get_max_hw_threads(&hw_threads);
     uint32_t hw_nhvx = (qurt_hvx_get_units() >> 8) & 0xFF;
+    uint32_t hw_nth  = hw_threads.max_hthreads;
+    if (hw_nth > HTP_MAX_NTHREADS) {
+        hw_nth = HTP_MAX_NTHREADS;
+    }
 
     if (n_hvx == 0) {
         n_hvx = hw_nhvx;
     }
-    if (n_hvx > hw_threads.max_hthreads) {
-        n_hvx = hw_threads.max_hthreads;
+    if (n_hvx > HTP_MAX_NHVX) {
+        n_hvx = HTP_MAX_NHVX;
     }
-    if (n_hvx > HTP_MAX_NTHREADS) {
-        n_hvx = HTP_MAX_NTHREADS;
+    if (n_hvx > hw_nth - 2) {
+        n_hvx = hw_nth - 2;
     }
+
+    uint32_t n_threads = hw_nth;
 
     // layout segments of our contiguous block
 
@@ -518,14 +522,14 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     // 3. work_queue
     size_t wq_align  = work_queue_alignof();
     size_t offset_wq = hex_align_up(offset, wq_align);
-    size_t size_wq   = work_queue_sizeof(n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
-    offset = offset_wq + size_wq;
+    size_t size_wq   = work_queue_sizeof(n_hvx, WORK_QUEUE_STACK_SIZE);
+    offset           = offset_wq + size_wq;
 
     // 4. dma_queue
     size_t dma_align = dma_queue_alignof();
     size_t offset_dma = hex_align_up(offset, dma_align);
     size_t size_dma = 0;
-    for (uint32_t i = 0; i < n_hvx; i++) {
+    for (uint32_t i = 0; i < n_threads; i++) {
         size_dma  = hex_align_up(size_dma, dma_queue_alignof());
         size_dma += dma_queue_sizeof(256);
     }
@@ -540,6 +544,12 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         size_hmx   = hmx_queue_sizeof(HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE);
         offset = offset_hmx + size_hmx;
     }
+
+    // 6. dma_proxy
+    size_t dp_align         = dma_proxy_alignof();
+    size_t offset_dma_proxy = hex_align_up(offset, dp_align);
+    size_t size_dma_proxy   = dma_proxy_sizeof(DMA_PROXY_CAPACITY, DMA_PROXY_STACK_SIZE);
+    offset                  = offset_dma_proxy + size_dma_proxy;
 
     size_t footprint = hex_align_up(offset, 128);
 
@@ -603,6 +613,9 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
 
 #if (__HEXAGON_ARCH__ >= 79)
         HAP_set_dcvs_v3_protected_bus_corners(&request, 1);
+        if (power_mode >= HTP_POWER_MODE_HIGH_PERFORMANCE) {
+            HAP_set_ddr_perf_mode(&request, 1);
+        }
 #endif
         if ((err = HAP_power_set((void *) ctx, &request)) != 0) {
             htp_iface_stop(handle);
@@ -656,16 +669,9 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     }
 #endif
 
-    ctx->hmx_enabled = n_hmx;
-    ctx->hmx_queue   = NULL;
-    if (n_hmx) {
-        void * hmx_ptr = (void *) ((uintptr_t) block + offset_hmx);
-        ctx->hmx_queue = hmx_queue_init(hmx_ptr, HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE, ctx->vtcm_rctx, &ctx->trace[HTP_MAX_NTHREADS]);
-    }
-    FARF(HIGH, "HMX %s (n_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", n_hmx);
-
-    ctx->n_threads = n_hvx;
-    ctx->n_threads_div = init_fastdiv_values(ctx->n_threads);
+    ctx->n_threads = n_threads;
+    ctx->n_hvx     = n_hvx;
+    ctx->n_hvx_div = init_fastdiv_values(ctx->n_hvx);
 
     // Initialize DMA queues
     uint8_t * dma_ptr_curr = (uint8_t *) ((uintptr_t) block + offset_dma);
@@ -677,11 +683,26 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
         dma_ptr_curr += size_dma_q;
     }
 
+    ctx->main_th = (htp_thread_t) { 0, ctx->dma[0], &ctx->trace[0] };
+
     ctx->ddr_spad_size = HTP_DDR_SPAD_SIZE;
     ctx->ddr_spad_base = memalign(128, ctx->ddr_spad_size);
 
+    htp_thread_reset();
+
     void * wq_ptr = (void *) ((uintptr_t) block + offset_wq);
-    ctx->work_queue = work_queue_init(wq_ptr, n_hvx, WORK_QUEUE_CAPACITY, WORK_QUEUE_STACK_SIZE);
+    ctx->hvx_queue = work_queue_init(wq_ptr, n_hvx, WORK_QUEUE_STACK_SIZE, ctx->dma, ctx->trace);
+
+    ctx->hmx_enabled = n_hmx;
+    ctx->hmx_queue   = NULL;
+    if (n_hmx) {
+        void * hmx_ptr = (void *) ((uintptr_t) block + offset_hmx);
+        ctx->hmx_queue = hmx_queue_init(hmx_ptr, HMX_QUEUE_CAPACITY, HMX_QUEUE_STACK_SIZE, ctx->vtcm_rctx, ctx->dma, ctx->trace);
+    }
+    FARF(HIGH, "HMX %s (n_hmx=%d)", ctx->hmx_enabled ? "enabled" : "disabled", n_hmx);
+
+    void * dp_ptr  = (void *) ((uintptr_t) block + offset_dma_proxy);
+    ctx->dma_proxy = dma_proxy_init(dp_ptr, DMA_PROXY_CAPACITY, DMA_PROXY_STACK_SIZE, ctx->dma, ctx->trace);
 
     ctx->main_stack = NULL;
     ctx->main_thread = 0;
@@ -707,7 +728,7 @@ AEEResult htp_iface_start(remote_handle64 handle, uint32_t sess_id, uint64_t dsp
     }
 
     FARF(HIGH, "session %u started: n-hvx %u vtcm-size %zu vtcm-rctx %u n-threads %u thread-id %d thread-prio %d \n",
-         sess_id, hw_nhvx, ctx->vtcm_size, ctx->vtcm_rctx, ctx->n_threads, ctx->thread_id, ctx->thread_prio);
+         sess_id, ctx->n_hvx, ctx->vtcm_size, ctx->vtcm_rctx, ctx->n_threads, ctx->thread_id, ctx->thread_prio);
 
     return AEE_SUCCESS;
 }
@@ -732,17 +753,22 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         return err;
     }
 
-    work_queue_free(ctx->work_queue);
-
-    for (int i = 0; i < ctx->n_threads; i++) {
-        dma_queue_free(ctx->dma[i]);
-    }
+    work_queue_free(ctx->hvx_queue);
 
     if (ctx->hmx_queue) {
         hmx_queue_free(ctx->hmx_queue);
         ctx->hmx_queue = NULL;
     }
     ctx->hmx_enabled = false;
+
+    if (ctx->dma_proxy) {
+        dma_proxy_free(ctx->dma_proxy);
+        ctx->dma_proxy = NULL;
+    }
+
+    for (int i = 0; i < ctx->n_threads; i++) {
+        dma_queue_free(ctx->dma[i]);
+    }
 
     vtcm_free(ctx);
 
@@ -751,6 +777,18 @@ AEEResult htp_iface_stop(remote_handle64 handle) {
         ctx->ddr_spad_base = NULL;
         ctx->ddr_spad_size = 0;
     }
+
+#if (__HEXAGON_ARCH__ >= 79)
+    {
+        HAP_power_request_t request;
+        memset(&request, 0, sizeof(request));
+        request.type                    = HAP_power_set_DCVS_v3;
+        request.dcvs_v3.set_dcvs_enable = TRUE;
+        request.dcvs_v3.dcvs_enable     = TRUE;
+        HAP_set_ddr_perf_mode(&request, 0);
+        HAP_power_set((void *) ctx, &request);
+    }
+#endif
 
     free(ctx);
     h->ctx = NULL;
@@ -768,16 +806,20 @@ AEEResult htp_iface_hwinfo(remote_handle64 handle, uint32_t * n_threads, uint32_
     qurt_sysenv_get_max_hw_threads(&hw_threads);
     uint32_t hw_nhvx = (qurt_hvx_get_units() >> 8) & 0xFF;
 
-    uint32_t n_hvx_val = hw_nhvx;
-    if (n_hvx_val > hw_threads.max_hthreads) {
-        n_hvx_val = hw_threads.max_hthreads;
-    }
-    if (n_hvx_val > HTP_MAX_NTHREADS) {
-        n_hvx_val = HTP_MAX_NTHREADS;
+    uint32_t n_threads_val = hw_threads.max_hthreads;
+    if (n_threads_val > HTP_MAX_NTHREADS) {
+        n_threads_val = HTP_MAX_NTHREADS;
     }
 
-    // for now we force n_threads == n_hvx
-    *n_threads = n_hvx_val;
+    uint32_t n_hvx_val = hw_nhvx;
+    if (n_hvx_val > HTP_MAX_NHVX) {
+        n_hvx_val = HTP_MAX_NHVX;
+    }
+    if (n_hvx_val > n_threads_val - 2) {
+        n_hvx_val = n_threads_val - 2;
+    }
+
+    *n_threads = n_threads_val;
     *n_hvx     = n_hvx_val;
     *n_hmx     = 1;
 
@@ -844,8 +886,6 @@ static int op_fence(struct htp_ops_context * octx) {
     atomic_uint * sync_fence = (atomic_uint *) (uintptr_t) sync->data;
 
     if (mode == 1) {
-        htp_dcache_flush_dirty_ranges(ctx);
-
         htp_mdev_group_barrier(octx);
 
         if (ctx->mdev.idx == 0) {
@@ -918,6 +958,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_matmul_id_nx(octx);
 
         case HTP_OP_MUL_MAT_NX:
+        case HTP_OP_MUL_MAT_NX_GLU:
             return op_matmul_nx(octx);
 
         case HTP_OP_MUL:
@@ -930,6 +971,7 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_NORM:
         case HTP_OP_RMS_NORM:
         case HTP_OP_RMS_NORM_MUL:
+        case HTP_OP_RMS_NORM_MUL_ADD:
         case HTP_OP_SCALE:
         case HTP_OP_CLAMP:
         case HTP_OP_LEAKY_RELU:
@@ -1004,8 +1046,14 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_SSM_CONV:
             return op_ssm_conv(octx);
 
+        case HTP_OP_SSM_SCAN:
+            return op_ssm_scan(octx);
+
         case HTP_OP_CUMSUM:
             return op_cumsum(octx);
+
+        case HTP_OP_TOP_K_MASK:
+            return op_top_k_mask(octx);
 
         case HTP_OP_FILL:
             return op_fill(octx);
@@ -1026,6 +1074,7 @@ static int execute_op(struct htp_ops_context * octx) {
             return op_im2col_3d(octx);
 
         case HTP_OP_CONV_2D:
+        case HTP_OP_CONV_3D:
             return op_conv_2d(octx);
 
         case HTP_OP_CONV_2D_DW:
@@ -1034,17 +1083,29 @@ static int execute_op(struct htp_ops_context * octx) {
         case HTP_OP_ROLL:
             return op_roll(octx);
 
+        case HTP_OP_TIMESTEP_EMBEDDING:
+            return op_timestep_embedding(octx);
+
         case HTP_OP_POOL_2D:
             return op_pool_2d(octx);
 
         case HTP_OP_POOL_1D:
             return op_pool_1d(octx);
 
+        case HTP_OP_DSV4_HC_PRE:
+            return op_dsv4_hc_pre(octx);
+
+        case HTP_OP_DSV4_HC_POST:
+            return op_dsv4_hc_post(octx);
+
         case HTP_OP_CONCAT:
             return op_concat(octx);
 
         case HTP_OP_GATED_DELTA_NET:
             return op_gated_delta_net(octx);
+
+        case HTP_OP_LIGHTNING_INDEXER:
+            return op_lightning_indexer(octx);
 
         case HTP_OP_TRI:
             return op_unary(octx);
@@ -1061,7 +1122,12 @@ static int execute_op(struct htp_ops_context * octx) {
 }
 
 static inline bool reuse_buf(struct htp_context *ctx, uint32_t *m_reuse, struct htp_buf_desc *b) {
-    b->base = NULL;
+    if (b->fd == ctx->shm.fd) {
+        b->base = ctx->shm.base;
+        return true;
+    }
+
+    b->base = 0;
 
     for (uint32_t i=0; i<HTP_MAX_MMAPS; i++) {
         struct htp_mmap *m = ctx->mmap + i;
@@ -1175,7 +1241,7 @@ static void prep_op_bufs(struct htp_context *ctx, struct htp_buf_desc *bufs, uin
 
         for (uint32_t i=0; i < n_bufs; i++) {
             struct htp_buf_desc *b = bufs + i;
-            if (!(b->flags & HTP_BUF_EXTENDED)) {
+            if (!(b->flags & HTP_BUF_EXTENDED) && b->fd != ctx->shm.fd) {
                 b->base = 0;
             }
             if (!mmap_buf(ctx, b)) {
@@ -1212,10 +1278,10 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
                        struct htp_tensor * tens, uint32_t idx, struct htp_op_desc * op) {
     memcpy(octx->op_params,     op->params, sizeof(octx->op_params));
     memcpy(octx->kernel_params, op->kernel_params, sizeof(octx->kernel_params));
-    octx->flags         = op->flags;
-    octx->op            = op->opcode;
-    octx->n_threads     = octx->ctx->n_threads;
-    octx->n_threads_div = octx->ctx->n_threads_div;
+    octx->flags     = op->flags;
+    octx->op        = op->opcode;
+    octx->n_hvx     = octx->ctx->n_hvx;
+    octx->n_hvx_div = octx->ctx->n_hvx_div;
 
     FARF(HIGH, "proc-op #%u: opcode %u flags 0x%x", idx, octx->op, octx->flags);
 
@@ -1234,8 +1300,6 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
             src->ne[0], src->ne[1], src->ne[2], src->ne[3]);
     }
 
-    htp_dcache_flush_dirty_tensors(octx->ctx, octx->src, HTP_OP_MAX_INPUTS);
-
     // Prep output tensors
     for (uint32_t i = 0; i < HTP_OP_MAX_OUTPUTS; i++) {
         uint16_t dst_idx = op->dst[i];
@@ -1250,17 +1314,12 @@ static int proc_op_req(struct htp_ops_context * octx, struct htp_buf_desc * bufs
             dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3]);
     }
 
-    htp_dcache_mark_dirty_tensors(octx->ctx, octx->dsts, HTP_OP_MAX_OUTPUTS);
-
     htp_mdev_group_barrier(octx);
 
     int status = execute_op(octx);
 
     htp_ops_context_set_status(octx, status);
 
-    octx->src0_spad.src = NULL;
-    octx->src1_spad.src = NULL;
-    octx->dst_spad.src  = NULL;
 
     return octx->status;
 }
@@ -1277,7 +1336,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     const uint32_t t_size = sizeof(struct htp_tensor)    * n_tens;
     const uint32_t o_size = sizeof(struct htp_op_desc)   * n_ops;
     const uint32_t p_size = sizeof(struct htp_prof_desc) * n_ops;
-    const uint32_t tr_size = (HTP_MAX_NTHREADS + 1) * req->n_traces * sizeof(struct htp_trace_desc);
+    const uint32_t tr_size = ctx->n_threads * req->n_traces * sizeof(struct htp_trace_desc);
 
     if (dbuf->size < b_size + t_size + o_size + p_size + tr_size) {
         FARF(ERROR, "invalid opbatch memory block size %u (req %u)", dbuf->size, b_size + t_size + o_size + p_size + tr_size);
@@ -1288,6 +1347,9 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
             n_bufs, n_tens, n_ops, req->n_traces, dbuf->size, b_size, t_size, o_size);
 
     // Setup descriptor pointers
+    ctx->shm.fd   = dbuf->fd;
+    ctx->shm.base = (uintptr_t) dbuf->ptr - dbuf->offset;
+
     uint8_t * m_ptr = dbuf->ptr;
     struct htp_buf_desc* bufs = (struct htp_buf_desc*)  m_ptr; m_ptr += b_size;
     struct htp_tensor*   tens = (struct htp_tensor*)    m_ptr; m_ptr += t_size;
@@ -1300,7 +1362,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     memset(ctx->trace, 0, sizeof(ctx->trace));
     if (ctx->profiler == HTP_PROF_TRACE) {
         struct htp_trace_desc * trace_events = (struct htp_trace_desc *) (m_ptr + p_size);
-        for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+        for (uint32_t t = 0; t < ctx->n_threads; t++) {
             ctx->trace[t].events     = &trace_events[t * req->n_traces];
             ctx->trace[t].max_events = req->n_traces;
         }
@@ -1310,7 +1372,6 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
     qurt_mem_cache_clean((qurt_addr_t) 0, 0, QURT_MEM_CACHE_FLUSH_INVALIDATE_ALL, QURT_MEM_DCACHE);
     hex_l2fetch_block(ctx, ctx->footprint);
-    memset(ctx->dirty_ranges, 0, sizeof(ctx->dirty_ranges));
     htp_trace_event_stop(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
 
     htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_BUFF, 0);
@@ -1324,7 +1385,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
 
     mdev_group_init(ctx, req);
 
-    work_queue_wakeup(ctx->work_queue);
+    work_queue_wakeup(ctx->hvx_queue);
     if (ctx->hmx_queue) {
         hmx_queue_wakeup(ctx->hmx_queue);
     }
@@ -1353,11 +1414,12 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
         }
     }
 
+    dma_proxy_flush(ctx->dma_proxy);
     if (ctx->hmx_queue) {
         hmx_queue_suspend(ctx->hmx_queue);
         hmx_queue_flush(ctx->hmx_queue);
     }
-    work_queue_suspend(ctx->work_queue);
+    work_queue_suspend(ctx->hvx_queue);
 
     // Flush remaining dirty tensors at the end of the batch
     htp_trace_event_start(&ctx->trace[0], HTP_TRACE_EVT_L2FLUSH, 0);
@@ -1380,7 +1442,7 @@ static void process_opbatch(struct htp_context * ctx, const struct htp_opbatch_r
     rsp.cycles_stop  = batch_prof.cycles_stop;
 
     if (ctx->profiler == HTP_PROF_TRACE) {
-        for (int t = 0; t <= HTP_MAX_NTHREADS; t++) {
+        for (uint32_t t = 0; t < ctx->n_threads; t++) {
             rsp.n_traces[t] = ctx->trace[t].count;
         }
     }

@@ -1,12 +1,11 @@
-#pragma clang diagnostic ignored "-Wunused-variable"
-
 #include <float.h>
 #include <math.h>
 #include <HAP_farf.h>
 
 #include "hex-common.h"
 #include "dma-queue.h"
-#include "hex-profile.h"
+#include "dma-pipeline.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
@@ -306,7 +305,7 @@ struct upscale_context {
     const void * lut_y;
     uint32_t chunk_start;
     uint32_t chunk_count;
-    uint32_t chunks_per_thread;
+    uint32_t chunks_per_hvx;
 };
 
 static void compute_nearest_chunk(
@@ -756,88 +755,102 @@ static inline void dma_push_src_chunk(
     }
 }
 
-static void upscale_worker(unsigned int nth, unsigned int ith, void * data) {
+struct upscale_pipe_state {
+    struct upscale_context *                   ctx;
+    const struct htp_upscale_kernel_params *   p;
+    const struct htp_tensor *                  src0;
+    const struct htp_tensor *                  dst;
+    const void *                               lut_y;
+    float *                                    R_buf;
+    float *                                    gather_tmp;
+    uint32_t                                   dst_row_size;
+    uint32_t                                   dst_stride;
+    uint32_t                                   chunk;
+    uint32_t                                   chunk_end;
+};
+
+static bool upscale_next_task(void * ctx, struct dma_pipe_task * task) {
+    struct upscale_pipe_state * s = (struct upscale_pipe_state *) ctx;
+    if (s->chunk >= s->chunk_end) {
+        return false;
+    }
+    task->row = s->chunk++;
+    task->off = 0;
+    task->len = 0;
+    task->aux = 0;
+    return true;
+}
+
+static void upscale_push_in(dma_queue * dma_q, void * ctx, const struct dma_pipe_task * task, void * in_spad) {
+    struct upscale_pipe_state * s = (struct upscale_pipe_state *) ctx;
+    dma_addr_t slice_src_off;
+    uint32_t src_ys, src_yc;
+    resolve_src_slice(s->src0, s->dst, s->p, s->lut_y, task->row, &slice_src_off, &src_ys, &src_yc);
+    dma_push_src_chunk(dma_q, (float *) in_spad, s->src0, slice_src_off, src_ys, src_yc);
+}
+
+static void upscale_compute(void * ctx, const struct dma_pipe_task * task, void * out_spad, void * in_spad) {
+    struct upscale_pipe_state * s = (struct upscale_pipe_state *) ctx;
+    dma_addr_t slice_dst_off;
+    uint32_t dst_ys, dst_yc;
+    resolve_dst_slice(s->dst, s->p, task->row, &slice_dst_off, &dst_ys, &dst_yc);
+
+    uint32_t src_ys, src_yc;
+    get_src_y_window(s->src0, s->dst, s->p, s->lut_y, dst_ys, dst_yc, &src_ys, &src_yc);
+
+    s->ctx->compute_chunk(s->ctx, (const float *) in_spad, (float *) out_spad, s->R_buf, s->gather_tmp, dst_ys, dst_yc, src_ys);
+}
+
+static void upscale_push_out(dma_queue * dma_q, void * ctx, const struct dma_pipe_task * task, void * out_spad) {
+    struct upscale_pipe_state * s = (struct upscale_pipe_state *) ctx;
+    dma_addr_t slice_dst_off;
+    uint32_t dst_ys, dst_yc;
+    resolve_dst_slice(s->dst, s->p, task->row, &slice_dst_off, &dst_ys, &dst_yc);
+
+    const dma_addr_t dst_addr = s->dst->data + slice_dst_off + (dma_addr_t) dst_ys * s->dst_stride;
+    dma_queue_push(dma_q, dma_make_data(dst_addr, out_spad), s->dst_stride, s->dst_row_size, s->dst_row_size, dst_yc);
+}
+
+static void upscale_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
+    (void) nth;
     struct upscale_context * ctx = (struct upscale_context *) data;
     const struct htp_upscale_kernel_params * p = ctx->kparams;
     const struct htp_upscale_vtcm_layout * L = &ctx->layout;
     const struct htp_tensor * src0 = ctx->octx->src[0];
     const struct htp_tensor * dst  = ctx->octx->dst;
 
-    const uint32_t first = ctx->chunk_start + ith * ctx->chunks_per_thread;
-    const uint32_t last  = MIN(first + ctx->chunks_per_thread, ctx->chunk_start + ctx->chunk_count);
+    const uint32_t first = ctx->chunk_start + ith * ctx->chunks_per_hvx;
+    const uint32_t last  = MIN(first + ctx->chunks_per_hvx, ctx->chunk_start + ctx->chunk_count);
 
     if (first >= last) {
         return;
     }
 
-    struct htp_thread_trace * tr = &ctx->octx->ctx->trace[ith];
-    dma_queue * dma_q            = ctx->octx->ctx->dma[ith];
-
     const uint32_t src_spad_half = (uint32_t) L->src_spad_half_size;
     const uint32_t dst_spad_half = (uint32_t) L->dst_spad_half_size;
 
     uint8_t * vtcm_base  = (uint8_t *) ctx->octx->ctx->vtcm_base;
-    uint8_t * src_spad   = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_src)    + ith * L->src_bytes_per_thread;
-    uint8_t * dst_spad   = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_dst)    + ith * L->dst_bytes_per_thread;
-    float   * R_buf      = VTCM_LAYOUT_PTR(float,   vtcm_base, L->off_r)      + ith * (L->r_bytes_per_thread / sizeof(float));
-    float   * gather_tmp = VTCM_LAYOUT_PTR(float,   vtcm_base, L->off_gather) + ith * (L->gather_bytes_per_thread / sizeof(float));
-    const void * lut_y   = ctx->lut_y;
+    uint8_t * src_spad   = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_src)    + ith * L->src_bytes_per_hvx;
+    uint8_t * dst_spad   = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_dst)    + ith * L->dst_bytes_per_hvx;
+    void *    in_buf[2]  = { src_spad, src_spad + src_spad_half };
+    void *    out_buf[2] = { dst_spad, dst_spad + dst_spad_half };
 
-    float * srcb2[2] = { (float *) src_spad, (float *) (src_spad + src_spad_half) };
-    float * dstb2[2] = { (float *) dst_spad, (float *) (dst_spad + dst_spad_half) };
+    struct upscale_pipe_state s = {
+        .ctx          = ctx,
+        .p            = p,
+        .src0         = src0,
+        .dst          = dst,
+        .lut_y        = ctx->lut_y,
+        .R_buf        = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_r)      + ith * (L->r_bytes_per_hvx / sizeof(float)),
+        .gather_tmp   = VTCM_LAYOUT_PTR(float, vtcm_base, L->off_gather) + ith * (L->gather_bytes_per_hvx / sizeof(float)),
+        .dst_row_size = dst->ne[0] * sizeof(float),
+        .dst_stride   = dst->nb[1],
+        .chunk        = first,
+        .chunk_end    = last,
+    };
 
-    const uint32_t dst_row_size = dst->ne[0] * sizeof(float);
-    const uint32_t dst_stride   = dst->nb[1];
-
-    const uint32_t total = last - first;
-
-    // Warmup: prime pipeline with initial transfers
-    for (uint32_t i = 0; i < total && i < 2; ++i) {
-        dma_queue_push(dma_q, dma_make_data(dst->data, dstb2[i]), dst_stride, dst_row_size, dst_row_size, 0);
-
-        dma_addr_t slice_src_off;
-        uint32_t src_ys, src_yc;
-        resolve_src_slice(src0, dst, p, lut_y, first + i, &slice_src_off, &src_ys, &src_yc);
-
-        dma_push_src_chunk(dma_q, srcb2[i], src0, slice_src_off, src_ys, src_yc);
-    }
-
-    // Steady state loop
-    for (uint32_t i = 0; i < total; ++i) {
-        const uint32_t buf = i & 1u;
-        float * srcb = srcb2[buf];
-        float * dstb = dstb2[buf];
-
-        dma_queue_pop(dma_q);
-        dma_queue_pop(dma_q);
-
-        dma_addr_t slice_dst_off;
-        uint32_t dst_ys, dst_yc;
-        resolve_dst_slice(dst, p, first + i, &slice_dst_off, &dst_ys, &dst_yc);
-
-        uint32_t src_ys, src_yc;
-        get_src_y_window(src0, dst, p, lut_y, dst_ys, dst_yc, &src_ys, &src_yc);
-
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (first + i));
-        ctx->compute_chunk(ctx, srcb, dstb, R_buf, gather_tmp, dst_ys, dst_yc, src_ys);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) (first + i));
-
-        const dma_addr_t dst_addr = dst->data + slice_dst_off + (dma_addr_t) dst_ys * dst_stride;
-        dma_queue_push(dma_q, dma_make_data(dst_addr, dstb), dst_stride, dst_row_size, dst_row_size, dst_yc);
-
-        const uint32_t next = i + 2;
-        if (next < total) {
-            dma_addr_t next_src_off;
-            uint32_t next_src_ys, next_src_yc;
-            resolve_src_slice(src0, dst, p, lut_y, first + next, &next_src_off, &next_src_ys, &next_src_yc);
-
-            dma_push_src_chunk(dma_q, srcb, src0, next_src_off, next_src_ys, next_src_yc);
-        }
-    }
-
-    dma_queue_flush(dma_q);
-
-    (void) nth;
+    dma_pipe_io_run(th->dma_q, th->trace, &s, in_buf, out_buf,
+                    upscale_next_task, upscale_push_in, upscale_compute, upscale_push_out);
 }
 
 int op_upscale(struct htp_ops_context * octx) {
@@ -856,7 +869,7 @@ int op_upscale(struct htp_ops_context * octx) {
 
     if (octx->ctx->mdev.count > 1) {
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
-            chunk_count, htp_tensor_mdev_data_aligned(dst) ? p->chunks_per_group : 0,
+            chunk_count, 1,
             octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         chunk_start = range.start;
         chunk_count = range.count;
@@ -866,12 +879,12 @@ int op_upscale(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = MIN(p->n_threads, chunk_count);
-    if (!htp_ops_context_set_n_threads(octx, n_threads)) {
+    const uint32_t n_hvx = MIN(p->n_hvx, chunk_count);
+    if (!htp_ops_context_set_n_hvx(octx, n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    const uint32_t chunks_per_thread = fastdiv(chunk_count + n_threads - 1, &octx->n_threads_div);
+    const uint32_t chunks_per_hvx = fastdiv(chunk_count + n_hvx - 1, &octx->n_hvx_div);
 
     size_t lut_x_size = 0;
     size_t elem_y_sz  = sizeof(uint32_t);
@@ -946,13 +959,13 @@ int op_upscale(struct htp_ops_context * octx) {
         .lut_y              = lut_y,
         .chunk_start        = chunk_start,
         .chunk_count        = chunk_count,
-        .chunks_per_thread  = chunks_per_thread,
+        .chunks_per_hvx     = chunks_per_hvx,
     };
 
     htp_upscale_vtcm_layout_build(&ctx.layout, src_x, src_y, dst_x, dst_y,
-                                  p->dst_nrows_per_chunk, p->inv_sf1, p->filter_radius1, n_threads);
+                                  p->dst_nrows_per_chunk, p->inv_sf1, p->filter_radius1, n_hvx);
 
-    work_queue_run(octx->ctx->work_queue, upscale_worker, &ctx, n_threads);
+    work_queue_run(octx->ctx->hvx_queue, upscale_thread, &ctx, n_hvx);
 
     return HTP_STATUS_OK;
 }

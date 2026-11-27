@@ -304,6 +304,22 @@ Unlike host-level tensor-splitting, row-splitting is executed entirely inside th
 You can also combine row-splitting with layer-splitting across multiple grouped devices (e.g. `--devices 'HTP0[0-1],HTP1[2-3]'`
 on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs using virtual sessions 0 and 1).
 
+## Numerical Precision and End-to-End Accuracy
+
+By default, the Hexagon backend is tuned for higher NPU throughput and lower memory bandwidth while preserving strong
+end-to-end accuracy across typical models. Specifically, batched matrix multiplications default to `W8A8` integer HMX
+(`--hex-mm-select 3`), which dynamically quantizes activations into 8-bit (`uint8` x `int8`) blocks with a 2048-element
+`K`-group scale (using HVX when `M <= 4`),
+and internal `FP32` activation tensors within each HTP subgraph are automatically lowered in-place to `FP16`
+(`--hex-oplower 1`). If a particular model or workload exhibits accuracy degradation (for example due to large activation
+outliers or `FP16` residual overflow), try stepping down to higher-precision configurations in the following order:
+
+1. `--hex-mm-select 4 --hex-oplower 1`: pure `W8A8` INT HMX everywhere + internal `FP16` lowering (maximum prefill speed)
+2. `--hex-mm-select 3 --hex-oplower 1` (default): hybrid `W8A8` INT HMX (FP16 HMX on post-GLU / `GGML_PREC_F32` projections) + internal `FP16` lowering
+3. `--hex-mm-select 3 --hex-oplower 0`: hybrid `W8A8` INT HMX + `FP32` intermediate activations
+4. `--hex-mm-select 2 --hex-oplower 1`: `FP16` HMX everywhere + internal `FP16` lowering
+5. `--hex-mm-select 2 --hex-oplower 0`: `FP16` HMX everywhere + `FP32` intermediate activations
+
 ## Environment variables
 
 - `GGML_HEXAGON_DEVICES` (default: not set, defaults to HTP0 session)
@@ -325,10 +341,14 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
   Controls the number of HVX hardware threads to use. The default is all (actual number varies depending on the hardware version).
 
 - `GGML_HEXAGON_VTCM_SIZE=0`
-  Overrides the VTCM size used by each session. Accepts `K`, `M` and `G` suffixes; a plain number is in MB. The default (0) uses the size the hardware reports. Values above the hardware size will fail to start the session.
+  Overrides the VTCM size used by each session. Accepts `K`, `M` and `G` suffixes; a plain number is in MB.
+  The default (0) uses the size the hardware reports. Values above the hardware size will fail to start the session.
 
-- `GGML_HEXAGON_HOSTBUF=1` (default: 0, disabled)
-  Enables allocating host buffers for debugging. By default, host buffers are disabled.
+- `GGML_HEXAGON_HOSTBUF=0` (default: 1, enabled)
+  Controls host buffer (`HTP*-HOST`) allocation in shared FastRPC memory to avoid host-device tensor copies.
+  CPU-assigned weights (input embeddings like `token_embd` and `per_layer_token_embd`, and tensors overridden with `-ot ...=CPU`)
+  are placed in host buffers as well. On older drivers/FW, large models can run out of IOVA space when these are mapped.
+  Pass `--no-host` to keep CPU-assigned weights in regular CPU memory (`-ot ...=CPU` alone is not sufficient).
 
 - `GGML_HEXAGON_DMA64=0` (default: enabled on v81+)
   Disables 64-bit DMA for model weights. Set to `1` to enable it explicitly on a supported architecture.
@@ -394,3 +414,27 @@ on 4 physical NPUs, or `--devices 'HTP0[0-1:0],HTP1[0-1:1]'` on 2 physical NPUs 
   # Disable ADD and SUB on Hexagon (fall back to CPU or GPU)
   ./scripts/snapdragon/run.py --target adb --hex-opfilter "ADD|SUB" -- llama-cli ...
   ```
+
+- `GGML_HEXAGON_OPLOWER=N`
+  Controls internal FP32-to-FP16 activation tensor lowering inside HTP opbatches (configurable via `--hex-oplower` in `run.py`):
+
+  - `0`: Disabled - keep internal activations in FP32
+  - `1`: Enabled (default) - lower internal `FP32` activation tensors across the opbatch to `FP16` while respecting `GGML_PREC_F32` hints
+
+- `GGML_HEXAGON_MM_SELECT=N`
+  Selects the matrix multiplication engine on HTP (configurable via `--hex-mm-select` in `run.py`):
+
+  - `0`: Disabled (falls back to CPU or GPU)
+  - `1`: HVX vector kernels only
+  - `2`: FP16 HMX matrix engine (`M > 4`) with HVX decode (`M <= 4`)
+  - `3`: Hybrid INT HMX `W8A8` (`uint8` activations x `int8` weights) with FP16 HMX fallback on post-GLU / `GGML_PREC_F32` projections and HVX decode (`M <= 4`) (default; automatically defaults to 2 on multi-session v73 hardware unless overridden)
+  - `4`: Pure INT HMX `W8A8` everywhere (`M > 4`) with HVX decode (`M <= 4`)
+
+- `GGML_HEXAGON_OPPOLL=N`
+  Controls host polling while waiting for HTP opbatch completion (configurable via `--hex-oppoll` in `run.py`):
+
+  - `0`: Blocking wait (lowest host CPU usage)
+  - `1`: Full polling (keeps the host CPU awake for minimum wakeup latency; best for peak benchmarking and profiling)
+  - `> 1`: Hybrid polling budget in milliseconds - polls for up to `N` ms per opbatch before falling back to a blocking wait (default: `50` when supported by the FastRPC driver, `0` otherwise)
+
+  The default (`50`) is tuned for general performance and thermal/power balance (covers decode batches while letting the CPU sleep during longer prefills). For benchmarking, consider more aggressive settings like `10`-`20` or `1` for full polling.

@@ -8,8 +8,6 @@
 #include "hex-common.h"
 #include "hex-fastdiv.h"
 
-#define HTP_TENSOR_MDEV_LINE_SIZE   128
-
 // Currently HMX requires 32x32 tile formats (do not change)
 #define HTP_TENSOR_TILE_N_COLS      32
 #define HTP_TENSOR_TILE_N_ROWS      32
@@ -17,9 +15,17 @@
 #define HTP_TENSOR_TILE_SIZE_F16    2048
 #define HTP_TENSOR_TILE_SIZE_Q4_0   576
 #define HTP_TENSOR_TILE_SIZE_Q4_1   640
+#define HTP_TENSOR_TILE_SIZE_Q5_0   704
+#define HTP_TENSOR_TILE_SIZE_Q5_1   768
 #define HTP_TENSOR_TILE_SIZE_Q8_0   1088
 #define HTP_TENSOR_TILE_SIZE_IQ4_NL 576
 #define HTP_TENSOR_TILE_SIZE_MXFP4  544
+#define HTP_TENSOR_TILE_SIZE_NVFP4  576
+#define HTP_TENSOR_TILE_SIZE_IQ2_XXS 264
+#define HTP_TENSOR_TILE_SCRATCH_IQ2_XXS 256
+#define HTP_IQ2XXS_NIBBLE_BYTES         128   // 16 words for vlut16, padded to a vector
+#define HTP_IQ2XXS_GRID_BYTES           512   // 256 entries x 8 elements x 2-bit magnitude code
+#define HTP_IQ2XXS_LUT_BYTES            (HTP_IQ2XXS_NIBBLE_BYTES + HTP_IQ2XXS_GRID_BYTES)
 #define HTP_TENSOR_TILE_SIZE_Q4_K   640
 #define HTP_TENSOR_TILE_SIZE_Q5_K   768
 #define HTP_TENSOR_TILE_SIZE_Q6_K   896
@@ -30,7 +36,7 @@
 #define HTP_TENSOR_TILE_K_Q2_0      64
 #define HTP_TENSOR_TILE_SIZE_Q2_0   576
 
-// Tiled weight tensor layouts (Q4_0, Q8_0, IQ4_NL, MXFP4, Q1_0, Q2_0, K-quants):
+// Tiled weight tensor layouts (Q4_0, Q5_0, Q5_1, Q8_0, IQ4_NL, MXFP4, NVFP4, IQ2_XXS, Q1_0, Q2_0, K-quants):
 // See docs/backend/snapdragon/developer.md ("Tiled Weight Formats").
 
 struct htp_tensor_mdev_range {
@@ -59,53 +65,6 @@ static inline bool htp_tensor_is_contiguous(const struct htp_tensor * t, uint32_
 
 static inline bool htp_tensor_is_permuted(const struct htp_tensor * t) {
     return t->nb[0] > t->nb[1] || t->nb[1] > t->nb[2] || t->nb[2] > t->nb[3];
-}
-
-static inline bool htp_tensor_mdev_data_aligned(const struct htp_tensor * t) {
-    return ((uintptr_t) t->data & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0;
-}
-
-static inline bool htp_tensor_can_row_partition(const struct htp_tensor * t, uint32_t elem_size) {
-    if (!htp_tensor_mdev_data_aligned(t)) {
-        return false;
-    }
-    if (t->ne[0] != 1 && t->nb[0] != elem_size) {
-        return false;
-    }
-    if (htp_tensor_is_permuted(t)) {
-        return false;
-    }
-    if (t->ne[1] > 1 && (t->nb[1] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) != 0) return false;
-    if (t->ne[2] > 1 && (t->nb[2] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) != 0) return false;
-    if (t->ne[3] > 1 && (t->nb[3] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) != 0) return false;
-    return true;
-}
-
-static inline bool htp_tensor_mdev_rows_per_chunk(const struct htp_tensor * t, uint32_t elem_size, uint32_t row_size, uint32_t * rows_per_chunk) {
-    *rows_per_chunk = 0;
-
-    if (!htp_tensor_mdev_data_aligned(t)) {
-        return false;
-    }
-    if (t->ne[0] != 1 && t->nb[0] != elem_size) {
-        return false;
-    }
-    if (htp_tensor_is_permuted(t)) {
-        return false;
-    }
-    if (t->ne[1] > 1 && (t->nb[1] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0 &&
-        (t->ne[2] <= 1 || (t->nb[2] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0) &&
-        (t->ne[3] <= 1 || (t->nb[3] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0)) {
-        *rows_per_chunk = 1;
-        return true;
-    }
-    if (t->nb[1] == row_size &&
-        (t->ne[2] <= 1 || t->nb[2] == t->nb[1] * t->ne[1]) &&
-        (t->ne[3] <= 1 || t->nb[3] == t->nb[2] * t->ne[2])) {
-        *rows_per_chunk = (row_size > 0) ? (HTP_TENSOR_MDEV_LINE_SIZE / hex_gcd_u32(row_size, HTP_TENSOR_MDEV_LINE_SIZE)) : 1;
-        return true;
-    }
-    return false;
 }
 
 static inline struct htp_tensor_mdev_range htp_tensor_mdev_partition(uint32_t total_units, uint32_t units_per_chunk, uint32_t mdev_idx, uint32_t mdev_count, const struct fastdiv_values * mdev_count_div) {
@@ -143,6 +102,8 @@ static inline uint32_t htp_tensor_get_tile_size(int type) {
         case HTP_TYPE_Q4_0:   return HTP_TENSOR_TILE_SIZE_Q4_0;
         case HTP_TYPE_IQ4_NL: return HTP_TENSOR_TILE_SIZE_IQ4_NL;
         case HTP_TYPE_Q4_1:   return HTP_TENSOR_TILE_SIZE_Q4_1;
+        case HTP_TYPE_Q5_0:   return HTP_TENSOR_TILE_SIZE_Q5_0;
+        case HTP_TYPE_Q5_1:   return HTP_TENSOR_TILE_SIZE_Q5_1;
         case HTP_TYPE_Q4_K:   return HTP_TENSOR_TILE_SIZE_Q4_K;
         case HTP_TYPE_Q8_0:   return HTP_TENSOR_TILE_SIZE_Q8_0;
         case HTP_TYPE_Q5_K:   return HTP_TENSOR_TILE_SIZE_Q5_K;
@@ -152,6 +113,8 @@ static inline uint32_t htp_tensor_get_tile_size(int type) {
         case HTP_TYPE_Q1_0:   return HTP_TENSOR_TILE_SIZE_Q1_0;
         case HTP_TYPE_Q2_0:   return HTP_TENSOR_TILE_SIZE_Q2_0;
         case HTP_TYPE_MXFP4:  return HTP_TENSOR_TILE_SIZE_MXFP4;
+        case HTP_TYPE_NVFP4:  return HTP_TENSOR_TILE_SIZE_NVFP4;
+        case HTP_TYPE_IQ2_XXS: return HTP_TENSOR_TILE_SIZE_IQ2_XXS;
         case HTP_TYPE_F16:    return HTP_TENSOR_TILE_SIZE_F16;
         default:              return 0;
     }
@@ -166,7 +129,9 @@ static inline uint32_t htp_tensor_get_tile_k(int type) {
 }
 
 static inline uint32_t htp_tensor_get_tile_padded_size(int type) {
-    return (htp_tensor_get_tile_size(type) + 127u) & ~127u;
+    // IQ2_XXS: the last 256 B of the padded tile are the vgather scratch of its vec-dot
+    const uint32_t scratch = (type == HTP_TYPE_IQ2_XXS) ? HTP_TENSOR_TILE_SCRATCH_IQ2_XXS : 0u;
+    return (htp_tensor_get_tile_size(type) + scratch + 127u) & ~127u;
 }
 
 static inline bool htp_tensor_is_tiled(const struct htp_tensor * t) {
@@ -182,7 +147,11 @@ static inline uint32_t htp_tensor_get_row_size(int type, uint32_t ne00) {
         case HTP_TYPE_Q4_0:
         case HTP_TYPE_IQ4_NL: return (ne00 / 32) * 18;
         case HTP_TYPE_Q4_1:   return (ne00 / 32) * 20;
+        case HTP_TYPE_Q5_0:   return (ne00 / 32) * 22;
+        case HTP_TYPE_Q5_1:   return (ne00 / 32) * 24;
         case HTP_TYPE_MXFP4:  return (ne00 / 32) * 17;
+        case HTP_TYPE_NVFP4:  return (ne00 / 64) * 36;
+        case HTP_TYPE_IQ2_XXS: return (ne00 / 256) * 66;
         case HTP_TYPE_Q2_K:   return (ne00 / 256) * 84;
         case HTP_TYPE_Q2_0:   return (ne00 / 64) * 18;
         case HTP_TYPE_Q3_K:   return (ne00 / 256) * 110;
@@ -195,5 +164,17 @@ static inline uint32_t htp_tensor_get_row_size(int type, uint32_t ne00) {
         default:              return 0;
     }
 }
+
+static inline size_t htp_tensor_nbytes(const struct htp_tensor * t) {
+    return (size_t) htp_tensor_get_row_size(t->type, t->ne[0]) * t->ne[1] * t->ne[2] * t->ne[3];
+}
+
+#ifdef __HVX_ARCH__
+#include "htp-thread.h"
+
+// Read tensor data contiguously into a 128-byte aligned cached DDR buffer.
+// [dst, hex_align_up(dst + bytes, 128)) must be exclusively owned by the caller.
+size_t htp_tensor_read(const htp_thread_t * th, void * dst, size_t dst_size, const struct htp_tensor * src);
+#endif
 
 #endif // HTP_TENSOR_H

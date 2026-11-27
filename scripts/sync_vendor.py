@@ -5,7 +5,11 @@ import os
 import sys
 import subprocess
 
-HTTPLIB_VERSION = "refs/tags/v0.64.0"
+HTTPLIB_VERSION = "refs/tags/v0.67.0"
+JSON_VERSION    = "v3.12.0"
+
+# stb has no release tag, so we pin a commit (stb_image v2.32)
+STB_COMMIT = "9f755b604db3492df2cbeb39bf84b81e3e3932e3"
 
 # used by examples/gguf-hash, these repos have no release tag, so we pin a commit
 XXHASH_COMMIT      = "9f465f1ea932d6ad9a26cd77496311ffa544cd68"
@@ -14,10 +18,10 @@ SHA256_COMMIT      = "5e637272c13f200872d55ff579f7e2ab6c3f252f"
 ROTATE_BITS_COMMIT = "27e784942f67db44abf2115c6638e735b579acd1"
 
 vendor = {
-    "https://github.com/nlohmann/json/releases/latest/download/json.hpp":     "vendor/nlohmann/json.hpp",
-    "https://github.com/nlohmann/json/releases/latest/download/json_fwd.hpp": "vendor/nlohmann/json_fwd.hpp",
+    f"https://github.com/nlohmann/json/releases/download/{JSON_VERSION}/json.hpp":     "vendor/nlohmann/json.hpp",
+    f"https://github.com/nlohmann/json/releases/download/{JSON_VERSION}/json_fwd.hpp": "vendor/nlohmann/json_fwd.hpp",
 
-    "https://raw.githubusercontent.com/nothings/stb/refs/heads/master/stb_image.h": "vendor/stb/stb_image.h",
+    f"https://raw.githubusercontent.com/nothings/stb/{STB_COMMIT}/stb_image.h": "vendor/stb/stb_image.h",
 
     # not using latest tag to avoid this issue: https://github.com/ggml-org/llama.cpp/pull/17179#discussion_r2515877926
     # "https://github.com/mackron/miniaudio/raw/refs/tags/0.11.24/miniaudio.h": "vendor/miniaudio/miniaudio.h",

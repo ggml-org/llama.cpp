@@ -203,6 +203,8 @@ void llama_model_deepseek41::load_arch_tensors(llama_model_loader & ml) {
         }
 
         layer.ffn_gate_inp    = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP,    "weight", i), {n_embd, n_expert}, 0);
+        // the reference computes the router in F32: https://huggingface.co/deepseek-ai/DeepSeek-V4.1-Flash-1017/blob/1bae0e1088993b9b82de08f59de5be5a34e42170/inference/model.py#L813
+        prec_policy.set_acc(layer.ffn_gate_inp, GGML_PREC_F32);
         layer.ffn_exp_probs_b = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B, "bias",   i), {n_expert}, 0);
         layer.ffn_exp_probs_b_vl = create_tensor(tn(LLM_TENSOR_FFN_EXP_PROBS_B_VL, "bias", i), {n_expert}, TENSOR_NOT_REQUIRED);
         layer.ffn_norm        = create_tensor(tn(LLM_TENSOR_FFN_NORM,        "weight", i), {n_embd}, 0);
@@ -222,7 +224,7 @@ std::unique_ptr<llm_graph_context> llama_model_deepseek41::build_arch_graph(cons
         throw std::runtime_error("DeepSeek-V4.1 has no MTP graph: its DSpark draft is a separate DFLASH GGUF "
                 "(convert_hf_to_gguf.py --dspark), used with --spec-type draft-dspark");
     }
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // Engram n-gram hash (engram.py NgramHashState.forward)
@@ -533,8 +535,8 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
             ggml_tensor * ik = ggml_view_4d(ctx0, comp_all, n_idx_embd, 1, n_comp, n_stream,
                     comp_all->nb[1], comp_all->nb[2], comp_all->nb[3], ggml_row_size(comp_all->type, n_embd_head));
             // the fused indexer reads the strided view in place, the unfused path needs it contiguous; CUDA has no same-type copy of quantized views, so dequantize them
-            const bool fused_idx = sparse && cparams.fused_lid && ci.kq_mask->type == GGML_TYPE_F16;
-            if (ggml_is_quantized(ik->type)) {
+            const bool fused_idx = sparse && ci.kq_mask->type == GGML_TYPE_F16;
+            if (ggml_is_quantized(ik->type) && !fused_idx) {
                 ik = ggml_cast(ctx0, ik, GGML_TYPE_F32);
             } else if (!fused_idx) {
                 ik = ggml_cont(ctx0, ik);
@@ -572,7 +574,6 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                 ggml_tensor * score = nullptr;
                 if (fused_idx) {
                     score = ggml_lightning_indexer(ctx0, iq, ik, iw, ci.kq_mask);
-                    res->add_fused_node({LLM_FUSED_OP_LIGHTNING_INDEXER, score, il});
                 } else {
                     ggml_tensor * iqc = ggml_view_4d(ctx0, iq, iq->ne[0], iq->ne[1], nc, n_stream, iq->nb[1], iq->nb[2], iq->nb[3], t0*iq->nb[2]);
 
@@ -642,7 +643,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
         ggml_build_forward_expand(gf, inp_attn->mctx->cpy_k(ctx0, kv, inp_attn->get_k_idxs(), il));
 
         ggml_tensor * raw_k    = inp_attn->mctx->get_k(ctx0, il);
-        ggml_tensor * raw_mask = inp_attn->get_kq_mask();
+        ggml_tensor * raw_mask = inp_attn->self_attn_mask.raw;
 
         const int32_t topk_src = hparams.dsv41_topk_src[il];
         const int64_t k_sel    = top_k->ne[0];
@@ -713,7 +714,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                 cb(kq_mask, "comp_kq_mask_sel", il);
             }
 
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, 0, kq_scale, il);
+            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, nullptr, layer.attn_sinks, nullptr, 0, kq_scale, il);
         } else {
             // dense attention over [window | all compressed rows], selection applied as a mask
             ggml_tensor * comp_k = ggml_view_4d(ctx0, comp_all, n_embd_head, 1, n_comp, n_stream,
@@ -740,7 +741,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 
             // at most window + top-k visible columns per query: lets CUDA FA gather only those
             const int64_t n_kv_max = sparse ? std::min<int64_t>(raw_mask->ne[0], hparams.n_swa) + k_sel : 0;
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, layer.attn_sinks, nullptr, n_kv_max, kq_scale, il);
+            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, nullptr, layer.attn_sinks, nullptr, n_kv_max, kq_scale, il);
         }
         if (k_rot) {
             out = llama_mul_mat_hadamard(ctx0, out, k_rot);
@@ -765,9 +766,9 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
     return out;
 }
 
-llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_graph_params & params) :
-    llama_model_deepseek4::graph(params) {
-    const auto & model = static_cast<const llama_model_deepseek41 &>(model_base);
+llama_model_deepseek41::graph::graph(const llm_graph_params & params) :
+    llama_model_deepseek4::graph(params, no_build{}) {
+    const auto & model = static_cast<const llama_model_deepseek41 &>(this->model);
 
     static const bool sparse_env = dsv41_env_on("LLAMA_DSV41_SPARSE");
     sparse = sparse_env;
@@ -781,7 +782,7 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
     ggml_tensor * inp_pos = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
     llm_graph_input_dsv4 * inp_dsv4 = build_inp_dsv4();
-    ggml_build_forward_expand(gf, inp_dsv4->get_raw()->self_kq_mask);
+    ggml_build_forward_expand(gf, inp_dsv4->get_raw()->self_attn_mask.raw);
 
     auto inp41 = std::make_unique<llm_graph_input_dsv41>(model, inp_dsv4->mctx);
     // embedding input has no token ids: it skips Engram, like the reference's masked (image) positions
@@ -875,9 +876,7 @@ llama_model_deepseek41::graph::graph(const llama_model & model_base, const llm_g
         cur = build_norm(cur, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        // F32 router accumulation: expert selection is near-tie sensitive
         ggml_tensor * logits = build_lora_mm(layer.ffn_gate_inp, cur);
-        ggml_prec_set_acc(logits, GGML_PREC_F32);
         cb(logits, "ffn_moe_logits", il);
 
         // image (embedding) tokens use the vision router bias, as DeepSeek-V4

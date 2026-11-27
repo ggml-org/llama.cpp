@@ -131,15 +131,9 @@ endif()
 # POSIX conformance
 #
 
-# clock_gettime came in POSIX.1b (1993)
-# CLOCK_MONOTONIC came in POSIX.1-2001 / SUSv3 as optional
-# posix_memalign came in POSIX.1-2001 / SUSv3
-# M_PI is an XSI extension since POSIX.1-2001 / SUSv3, came in XPG1 (1985)
-
-# Somehow in OpenBSD whenever POSIX conformance is specified
-# some string functions rely on locale_t availability,
-# which was introduced in POSIX.1-2008, forcing us to go higher
-if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD")
+# POSIX.1-2001 with XSI extensions provides clock_gettime, CLOCK_MONOTONIC, posix_memalign and M_PI.
+# OpenBSD needs POSIX.1-2008 for locale_t. FreeBSD needs it for F_DUPFD_CLOEXEC and strnlen.
+if (CMAKE_SYSTEM_NAME MATCHES "OpenBSD|FreeBSD")
     add_compile_definitions(_XOPEN_SOURCE=700)
 elseif (CMAKE_SYSTEM_NAME MATCHES "AIX")
     # Don't define _XOPEN_SOURCE.  We need _ALL_SOURCE, which is the default,
@@ -216,6 +210,12 @@ set_target_properties(ggml-base PROPERTIES
 configure_file(ggml-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/ggml-version.h @ONLY)
 
 target_include_directories(ggml-base PRIVATE . ${CMAKE_CURRENT_BINARY_DIR})
+
+# icx/icpx default to -fp-model=fast, which contracts and reassociates the reference quantizers, so their output
+# depends on the compiler; keep ggml-base IEEE-exact so the CPU reference matches gcc/clang builds
+if (CMAKE_C_COMPILER_ID STREQUAL "IntelLLVM")
+    target_compile_options(ggml-base PRIVATE -fp-model=precise)
+endif()
 if (GGML_BACKEND_DL)
     target_compile_definitions(ggml-base PUBLIC GGML_BACKEND_DL)
 endif()
@@ -231,7 +231,7 @@ if (GGML_OPENMP_FETCH)
         message(FATAL_ERROR "GGML_OPENMP_FETCH currently requires Clang on Windows")
     endif()
 
-    set(GGML_OPENMP_LLVM_VERSION "20.1.8")
+    set(GGML_OPENMP_LLVM_VERSION "22.1.8")
     string(REGEX MATCH "^[0-9]+" GGML_OPENMP_LLVM_VERSION_MAJOR "${GGML_OPENMP_LLVM_VERSION}")
     string(REGEX MATCH "^[0-9]+" GGML_OPENMP_COMPILER_VERSION_MAJOR "${CMAKE_C_COMPILER_VERSION}")
     if (NOT GGML_OPENMP_COMPILER_VERSION_MAJOR STREQUAL GGML_OPENMP_LLVM_VERSION_MAJOR)
@@ -242,11 +242,11 @@ if (GGML_OPENMP_FETCH)
     if (GGML_OPENMP_SYSTEM_PROCESSOR MATCHES "^(amd64|x86_64)$")
         set(GGML_OPENMP_ARCH "x64")
         set(GGML_OPENMP_INSTALLER_SUFFIX "win64")
-        set(GGML_OPENMP_INSTALLER_SHA256 "3197846a2b19063687dd56e93e34cd941e3548d907f23a6131571321bdf9fe7b")
+        set(GGML_OPENMP_INSTALLER_SHA256 "16e5709785fef73c854646241c4a92c5cd574318d1b33c63330dd7721903e55c")
     elseif (GGML_OPENMP_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
         set(GGML_OPENMP_ARCH "arm64")
         set(GGML_OPENMP_INSTALLER_SUFFIX "woa64")
-        set(GGML_OPENMP_INSTALLER_SHA256 "7c4ac97eb2ae6b960ca5f9caf3ff6124c8d2a18cc07a7840a4d2ea15537bad8e")
+        set(GGML_OPENMP_INSTALLER_SHA256 "76f44ef1ba6eeb5a65904e9500f042f588fade49952778ce48f0374daa934396")
     else()
         message(FATAL_ERROR "GGML_OPENMP_FETCH does not support ${CMAKE_SYSTEM_PROCESSOR}")
     endif()
@@ -621,7 +621,7 @@ endforeach()
 
 target_link_libraries(ggml-base PRIVATE Threads::Threads)
 
-if (DEFINED MATH_LIBRARY)
+if (MATH_LIBRARY)
     target_link_libraries(ggml-base PRIVATE ${MATH_LIBRARY})
 elseif (NOT WIN32 AND NOT DEFINED ENV{ONEAPI_ROOT})
     target_link_libraries(ggml-base PRIVATE m)

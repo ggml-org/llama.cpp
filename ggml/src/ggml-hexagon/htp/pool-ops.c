@@ -1,11 +1,10 @@
-#pragma clang diagnostic ignored "-Wunused-variable"
-
 #include <float.h>
 #include <HAP_farf.h>
 
 #include "hex-common.h"
 #include "dma-queue.h"
-#include "hex-profile.h"
+#include "dma-pipeline.h"
+#include "htp-trace.h"
 #include "htp-ctx.h"
 #include "htp-ops.h"
 #include "htp-tensor.h"
@@ -147,9 +146,13 @@ static inline void pool_pixel_boundary_vec(
     HVX_Vector acc = mask_identity;
     for (uint32_t ky = ky_lo; ky < ky_hi; ++ky) {
         const float * row = src + (uint32_t) (iy0 + (int32_t) ky) * p->src_x;
-        for (uint32_t k = 0; k < valid_kx; k += VLEN_FP32) {
-            const uint32_t k_rem = valid_kx - k;
-            const uint32_t n = (k_rem < VLEN_FP32) ? k_rem : VLEN_FP32;
+        uint32_t k = 0;
+        for (; k + VLEN_FP32 <= valid_kx; k += VLEN_FP32) {
+            const HVX_Vector v = *(const HVX_UVector *) (row + ix0 + kx_lo + k);
+            acc = is_max ? Q6_Vsf_vmax_VsfVsf(acc, v) : hvx_vec_add_f32_f32(acc, v);
+        }
+        if (k < valid_kx) {
+            const uint32_t n = valid_kx - k;
             const HVX_VectorPred q = Q6_Q_vsetq_R(n * sizeof(float));
             const HVX_Vector raw = *(const HVX_UVector *) (row + ix0 + kx_lo + k);
             const HVX_Vector v = Q6_V_vmux_QVV(q, raw, mask_identity);
@@ -249,96 +252,103 @@ struct pool_2d_context {
     const struct htp_pool_2d_kernel_params * kparams;
     struct htp_pool_vtcm_layout layout;
     pool_plane_fn_t pool_plane;
-    uint32_t n_threads;
+    uint32_t n_hvx;
     uint32_t plane_start;
     uint32_t plane_count;
-    uint32_t planes_per_thread;
+    uint32_t planes_per_hvx;
 };
 
-static void pool_2d_thread(unsigned int nth, unsigned int ith, void * data) {
+struct pool_pipe_state {
+    dma_addr_t                               src_data;
+    dma_addr_t                               dst_data;
+    const struct htp_pool_2d_kernel_params * kparams;
+    pool_plane_fn_t                          pool_plane;
+    uint32_t                                 src_plane_bytes;
+    uint32_t                                 dst_plane_bytes;
+    uint32_t                                 src_spad_half;
+    uint32_t                                 dst_spad_half;
+    uint32_t                                 plane;
+    uint32_t                                 plane_end;
+};
+
+static bool pool_next_task(void * ctx, struct dma_pipe_task * task) {
+    struct pool_pipe_state * s = (struct pool_pipe_state *) ctx;
+    if (s->plane >= s->plane_end) {
+        return false;
+    }
+    task->row = s->plane++;
+    task->off = 0;
+    task->len = 0;
+    task->aux = 0;
+    return true;
+}
+
+static void pool_push_in(dma_queue * dma_q, void * ctx, const struct dma_pipe_task * task, void * in_spad) {
+    struct pool_pipe_state * s = (struct pool_pipe_state *) ctx;
+    const dma_addr_t src_addr = s->src_data + (size_t) task->row * s->src_plane_bytes;
+    dma_queue_push(dma_q, dma_make_data(in_spad, src_addr),
+                   s->src_spad_half, s->src_plane_bytes, s->src_plane_bytes, 1);
+}
+
+static void pool_compute(void * ctx, const struct dma_pipe_task * task, void * out_spad, void * in_spad) {
+    (void) task;
+    struct pool_pipe_state * s = (struct pool_pipe_state *) ctx;
+    s->pool_plane((const float *) in_spad, (float *) out_spad, s->kparams);
+}
+
+static void pool_push_out(dma_queue * dma_q, void * ctx, const struct dma_pipe_task * task, void * out_spad) {
+    struct pool_pipe_state * s = (struct pool_pipe_state *) ctx;
+    const dma_addr_t dst_addr = s->dst_data + (size_t) task->row * s->dst_plane_bytes;
+    dma_queue_push(dma_q, dma_make_data(dst_addr, out_spad),
+                   s->dst_plane_bytes, s->dst_spad_half, s->dst_plane_bytes, 1);
+}
+
+static void pool_2d_thread(const htp_thread_t * th, unsigned int nth, unsigned int ith, void * data) {
     struct pool_2d_context * ctx = (struct pool_2d_context *) data;
     const struct htp_pool_2d_kernel_params * p = ctx->kparams;
     const struct htp_pool_vtcm_layout * L = &ctx->layout;
     const struct htp_tensor * src0 = ctx->octx->src[0];
     const struct htp_tensor * dst = ctx->octx->dst;
-    pool_plane_fn_t pool_plane = ctx->pool_plane;
-    const uint32_t planes_per_thread = ctx->planes_per_thread;
-    const uint32_t first = ctx->plane_start + ith * planes_per_thread;
-    const uint32_t last = MIN(first + planes_per_thread, ctx->plane_start + ctx->plane_count);
+    const uint32_t planes_per_hvx = ctx->planes_per_hvx;
+    const uint32_t first = ctx->plane_start + ith * planes_per_hvx;
+    const uint32_t last = MIN(first + planes_per_hvx, ctx->plane_start + ctx->plane_count);
 
     if (first >= last) {
         return;
     }
 
-    struct htp_thread_trace * tr = &ctx->octx->ctx->trace[ith];
-    dma_queue * dma_queue = ctx->octx->ctx->dma[ith];
-
-    const uint32_t src_plane_bytes = L->src_plane_bytes;
-    const uint32_t dst_plane_bytes = L->dst_plane_bytes;
-    const uint32_t src_spad_half   = (uint32_t) L->src_spad_half_size;
-    const uint32_t dst_spad_half   = (uint32_t) L->dst_spad_half_size;
+    const uint32_t src_spad_half = (uint32_t) L->src_spad_half_size;
+    const uint32_t dst_spad_half = (uint32_t) L->dst_spad_half_size;
 
     uint8_t * vtcm_base = (uint8_t *) ctx->octx->ctx->vtcm_base;
-    uint8_t * src_spad  = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_src) + ith * L->src_bytes_per_thread;
-    uint8_t * dst_spad  = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_dst) + ith * L->dst_bytes_per_thread;
+    uint8_t * src_spad  = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_src) + ith * L->src_bytes_per_hvx;
+    uint8_t * dst_spad  = VTCM_LAYOUT_PTR(uint8_t, vtcm_base, L->off_dst) + ith * L->dst_bytes_per_hvx;
 
-    float * srcb2[2] = { (float *) src_spad, (float *) (src_spad + src_spad_half) };
-    float * dstb2[2] = { (float *) dst_spad, (float *) (dst_spad + dst_spad_half) };
+    void * in_buf[2]  = { src_spad, src_spad + src_spad_half };
+    void * out_buf[2] = { dst_spad, dst_spad + dst_spad_half };
 
-    const uint32_t total = last - first;
+    struct pool_pipe_state s = {
+        .src_data        = src0->data,
+        .dst_data        = dst->data,
+        .kparams         = p,
+        .pool_plane      = ctx->pool_plane,
+        .src_plane_bytes = L->src_plane_bytes,
+        .dst_plane_bytes = L->dst_plane_bytes,
+        .src_spad_half   = src_spad_half,
+        .dst_spad_half   = dst_spad_half,
+        .plane           = first,
+        .plane_end       = last,
+    };
 
-    // Warm up the pipeline: push up to 2 initial (dummy dst, src) transfer pairs.
-    for (uint32_t i = 0; i < total && i < 2; ++i) {
-        dma_queue_push(dma_queue,
-                       dma_make_data(dst->data, dstb2[i]),
-                       dst_plane_bytes, dst_spad_half,
-                       dst_plane_bytes, 0);
+    dma_pipe_io_run(th->dma_q, th->trace, &s, in_buf, out_buf, pool_next_task, pool_push_in, pool_compute, pool_push_out);
 
-        const dma_addr_t src_addr = src0->data + (first + i) * src_plane_bytes;
-        dma_queue_push(dma_queue,
-                       dma_make_data(srcb2[i], src_addr),
-                       src_spad_half, src_plane_bytes,
-                       src_plane_bytes, 1);
-    }
-
-    for (uint32_t i = 0; i < total; ++i) {
-        const uint32_t plane = first + i;
-        const uint32_t buf   = i & 1u;
-        float * srcb = srcb2[buf];
-        float * dstb = dstb2[buf];
-
-        dma_queue_pop(dma_queue); // dst writeback from plane i - 2 (or dummy on iter 0, 1)
-        dma_queue_pop(dma_queue); // input for plane i
-
-        htp_trace_event_start(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) plane);
-        pool_plane(srcb, dstb, p);
-        htp_trace_event_stop(tr, HTP_TRACE_EVT_HVX_COMP, (uint16_t) plane);
-
-        const dma_addr_t dst_addr = dst->data + plane * dst_plane_bytes;
-        dma_queue_push(dma_queue,
-                       dma_make_data(dst_addr, dstb),
-                       dst_plane_bytes, dst_spad_half,
-                       dst_plane_bytes, 1);
-
-        if (i + 2 < total) {
-            const dma_addr_t next_src_addr = src0->data + (plane + 2) * src_plane_bytes;
-            dma_queue_push(dma_queue,
-                           dma_make_data(srcb, next_src_addr),
-                           src_spad_half, src_plane_bytes,
-                           src_plane_bytes, 1);
-        }
-    }
-
-    dma_queue_flush(dma_queue);
-
-    FARF(HIGH, "pool2d-f32-dma %d/%d: %ux%ux%ux%u -> %ux%ux%ux%u (%u:%u)\n",
+    FARF(HIGH, "pool2d-f32 %d/%d: %ux%ux%ux%u -> %ux%ux%ux%u (%u:%u)\n",
          ith, nth, src0->ne[0], src0->ne[1], src0->ne[2], src0->ne[3],
          dst->ne[0], dst->ne[1], dst->ne[2], dst->ne[3], first, last);
     (void) nth;
 }
 
 int op_pool_2d(struct htp_ops_context * octx) {
-    const struct htp_tensor * dst = octx->dst;
     const struct htp_pool_2d_kernel_params * p =
         (const struct htp_pool_2d_kernel_params *) octx->kernel_params;
 
@@ -346,7 +356,7 @@ int op_pool_2d(struct htp_ops_context * octx) {
     uint32_t plane_count = p->planes;
     if (octx->ctx->mdev.count > 1) {
         const struct htp_tensor_mdev_range range = htp_tensor_mdev_partition(
-            plane_count, htp_tensor_mdev_data_aligned(dst) ? p->planes_per_chunk : 0,
+            plane_count, 1,
             octx->ctx->mdev.idx, octx->ctx->mdev.count, &octx->ctx->mdev.count_div);
         plane_start = range.start;
         plane_count = range.count;
@@ -355,12 +365,12 @@ int op_pool_2d(struct htp_ops_context * octx) {
         return HTP_STATUS_OK;
     }
 
-    const uint32_t n_threads = MIN(p->n_threads, plane_count);
-    if (!htp_ops_context_set_n_threads(octx, n_threads)) {
+    const uint32_t n_hvx = MIN(p->n_hvx, plane_count);
+    if (!htp_ops_context_set_n_hvx(octx, n_hvx)) {
         return HTP_STATUS_INVAL_PARAMS;
     }
 
-    const uint32_t planes_per_thread = fastdiv(plane_count + n_threads - 1, &octx->n_threads_div);
+    const uint32_t planes_per_hvx = fastdiv(plane_count + n_hvx - 1, &octx->n_hvx_div);
 
     pool_plane_fn_t pool_plane;
     switch (p->kernel_type) {
@@ -375,13 +385,13 @@ int op_pool_2d(struct htp_ops_context * octx) {
         .octx = octx,
         .kparams = p,
         .pool_plane = pool_plane,
-        .n_threads = n_threads,
+        .n_hvx = n_hvx,
         .plane_start = plane_start,
         .plane_count = plane_count,
-        .planes_per_thread = planes_per_thread,
+        .planes_per_hvx = planes_per_hvx,
     };
-    htp_pool_vtcm_layout_build(&ctx.layout, p->src_x, p->src_y, p->dst_x, p->dst_y, n_threads);
-    work_queue_run(octx->ctx->work_queue, pool_2d_thread, &ctx, n_threads);
+    htp_pool_vtcm_layout_build(&ctx.layout, p->src_x, p->src_y, p->dst_x, p->dst_y, n_hvx);
+    work_queue_run(octx->ctx->hvx_queue, pool_2d_thread, &ctx, n_hvx);
     return HTP_STATUS_OK;
 }
 

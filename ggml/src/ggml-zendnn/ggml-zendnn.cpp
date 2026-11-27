@@ -656,11 +656,12 @@ static void ggml_backend_zendnn_device_get_props(ggml_backend_dev_t dev, struct 
     props->type        = ggml_backend_zendnn_device_get_type(dev);
     ggml_backend_zendnn_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
-        /* .async                = */ false,
-        /* .host_buffer          = */ false,
-        /* .buffer_from_host_ptr = */ true,
-        /* .events               = */ false,
-        /* .mmap_support         = */ true,
+        /* .async                 = */ false,
+        /* .host_buffer           = */ false,
+        /* .buffer_from_host_ptr  = */ true,
+        /* .events                = */ false,
+        /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 
@@ -717,6 +718,15 @@ static bool ggml_backend_zendnn_device_supports_op(ggml_backend_dev_t dev, const
             const int64_t min_batch = 1;
 
             if(!ggml_is_contiguous(weights) || !ggml_is_contiguous(inputs)) {
+                return false;
+            }
+
+            // the inputs are read as F32; only BF16 weights also take BF16 inputs as they are
+            if (inputs->type != GGML_TYPE_F32 && !(inputs->type == GGML_TYPE_BF16 && weights->type == GGML_TYPE_BF16)) {
+                return false;
+            }
+
+            if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
                 return false;
             }
 

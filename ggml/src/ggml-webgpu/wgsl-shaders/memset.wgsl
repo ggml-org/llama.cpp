@@ -11,30 +11,33 @@ struct Params {
 var<uniform> params: Params;
 
 override wg_size: u32;
-override bytes_per_thread: u32;
 
 @compute @workgroup_size(wg_size)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x * bytes_per_thread;
+fn main(@builtin(workgroup_id) wid: vec3<u32>,
+        @builtin(num_workgroups) num_wg: vec3<u32>,
+        @builtin(local_invocation_id) lid: vec3<u32>) {
+
+    let i = (wid.x + wid.y * num_wg.x) * wg_size + lid.x;
     let start = params.offset;
     let end = params.offset + params.size;
+    let id = (start >> 2u) + i;
+    let id_u32 = id * 4;
 
-    for (var j: u32 = 0u; j < bytes_per_thread; j += 4) {
-        let byte_index = start + i + j;
-        if (byte_index + 4 <= end) {
-            output_buffer[byte_index >> 2] = params.value;
-        } else {
-            // Handle tail (unaligned)
-            for (var k: u32 = 0; k < 4; k++) {
-                let idx = byte_index + k;
-                if (idx < end) {
-                    let word_idx = idx >> 2;
-                    let bit_offset = (idx & 3) * 8u;
-                    let mask = ~(0xffu << bit_offset);
-                    let existing = output_buffer[word_idx];
-                    output_buffer[word_idx] = (existing & mask) | (params.value & (0xffu << bit_offset));
-                }
-            }
-        }
+    if (id_u32 >= end) {
+        return;
+    }
+
+    let lo = max(start, id_u32) - id_u32;
+    let hi = min(end, id_u32 + 4u) - id_u32;
+    var mask = 0xFFFFFFFFu << (8u * lo);
+    if (hi < 4u) {
+        mask &= (1u << (8u * hi)) - 1u;
+    }
+
+    if (mask == 0xFFFFFFFFu) {
+        output_buffer[id] = params.value;
+    } else {
+        let existing = output_buffer[id];
+        output_buffer[id] = (existing & ~(mask)) | (params.value & mask);
     }
 }

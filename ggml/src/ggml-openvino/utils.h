@@ -1,15 +1,19 @@
 #include "ggml-decoder.h"
 #include "ggml-impl.h"
 #include "ggml-openvino-extra.h"
+#include "model-cache.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <list>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <openvino/runtime/core.hpp>
 #include <openvino/runtime/infer_request.hpp>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -18,20 +22,33 @@
 // Cache key for a translated/compiled graph. Node count plus the two end node names identify a
 // graph during inference, where the same few graphs repeat for the whole session. The list of
 // external input names below tells those apart more precisely, but it walks every node and every
-// src slot, so it is built only when GGML_OPENVINO_FULL_GRAPH_KEY is set. Op tests run many small
-// graphs that can share a node count and end names, and need the full key.
+// src slot, so it is built only when GGML_OPENVINO_FULL_GRAPH_KEY is set. Sampler row names are
+// always included to distinguish sampler configurations, even when active subsets share the packed input. Op tests run
+// many small graphs that can share a node count and end names, and need the full key.
 struct graph_key {
     int n_nodes;
     int n_leaves;
     std::string first_node_name;
     std::string last_node_name;
-    // Each entry: "<node_idx>:<src_idx>:<op_type>"
+    // External source descriptors "<src_name>:<src_idx>:<op_type>" and sampler row Parameter names.
     std::vector<std::string> input_srcs;
 
     graph_key(const ggml_cgraph * cgraph, bool include_inputs = false) : n_nodes(cgraph->n_nodes), n_leaves(cgraph->n_leafs) {
         if (n_nodes > 0) {
             first_node_name = cgraph->nodes[0]->name;
             last_node_name = cgraph->nodes[n_nodes - 1]->name;
+        }
+
+        for (int i = 0; i < n_nodes; ++i) {
+            const auto * node = cgraph->nodes[i];
+            if (GgmlOvDecoder::is_sampling_view(node)) {
+                input_srcs.push_back("sampling_row_" + std::string(node->name) + "#n" + std::to_string(i));
+            }
+            // The output set is part of the model (one Result per output). Enabling outputs on an existing graph,
+            // e.g. llama_set_embeddings_layer_inp() for a DFlash/DSpark drafter, changes only the flags.
+            if (node->flags & GGML_TENSOR_FLAG_OUTPUT) {
+                input_srcs.push_back("output_" + std::string(node->name) + "#n" + std::to_string(i));
+            }
         }
 
         static const bool full_key = ggml_openvino_getenv_int("GGML_OPENVINO_FULL_GRAPH_KEY") != 0;
@@ -52,9 +69,8 @@ struct graph_key {
                 if (src == nullptr || src->buffer == nullptr || node_set.count(src) || src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
                     continue;
                 }
-
-                input_srcs.push_back(std::to_string(node_idx) + ":" + std::to_string(src_idx) + ":" +
-                    GgmlOvDecoder::compute_op_type(node));
+                input_srcs.push_back(GgmlOvDecoder::get_tensor_name(cgraph, src) + ":" + std::to_string(src_idx) +
+                                          ":" + GgmlOvDecoder::compute_op_type(node));
             }
         }
     }
@@ -81,16 +97,53 @@ struct graph_key_hash {
     }
 };
 
+// One compiled model of a static graph: its phase, KV window, SWA window and output count.
+struct ov_static_variant_key {
+    bool prefill = false;
+    int attention_size = -1;
+    int attention_size_swa = -1;
+    int output_len = 1;
+
+    bool operator<(const ov_static_variant_key & other) const {
+        return std::tie(prefill, output_len, attention_size_swa, attention_size) <
+               std::tie(other.prefill, other.output_len, other.attention_size_swa, other.attention_size);
+    }
+
+    bool operator==(const ov_static_variant_key & other) const { return !(*this < other) && !(other < *this); }
+};
+
+struct ov_static_variant {
+    ov::CompiledModel model;
+    // Created on first use, so only the requests a run needs hold NPU memory.
+    std::shared_ptr<ov::InferRequest> request;
+    std::vector<std::string> input_names;
+    std::vector<std::string> output_names;
+};
+
 struct decoder_runtime_ctx {
     decoder_runtime_ctx(std::shared_ptr<std::mutex> mutex) : mutex(std::move(mutex)) {}
 
     std::shared_ptr<std::mutex> mutex;
     std::shared_ptr<GgmlOvDecoder> ptr;
+
+    // Static path: the compiled models of this graph with their requests (ov_graph_compute_static).
+    std::map<ov_static_variant_key, ov_static_variant> variants;
+    // The prefill models only write the KV cache; logits come from one decode step (GGML_OPENVINO_KV_ONLY_PREFILL).
+    bool kv_only_prefill = false;
+    bool decode_unfold = false;
+    uint64_t cache_base_extra = 0;
+    // With a model cache, every window of a phase is exported (or imported) on the first call of that phase.
+    bool prefill_prepared = false;
+    bool decode_prepared = false;
+    // NPU weightless bank: the weights file and NPUW bank of every blob of this graph, and the file's layout once
+    // it is known in this process (new blobs resolve their weights through it).
+    std::string weights_path;
+    std::string weights_bank;
+    std::shared_ptr<ggml_openvino_weights_layout> weights_layout;
 };
 
 struct ov_compiled_graph {
     ov::CompiledModel decode;
-    ov::CompiledModel prefill;
     std::vector<std::string> input_names;
     std::vector<std::string> output_names;
 };
@@ -114,9 +167,14 @@ struct ov_runtime_context {
     bool stateful;
     std::unordered_map<graph_key, std::shared_ptr<decoder_runtime_ctx>, graph_key_hash> decoder_cache;
     std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache;
-    std::unordered_map<graph_key, std::shared_ptr<ov::InferRequest>, graph_key_hash> infer_request_cache_prefill;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_input_names_cache;
     std::unordered_map<graph_key, std::vector<std::string>, graph_key_hash> ov_output_names_cache;
+    // LRU order of decoder_cache's keys, oldest (least recently used) at the front. A pipeline
+    // that interleaves distinct graph shapes every call -- e.g. DFlash cycling target/draft/
+    // injection graphs every round -- needs a slot per shape open at once; a single-entry cache
+    // would evict and recompile all of them, every call, forever.
+    std::list<graph_key> lru_keys;
+    static constexpr size_t max_cached_graphs = 8;
     size_t stateful_kv_size;
     std::map<std::string, std::string> kv_state_input_name_map;
     // compute-only copies of graphs that carry unselected ggml_build_forward_select() branches
@@ -128,12 +186,42 @@ struct ov_runtime_context {
 
     ov_runtime_context() : device("CPU"), stateful(false), stateful_kv_size(0) {}
 
+    // Mark `key` as the most recently used entry. Call on every cache hit and after inserting a
+    // new entry, so eviction always picks the graph shape that has gone longest unused.
+    void touch_locked(const graph_key & key) {
+        lru_keys.remove(key);
+        lru_keys.push_back(key);
+    }
+
+    // Drop the least recently used graph shape's compiled model and its associated per-key
+    // caches. Leaves every other shape's compiled model intact.
+    void evict_lru_locked() {
+        if (lru_keys.empty()) {
+            return;
+        }
+        graph_key victim = lru_keys.front();
+        lru_keys.pop_front();
+        decoder_cache.erase(victim);
+        infer_request_cache.erase(victim);
+        ov_input_names_cache.erase(victim);
+        ov_output_names_cache.erase(victim);
+    }
+
+    // Make room for one more graph shape if the cache is at capacity, then mark `key` as most
+    // recently used. Call right after inserting `key` into decoder_cache.
+    void admit_locked(const graph_key & key) {
+        while (decoder_cache.size() > max_cached_graphs) {
+            evict_lru_locked();
+        }
+        touch_locked(key);
+    }
+
     void clear_caches_locked() {
         decoder_cache.clear();
         infer_request_cache.clear();
-        infer_request_cache_prefill.clear();
         ov_input_names_cache.clear();
         ov_output_names_cache.clear();
+        lru_keys.clear();
         kv_state_input_name_map.clear();
         stateful_kv_size = 0;
     }
@@ -145,10 +233,6 @@ struct ov_runtime_context {
 };
 
 enum ggml_status ov_graph_compute(struct ggml_cgraph * cgraph, ggml_backend_t backend);
-
-size_t checksum(const void * data, size_t size);
-
-bool save_ggml_tensor_data_to_txt(const ggml_tensor * tensor, const std::string & file_path);
 
 void print_input_tensor_info(const std::string & name, const ov::Tensor & tensor);
 

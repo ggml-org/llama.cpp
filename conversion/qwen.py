@@ -170,7 +170,7 @@ class Qwen2MoeModel(TextModel):
                 raise ValueError(f"Unprocessed experts: {experts}")
 
 
-@ModelBase.register("Qwen3ForCausalLM", "Qwen3Model")
+@ModelBase.register("Qwen3ForCausalLM", "Qwen3Model", "LlavaOnevision2ForConditionalGeneration")
 @ModelBase.example("Qwen/Qwen3-8B")
 class Qwen3Model(Qwen2Model):
     model_arch = gguf.MODEL_ARCH.QWEN3
@@ -225,12 +225,13 @@ class Qwen3Model(Qwen2Model):
     def _find_rerank_config(self):
         from transformers import AutoTokenizer
         tokenizer = AutoTokenizer.from_pretrained(self.dir_model)
+        assert tokenizer is not None
 
         self.is_rerank = True
         self.is_tied_embeddings = self.hparams.get("tie_word_embeddings", False)
-        self.token_false_id = tokenizer.convert_tokens_to_ids("no")  # ty: ignore[unresolved-attribute, invalid-assignment]
-        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")  # ty: ignore[unresolved-attribute, invalid-assignment]
-        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")  # ty: ignore[unresolved-attribute]
+        self.token_false_id = tokenizer.convert_tokens_to_ids("no")  # ty: ignore[invalid-assignment]
+        self.token_true_id = tokenizer.convert_tokens_to_ids("yes")  # ty: ignore[invalid-assignment]
+        self.sep_token_id = tokenizer.convert_tokens_to_ids("|")
 
         assert self.token_false_id is not None and self.token_true_id is not None
 
@@ -329,7 +330,7 @@ class _QwenMtpMixin:
         key = next((k for k in ["n_layers", "num_hidden_layers", "n_layer", "num_layers"] if k in hparams), None)
         type(self)._original_block_count = hparams.get(key)
         type(self).opt_num_mtp_layers = 0
-        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[unresolved-attribute]
+        return super().index_tensors(remote_hf_model_id=remote_hf_model_id)  # ty: ignore[missing-attribute]
 
     @classmethod
     def filter_tensors(cls, item):
@@ -366,7 +367,7 @@ class _QwenMtpMixin:
         return name, gen
 
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        super().set_gguf_parameters()  # ty: ignore[missing-attribute]
         if self.no_mtp:
             return
         if (n := self.block_count - self.hparams["num_hidden_layers"]) > 0:
@@ -374,15 +375,15 @@ class _QwenMtpMixin:
 
     def prepare_metadata(self, vocab_only: bool):
         from_dir = self.fname_out.is_dir()
-        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[unresolved-attribute]
+        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[missing-attribute]
 
         if not self.mtp_only or not from_dir:
             return
 
-        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
         fname_default: str = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[unresolved-attribute]
+            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
+            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
         self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
 
 
@@ -491,6 +492,45 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
     We reorder V heads to tiled order so ggml_repeat can replace the expensive
     interleaved repeat: [G0_v0, G1_v0, ..., G0_v1, G1_v1, ...].
     """
+
+    _SHARED_INPUT_MERGES: tuple[tuple[gguf.MODEL_TENSOR, tuple[gguf.MODEL_TENSOR, gguf.MODEL_TENSOR], bool], ...] = ()
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._merge_parts: dict[tuple[int, gguf.MODEL_TENSOR], dict[int, Tensor]] = {}
+
+    # caches one half of a merged weight until the other half arrives, then yields [a | b]
+    def _merge_shared_input(self, new_name: str, data: Tensor, bid: int | None) -> Iterable[tuple[str, Tensor]]:
+        # a pre-quantized checkpoint carries per-tensor scales, which one merged weight cannot hold
+        if not self._SHARED_INPUT_MERGES or bid is None or self.hparams.get("quantization_config") or self._fp8_e4m3_preserved or self.hadamard_folded_names() or hasattr(data, "get_lora_A_B"):
+            yield (new_name, data)
+            return
+
+        layer_types = self.hparams.get("layer_types")
+        if layer_types is None:
+            is_linear = bid < self.hparams["num_hidden_layers"] and (bid + 1) % self.hparams.get("full_attention_interval", 4) != 0
+        else:
+            is_linear = bid < len(layer_types) and layer_types[bid] == "linear_attention"
+
+        match = next(((merged, parts.index(part)) for merged, parts, linear_only in self._SHARED_INPUT_MERGES
+                      if merged in gguf.MODEL_TENSORS[self.model_arch]
+                      for part in parts
+                      if (is_linear or not linear_only) and self.match_model_tensor_name(new_name, part, bid)), None)
+        if match is None:
+            yield (new_name, data)
+            return
+
+        merged, idx = match
+        halves = self._merge_parts.setdefault((bid, merged), {})
+        halves[idx] = data
+        if len(halves) == 2:
+            del self._merge_parts[(bid, merged)]
+            yield (self.format_tensor_name(merged, bid), torch.cat([halves[0], halves[1]], dim=0))
+
+    def prepare_tensors(self):
+        super().prepare_tensors()
+        if self._merge_parts:
+            raise ValueError(f"merged weights missing a half: {sorted((bid, t.name) for bid, t in self._merge_parts)}")
 
     @staticmethod
     def _reorder_v_heads(tensor: Tensor, dim: int, num_k_heads: int, num_v_per_k: int, head_dim: int) -> Tensor:
@@ -671,7 +711,8 @@ class _LinearAttentionVReorderBase(Qwen3NextModel):
                     # Out projection weight: reorder columns (input dimension)
                     data_torch = self._reorder_v_heads(data_torch, 1, num_k_heads, num_v_per_k, head_v_dim)
 
-        yield from super().modify_tensors(data_torch, name, bid)
+        for new_name, data in super().modify_tensors(data_torch, name, bid):
+            yield from self._merge_shared_input(new_name, data, bid)
 
 
 class _Qwen35MRopeMixin:
@@ -685,7 +726,7 @@ class _Qwen35MRopeMixin:
     rope_parameters: dict
 
     def set_gguf_parameters(self):
-        super().set_gguf_parameters()  # ty: ignore[unresolved-attribute]
+        super().set_gguf_parameters()  # ty: ignore[missing-attribute]
         if "mrope_section" not in self.rope_parameters:
             self.gguf_writer.add_rope_dimension_sections(self._QWEN35_DEFAULT_MROPE_SECTION)
 
@@ -694,6 +735,11 @@ class _Qwen35MRopeMixin:
 @ModelBase.example("Qwen/Qwen3.5-9B")
 class Qwen3_5TextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
     model_arch = gguf.MODEL_ARCH.QWEN35
+
+    _SHARED_INPUT_MERGES = (
+        (gguf.MODEL_TENSOR.ATTN_QKV_GATE,      (gguf.MODEL_TENSOR.ATTN_QKV, gguf.MODEL_TENSOR.ATTN_GATE), True),
+        (gguf.MODEL_TENSOR.SSM_BETA_ALPHA_CAT, (gguf.MODEL_TENSOR.SSM_BETA, gguf.MODEL_TENSOR.SSM_ALPHA), True),
+    )
 
     def __init__(self, dir_model, *args, **kwargs):
         # Inner TextModel does not own mtp.*. Set no_mtp before mixin bumps block_count.
@@ -822,6 +868,22 @@ class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 class DFlashModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.DFLASH
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._target_is_inkling2 = False
+        if self.target_model_dir is not None:
+            target_hparams = ModelBase.load_hparams(self.target_model_dir, False)
+            self._target_is_inkling2 = get_model_architecture(target_hparams, ModelType.TEXT).startswith("Inkling2")
+            if self._target_is_inkling2:
+                # the target GGUF keeps only the tokenizer rows of the padded vocab
+                target_hparams = {**target_hparams, **target_hparams.get("text_config", {})}
+                self.hparams["vocab_size"] = target_hparams["unpadded_vocab_size"]
+                self.hparams["eos_token_id"] = target_hparams["eos_token_id"]
+                # the loop core runs num_passes times, other looping targets need their own visit count
+                self._target_n_visits = target_hparams["num_hidden_layers"]
+                if (loop := target_hparams.get("loop_config")) is not None:
+                    self._target_n_visits += (loop["num_passes"] - 1) * (loop["core_end"] - loop["core_start"])
+
     def set_vocab(self):
         if self.target_model_dir is None:
             raise ValueError(
@@ -843,7 +905,7 @@ class DFlashModel(Qwen3Model):
         if target_cls is not type(self):
             if target_arch == "NemotronHForCausalLM":
                 setattr(self, "is_moe", "num_experts_per_tok" in target_hparams)
-            target_cls.set_vocab(self)  # ty: ignore[unresolved-attribute]
+            target_cls.set_vocab(self)  # ty: ignore[missing-attribute]
         else:
             super().set_vocab()
 
@@ -871,6 +933,11 @@ class DFlashModel(Qwen3Model):
             self.gguf_writer.add_conv_group_size(int(dflash_config["conv_group_size"]))
             self.gguf_writer.add_selector_rank(int(dflash_config["selector_rank"]))
             self.gguf_writer.add_selector_top_k(int(dflash_config["selector_top_k"]))
+            softcap_mode = dflash_config.get("selector_softcap_mode", "before_correction")
+            if softcap_mode not in ("before_correction", "after_correction"):
+                raise ValueError(f"DFlash2: unknown selector_softcap_mode {softcap_mode!r}")
+            if softcap_mode == "after_correction":
+                self.gguf_writer.add_selector_softcap_after_correction(True)
 
         output_multiplier = dflash_config.get(
             "output_multiplier", self.hparams.get("output_multiplier")
@@ -896,7 +963,10 @@ class DFlashModel(Qwen3Model):
 
         target_layer_ids = dflash_config.get("target_layer_ids", self.hparams.get("target_layer_ids", []))
         if target_layer_ids:
-            extract_layer_ids = [i + 1 for i in target_layer_ids]
+            # Inkling ids count loop visits, the last one is the final norm output
+            if self._target_is_inkling2 and target_layer_ids[-1] != self._target_n_visits:
+                raise ValueError(f"Inkling2 DFlash2: target_layer_ids {target_layer_ids} must end at the Inkling final norm ({self._target_n_visits})")
+            extract_layer_ids = target_layer_ids if self._target_is_inkling2 else [i + 1 for i in target_layer_ids]
             self.gguf_writer.add_target_layers(extract_layer_ids)
 
         use_sliding_window = self.hparams.get("use_sliding_window", False) or dflash_config.get("use_swa", False)
@@ -923,19 +993,6 @@ class DFlashModel(Qwen3Model):
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         yield from super().generate_extra_tensors()
 
-        mask_path = self.dir_model / "mask_embedding.pt"
-        if not mask_path.is_file():
-            return
-
-        mask = torch.load(mask_path, map_location="cpu", weights_only=True)
-        mask_id = self.hparams.get("dflash_config", {}).get("mask_token_id")
-        if mask_id is None or mask["mask_token_id"] != mask_id:
-            raise ValueError("mask_embedding.pt mask_token_id does not match dflash_config")
-        if tuple(mask["embedding"].shape) != (self.hparams["hidden_size"],):
-            raise ValueError("mask_embedding.pt has an unexpected embedding shape")
-        if not 0 <= mask_id < self.hparams["vocab_size"]:
-            raise ValueError("mask_embedding.pt mask_token_id is outside the vocabulary")
-
         def target_tensor(name: str) -> Tensor:
             if self.target_model_dir is None:
                 raise ValueError("mask_embedding.pt requires --target-model-dir with the target embeddings and output head")
@@ -952,6 +1009,23 @@ class DFlashModel(Qwen3Model):
                     if name in part:
                         return LazyTorchTensor.from_local_tensor(part[name])
             raise ValueError(f"Target tensor {name!r} was not found in safetensors")
+
+        if self._target_is_inkling2:
+            # the draft borrows the raw target embeddings, Inkling norms them before its first layer
+            yield "model.embed_norm.weight", target_tensor("model.llm.embed_norm.weight")
+
+        mask_path = self.dir_model / "mask_embedding.pt"
+        if not mask_path.is_file():
+            return
+
+        mask = torch.load(mask_path, map_location="cpu", weights_only=True)
+        mask_id = self.hparams.get("dflash_config", {}).get("mask_token_id")
+        if mask_id is None or mask["mask_token_id"] != mask_id:
+            raise ValueError("mask_embedding.pt mask_token_id does not match dflash_config")
+        if tuple(mask["embedding"].shape) != (self.hparams["hidden_size"],):
+            raise ValueError("mask_embedding.pt has an unexpected embedding shape")
+        if not 0 <= mask_id < self.hparams["vocab_size"]:
+            raise ValueError("mask_embedding.pt mask_token_id is outside the vocabulary")
 
         embedding_name = "model.embed_tokens.weight"
         if embedding_name in self.model_tensors:
@@ -1015,6 +1089,8 @@ class DFlashModel(Qwen3Model):
             "model.candidate_selector.predecessor_codebook",
             "model.candidate_selector.successor_codebook",
         ):
+            # padded vocabs (Inkling): the selector only indexes the draft vocab
+            data_torch = data_torch[:self.hparams["vocab_size"]]
             name += ".weight"
 
         yield from super().modify_tensors(data_torch, name, bid)

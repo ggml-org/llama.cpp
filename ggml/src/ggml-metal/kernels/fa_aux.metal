@@ -48,6 +48,80 @@ template [[host_name("kernel_flash_attn_ext_kv_q5_0_f16")]] kernel kernel_flash_
 template [[host_name("kernel_flash_attn_ext_kv_q5_1_f16")]] kernel kernel_flash_attn_ext_kv_f16_t kernel_flash_attn_ext_kv_f16<block_q5_1, 32, dequantize_q5_1>;
 template [[host_name("kernel_flash_attn_ext_kv_q8_0_f16")]] kernel kernel_flash_attn_ext_kv_f16_t kernel_flash_attn_ext_kv_f16<block_q8_0, 32, dequantize_q8_0>;
 
+// gather the K/V cache rows referenced by the kv_rows lists into contiguous F16 buffers
+// - one threadgroup per (row, stream); the attention is then run as a standard dense op over the
+//   gathered rows, which avoids the per-tile K/V gather in the main kernels
+// - negative rows are padding: filled with zeros, their mask entries are -INF so they contribute nothing
+kernel void kernel_flash_attn_ext_rows(
+        constant ggml_metal_kargs_flash_attn_ext_rows & args,
+        device const char * k_src,
+        device const char * v_src,
+        device const int  * rows,
+        device       char * dst,
+        uint3   tgpig[[threadgroup_position_in_grid]],
+        ushort  tiitg[[thread_index_in_threadgroup]],
+        ushort3   ntg[[threads_per_threadgroup]]) {
+    const int64_t i1 = tgpig[0]; // row index
+    const int64_t i3 = tgpig[1]; // stream
+
+    const int64_t row = rows[i1 + i3*args.ne11];
+
+    // gathered layout: [DK, n_rows, n_head_kv, n_streams] and [DV, n_rows, n_head_kv, n_streams] F16
+    device half4 * k_dst = (device half4 *) (dst + i3*args.ne_12_2*args.ne11*args.ne10*sizeof(half));
+    device half4 * v_dst = (device half4 *) (dst + args.v_off + i3*args.ne_12_2*args.ne11*args.ne20*sizeof(half));
+
+    // note: the K/V cache is shared by all streams (ne13 = ne23 = 1), the row list selects the rows
+    // each thread copies up to 4 half4 values (32 bytes) to keep the memory transactions large
+
+    // K: all heads of this row
+    {
+        const int64_t per_head = args.ne10/4;
+
+        for (int64_t i = 4*tiitg; i < args.ne_12_2*per_head; i += 4*ntg.x) {
+            const int64_t i2 = i/per_head;
+            const int64_t i0 = i%per_head;
+            const int      n  = (int) min((int64_t) 4, per_head - i0);
+
+            device half4 * dst4 = k_dst + (i2*args.ne11 + i1)*per_head + i0;
+
+            if (row >= 0) {
+                device const half4 * src4 = (device const half4 *) (k_src + row*args.nb11 + i2*args.nb12) + i0;
+                for (int j = 0; j < n; ++j) {
+                    dst4[j] = src4[j];
+                }
+            } else {
+                for (int j = 0; j < n; ++j) {
+                    dst4[j] = half4(0.0h);
+                }
+            }
+        }
+    }
+
+    // V: all heads of this row
+    {
+        const int64_t per_head = args.ne20/4;
+
+        for (int64_t i = 4*tiitg; i < args.ne_12_2*per_head; i += 4*ntg.x) {
+            const int64_t i2 = i/per_head;
+            const int64_t i0 = i%per_head;
+            const int      n  = (int) min((int64_t) 4, per_head - i0);
+
+            device half4 * dst4 = v_dst + (i2*args.ne11 + i1)*per_head + i0;
+
+            if (row >= 0) {
+                device const half4 * src4 = (device const half4 *) (v_src + row*args.nb21 + i2*args.nb22) + i0;
+                for (int j = 0; j < n; ++j) {
+                    dst4[j] = src4[j];
+                }
+            } else {
+                for (int j = 0; j < n; ++j) {
+                    dst4[j] = half4(0.0h);
+                }
+            }
+        }
+    }
+}
+
 constant bool FC_flash_attn_ext_pad_has_mask [[function_constant(FC_FLASH_ATTN_EXT_PAD + 0)]];
 
 constant int32_t FC_flash_attn_ext_pad_ncpsg [[function_constant(FC_FLASH_ATTN_EXT_PAD + 25)]];

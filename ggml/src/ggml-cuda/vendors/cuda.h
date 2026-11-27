@@ -3,8 +3,12 @@
 #include <cuda_runtime.h>
 #include <cuda.h>
 #include <cublas_v2.h>
+#include <cublasLt.h>
 #include <cuda_bf16.h>
 #include <cuda_fp16.h>
+#include <cstdint>
+
+typedef uint32_t ggml_cuda_thread_mask_t;
 
 #ifdef GGML_USE_NCCL
 #include <nccl.h>

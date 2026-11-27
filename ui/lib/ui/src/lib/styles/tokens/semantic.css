@@ -1,0 +1,264 @@
+/*
+ * Tier 2: semantic tokens. Named by purpose, they are the only tier that changes between light and
+ * dark. Pattern: [category]-[role]-[state].
+ *
+ * A token here is one of two things: a pick, which names a primitive per theme, or a derivation, which is
+ * mixed from another semantic token by a fixed rule and so follows it through every theme. The rules:
+ * soft text is the text colour at 70%; a hover fill is the fill at 90%; a status surface is its fill mixed
+ * into the page and a status line its fill mixed into the default line; a dark shadow is the light one,
+ * --elevation-strength times as dense. Derivations are declared once, in :root: .dark sits on the
+ * same element, so they resolve from that theme's picks.
+ *
+ * The light surfaces are paper: white panels, fields and keys on a faint grey page.
+ */
+:root {
+	/* surfaces: what a region of the page sits on. The page a faint grey, so glass, fields
+	   and keys, white, sit lighter than it */
+	--surface-page: var(--neutral-25);
+	--surface-muted: var(--neutral-100);
+	--surface-emphasis: var(--neutral-150);
+	--surface-selected: var(--neutral-150);
+	--surface-raised: var(--neutral-0);
+	--surface-lifted: var(--neutral-0);
+	--surface-pressed: var(--neutral-0);
+	--surface-glass: color-mix(in oklch, var(--neutral-0) 80%, transparent);
+	--surface-code: var(--neutral-100);
+	--surface-overlay: var(--black-a40);
+
+	/* foreground: text and icons */
+	--fg-default: var(--neutral-950);
+	/* the label of an option that is not the picked one: a tab, a key of a toggle group */
+	--fg-soft: color-mix(in oklch, var(--fg-default) 70%, transparent);
+	--fg-muted: var(--neutral-500);
+	--fg-on-action: var(--neutral-50);
+	--fg-on-danger: var(--neutral-0);
+	--fg-code: var(--neutral-950);
+	--fg-danger: var(--red-600);
+	--fg-success: var(--green-650);
+	--fg-warning: var(--amber-650);
+	--fg-info: var(--blue-650);
+
+	/* lines: borders, dividers and focus */
+	--line-default: var(--neutral-300);
+	--line-field: var(--neutral-200);
+	--line-control: var(--neutral-300);
+	--line-focus: var(--neutral-400);
+	--line-danger: var(--fill-danger);
+
+	/* status: a fill per meaning (dots, lamps, solid marks), brighter than its text colour, and a soft surface and
+	   line mixed from the fill (in oklab, so the hue holds). The two shares are the only part a theme sets */
+	--fill-success: var(--green-550);
+	--fill-warning: var(--amber-400);
+	--fill-danger: var(--red-550);
+	--fill-info: var(--blue-550);
+	--status-surface-share: 11%;
+	--status-line-share: 34%;
+	--surface-success: color-mix(in oklab, var(--fill-success) var(--status-surface-share), var(--surface-page));
+	--surface-warning: color-mix(in oklab, var(--fill-warning) var(--status-surface-share), var(--surface-page));
+	--surface-danger: color-mix(in oklab, var(--fill-danger) var(--status-surface-share), var(--surface-page));
+	--surface-info: color-mix(in oklab, var(--fill-info) var(--status-surface-share), var(--surface-page));
+	--line-success-soft: color-mix(in oklab, var(--fill-success) var(--status-line-share), var(--line-default));
+	--line-warning-soft: color-mix(in oklab, var(--fill-warning) var(--status-line-share), var(--line-default));
+	--line-danger-soft: color-mix(in oklab, var(--fill-danger) var(--status-line-share), var(--line-default));
+	--line-info-soft: color-mix(in oklab, var(--fill-info) var(--status-line-share), var(--line-default));
+
+	/* edges: hairlines of matte surfaces. Each names the shade at the sides; matte-glass fades it towards the
+	   middle itself (see surfaces.css) */
+	--edge-rest: var(--cool-gray-200);
+	--edge-focus: var(--cool-gray-400);
+	--edge-ambient: var(--cool-gray-100);
+	--edge-raised: var(--cool-gray-200);
+
+	/* actions: fills of interactive controls */
+	--action-primary: var(--neutral-900);
+	--action-primary-hover: color-mix(in oklch, var(--action-primary) 90%, transparent);
+	/* one red for every danger state: the danger action is the status fill itself, the alerts' red */
+	--action-danger: var(--fill-danger);
+	--action-danger-hover: color-mix(in oklch, var(--action-danger) 90%, transparent);
+	--action-quiet: color-mix(in oklch, var(--neutral-100) 30%, transparent);
+	--action-quiet-hover: var(--neutral-100);
+	--action-ghost-hover: color-mix(in oklch, var(--neutral-500) 10%, transparent);
+
+	/* fields: editable controls */
+	--field-background: var(--neutral-0);
+
+	/* light effects */
+	--highlight-inner: var(--white-a50);
+	--highlight-inverse: var(--white-a12);
+	--sheen-start: var(--white-a20);
+	--text-shadow-engraved: 0 1px 0 var(--white-a85);
+
+	/* elevation: the only shadows. Smooth stacks, a few soft layers rather than one hard one: the closest the darkest
+	   and smallest, each further layer about twice the offset and blur and fainter, pulled in with a negative spread,
+	   so the shadow fades out the way light does. A surface reaches about 20px and a raised one about 38px; a control
+	   keeps to three tight layers (nothing past 4px), so buttons sit close to the page. Tailwind's own shadow sizes
+	   are not used: they would not follow the theme. Every layer's density is
+	   multiplied by --elevation-strength, which is all a theme sets: 1 in light, 5 in dark, where a shadow has to be
+	   that much denser to read on the page */
+	--elevation-strength: 1;
+	--elevation-surface:
+		0 1px 2px rgb(0 0 0 / calc(0.04 * var(--elevation-strength))),
+		0 3px 6px -2px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 8px 16px -4px rgb(0 0 0 / calc(0.06 * var(--elevation-strength)));
+	--elevation-control:
+		0 0.5px 1px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 1px 2px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 2px 4px -1px rgb(0 0 0 / calc(0.05 * var(--elevation-strength)));
+	--elevation-raised:
+		0 2px 4px rgb(0 0 0 / calc(0.04 * var(--elevation-strength))),
+		0 6px 12px -3px rgb(0 0 0 / calc(0.06 * var(--elevation-strength))),
+		0 16px 28px -6px rgb(0 0 0 / calc(0.08 * var(--elevation-strength)));
+	/* a key on a white surface, like the chat form's: a hairline all round and a drop of 1px, so it stands apart
+	   without the control elevation's soft spread, which blends into the white */
+	--elevation-key: 0 0 0 0.5px rgb(0 0 0 / 0.08), 0 1px 1.5px rgb(0 0 0 / 0.08);
+	/* softer steps: the chat form floats only a little, its shadow close and tight (smooth near layers, nothing
+	   reaching past 6px); a message bubble barely lifts */
+	--elevation-soft:
+		0 0.5px 1px rgb(0 0 0 / calc(0.04 * var(--elevation-strength))),
+		0 1px 3px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 2px 6px -2px rgb(0 0 0 / calc(0.05 * var(--elevation-strength))),
+		0 6px 16px -10px rgb(0 0 0 / calc(0.08 * var(--elevation-strength)));
+	--elevation-faint:
+		0 2px 4px rgb(0 0 0 / calc(0.025 * var(--elevation-strength))),
+		0 0.5px 1.5px rgb(0 0 0 / calc(0.03 * var(--elevation-strength)));
+	/* the shade inside a recessed field, and inside a key held down */
+	--elevation-inset: inset 0 1px 2px rgb(0 0 0 / calc(0.06 * var(--elevation-strength)));
+	--elevation-pressed: inset 0 1px 2px rgb(0 0 0 / calc(0.08 * var(--elevation-strength)));
+	/* the hairline an elevated surface carries as the last layer of its shadow (elevated-*, matte-float), so its edge
+	   melts into the shadow instead of sitting beside it as a border that reads washed out */
+	--elevation-ring: var(--black-a5);
+	--blur-surface: 1.5rem;
+	--blur-control: 0.75rem;
+}
+
+.dark {
+	--surface-page: var(--neutral-925);
+	--surface-muted: var(--neutral-800);
+	--surface-emphasis: var(--neutral-750);
+	--surface-selected: var(--neutral-800);
+	--surface-raised: var(--neutral-900);
+	--surface-lifted: color-mix(in oklch, var(--neutral-700) 80%, transparent);
+	--surface-pressed: color-mix(in oklch, var(--neutral-50) 14%, transparent);
+	--surface-glass: color-mix(in oklch, var(--neutral-800) 75%, transparent);
+	--surface-code: var(--neutral-900);
+
+	--fg-default: var(--neutral-50);
+	--fg-muted: var(--neutral-400);
+	--fg-on-action: var(--neutral-900);
+	--fg-code: var(--neutral-300);
+	/* on a dark page the status fills are bright enough to read as text */
+	--fg-danger: var(--fill-danger);
+	--fg-success: var(--fill-success);
+	--fg-warning: var(--fill-warning);
+	--fg-info: var(--fill-info);
+
+	--line-default: var(--white-a30);
+	--line-field: var(--white-a30);
+	--line-control: var(--white-a12);
+	--line-focus: var(--neutral-500);
+
+	/* the dark status fills, and a larger share of them in the soft surfaces and lines */
+	--fill-success: var(--green-450);
+	--fill-warning: var(--amber-250);
+	--fill-danger: var(--red-450);
+	--fill-info: var(--blue-450);
+	--status-surface-share: 16%;
+	--status-line-share: 38%;
+
+	--edge-rest: var(--white-a6);
+	--edge-focus: var(--white-a18);
+	--edge-ambient: var(--white-a4);
+	--edge-raised: var(--white-a9);
+
+	--action-primary: var(--neutral-200);
+	/* the same red as every danger state, as matte glass: the status fill, frosted and translucent over the page */
+	--action-danger: color-mix(in oklch, var(--fill-danger) 58%, transparent);
+	--action-danger-hover: color-mix(in oklch, var(--fill-danger) 68%, transparent);
+	--action-quiet: color-mix(in oklch, var(--neutral-400) 15%, transparent);
+	--action-quiet-hover: color-mix(in oklch, var(--neutral-400) 25%, transparent);
+	--action-ghost-hover: color-mix(in oklch, var(--neutral-400) 10%, transparent);
+
+	--field-background: var(--white-a9);
+
+	--highlight-inner: var(--white-a4);
+	--sheen-start: var(--white-a2);
+	--text-shadow-engraved: 0 -1px 0 var(--black-a55);
+
+	--elevation-strength: 5;
+	/* on a dark surface the hairline of the light key vanishes: the control stack instead */
+	--elevation-key: var(--elevation-control);
+	/* a black hairline vanishes on a dark page; the ring paints on the page behind the surface, so white needs 18% to
+	   stay lighter than a raised surface's own colour */
+	--elevation-ring: var(--white-a18);
+}
+
+/* roles that do not change with the theme, exposed as Tailwind utilities */
+@theme inline {
+	/* type roles: text-body, text-label-sm, ... set size and line height. Labels, the title and the heading set
+	   their weight too; body and caption text takes the weight around it, regular unless a parent says otherwise.
+	   Sizes are 10, 12, 14, 16, 18, 24 and 30px; a line height is written as Tailwind writes its own, the line in rem
+	   over the size, so text nested in a role keeps the same proportion */
+	--text-body: 1rem;
+	--text-body--line-height: calc(1.5 / 1);
+	--text-body-sm: 0.875rem;
+	--text-body-sm--line-height: calc(1.25 / 0.875);
+	--text-label: 0.875rem;
+	--text-label--line-height: calc(1.25 / 0.875);
+	--text-label--font-weight: 500;
+	--text-label-sm: 0.75rem;
+	--text-label-sm--line-height: calc(1 / 0.75);
+	--text-label-sm--font-weight: 500;
+	--text-caption: 0.75rem;
+	--text-caption--line-height: calc(1 / 0.75);
+	/* the smallest text: a tag, a compact badge, a count */
+	--text-caption-sm: 0.625rem;
+	--text-caption-sm--line-height: calc(0.875 / 0.625);
+	--text-title: 1.125rem;
+	--text-title--line-height: calc(1.75 / 1.125);
+	--text-title--font-weight: 600;
+	--text-heading: 1.5rem;
+	--text-heading--line-height: calc(2 / 1.5);
+	--text-heading--font-weight: 600;
+	/* the biggest headline: a greeting, a splash */
+	--text-display: 1.875rem;
+	--text-display--line-height: calc(2.25 / 1.875);
+	--text-display--font-weight: 600;
+
+	/* motion: ease-out-quint for what enters or answers a press, quick off the mark and settling softly; ease-sheet
+	   for a sheet or a page that slides, the curve iOS moves its own with */
+	--ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
+	--ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
+
+	/* icon sizes: size-icon-xs ... size-icon-lg (12, 14, 16 and 20px) */
+	--size-icon-xs: 0.75rem;
+	--size-icon-sm: 0.875rem;
+	--size-icon-md: 1rem;
+	--size-icon-lg: 1.25rem;
+
+	/* control heights (32, 36 and 40px). Corners are Tailwind's rounded-sm ... rounded-4xl, one scale computed from
+	   --radius in theme.css */
+	--height-control-sm: 2rem;
+	--height-control-md: 2.25rem;
+	--height-control-lg: 2.5rem;
+
+	/* colours. The neutral roles are reached through shadcn's utility names (bg-background, bg-muted,
+	   text-muted-foreground, border-border: see theme.css) or as bg-(--surface-lifted); only the status roles, which
+	   shadcn has no names for, get utilities of their own: bg-surface-danger, bg-fill-danger, text-fg-danger,
+	   border-line-danger-soft and the same for success, warning and info */
+	--background-color-surface-success: var(--surface-success);
+	--background-color-surface-warning: var(--surface-warning);
+	--background-color-surface-danger: var(--surface-danger);
+	--background-color-surface-info: var(--surface-info);
+	--background-color-fill-success: var(--fill-success);
+	--background-color-fill-warning: var(--fill-warning);
+	--background-color-fill-danger: var(--fill-danger);
+	--background-color-fill-info: var(--fill-info);
+	--text-color-fg-danger: var(--fg-danger);
+	--text-color-fg-success: var(--fg-success);
+	--text-color-fg-warning: var(--fg-warning);
+	--text-color-fg-info: var(--fg-info);
+	--border-color-line-success-soft: var(--line-success-soft);
+	--border-color-line-warning-soft: var(--line-warning-soft);
+	--border-color-line-danger-soft: var(--line-danger-soft);
+	--border-color-line-info-soft: var(--line-info-soft);
+}

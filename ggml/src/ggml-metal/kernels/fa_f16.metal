@@ -6,31 +6,28 @@
 //       template to be able to explore different combinations
 
 #define FA_TYPES \
-    half,   half4,     simdgroup_half8x8,  \
-    half,   half4x4,   simdgroup_half8x8,  \
-    half,   half4x4,   simdgroup_half8x8,  \
-    float,             simdgroup_float8x8, \
-    float,  float2,    simdgroup_float8x8, \
-    float,  float4,    simdgroup_float8x8
-    //half,   half4,     simdgroup_half8x8
+    half,  \
+    half,  \
+    half,  \
+    float, \
+    float, \
+    float
 
 #define FA_TYPES_BF \
-    bfloat, bfloat4,   simdgroup_bfloat8x8, \
-    bfloat, bfloat4x4, simdgroup_bfloat8x8, \
-    bfloat, bfloat4x4, simdgroup_bfloat8x8, \
-    float,             simdgroup_float8x8,  \
-    float,  float2,    simdgroup_float8x8,  \
-    half,   half4,     simdgroup_half8x8
-    //float,  float4,    simdgroup_float8x8
+    bfloat, \
+    bfloat, \
+    bfloat, \
+    float,  \
+    float,  \
+    half
 
 #define FA_TYPES_F32 \
-    half,   half4,     simdgroup_half8x8,  \
-    float,  float4x4,  simdgroup_float8x8, \
-    float,  float4x4,  simdgroup_float8x8, \
-    float,             simdgroup_float8x8, \
-    float,  float2,    simdgroup_float8x8, \
-    float,  float4,    simdgroup_float8x8
-    //half,   half4,     simdgroup_half8x8
+    half,  \
+    float, \
+    float, \
+    float, \
+    float, \
+    float
 
 typedef decltype(kernel_flash_attn_ext<FA_TYPES, half4x4, 1, dequantize_f16, half4x4, 1, dequantize_f16, 64, 64>) flash_attn_ext_t;
 

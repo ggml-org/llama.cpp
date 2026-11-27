@@ -57,6 +57,8 @@ class KimiVLModel(MmprojModel):
 class KimiK25Model(MmprojModel):
     """Kimi-K2.5 with MoonViT3d vision encoder"""
 
+    projector_type = gguf.VisionProjectorType.KIMIK25
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -78,7 +80,7 @@ class KimiK25Model(MmprojModel):
         super().set_gguf_parameters()
         assert self.hparams_vision is not None
 
-        self.gguf_writer.add_clip_projector_type(gguf.VisionProjectorType.KIMIK25)
+        self.gguf_writer.add_clip_projector_type(self.projector_type)
 
         # Position embedding parameters (for interpolation)
         self.gguf_writer.add_uint32("vision.pos_emb_height", self.hparams_vision.get("init_pos_emb_height", 64))
@@ -87,7 +89,11 @@ class KimiK25Model(MmprojModel):
 
         # Projector parameters
         self.gguf_writer.add_vision_use_gelu(self.hparams_vision.get("projector_hidden_act", "gelu") == "gelu")
-        self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("projector_ln_eps", 1e-5))
+        if self.hparams_vision.get("norm_type", "layernorm") == "rmsnorm":
+            # nn.RMSNorm without eps uses finfo(float32).eps, also for bf16 inputs
+            self.gguf_writer.add_vision_attention_layernorm_eps(torch.finfo(torch.float32).eps)
+        else:
+            self.gguf_writer.add_vision_attention_layernorm_eps(self.hparams_vision.get("projector_ln_eps", 1e-5))
         self.gguf_writer.add_vision_projector_scale_factor(self.merge_kernel_size[0])
 
         # Image size limits
@@ -120,7 +126,7 @@ class KimiK25Model(MmprojModel):
 
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         assert self.hparams_vision is not None
-        n_head = self.hparams_vision.get("num_attention_heads", 16)
+        n_head = self.find_vparam(["num_attention_heads", "vt_num_attention_heads"], optional=True) or 16
 
         # Permute Q/K weights/biases from interleaved to split RoPE format
         # This allows using build_rope_2d at runtime without post-permutation.
@@ -171,3 +177,19 @@ class Glm5vModel(KimiK25Model):
             name = name.replace("mm_projector.linear_", "mm_projector.proj.linear_", 1)
 
         yield from super().modify_tensors(data_torch, name, bid)
+
+
+@ModelBase.register("KimiK31ForConditionalGeneration")
+@ModelBase.example("moonshotai/Kimi-K3.1-Pro")
+class KimiK31VisionModel(KimiK25Model):
+    """Kimi-K2.5 MoonViT3d with RMSNorm, a wider QKV and the patchmergerv2 projector"""
+
+    projector_type = gguf.VisionProjectorType.KIMIK31
+
+    def set_gguf_parameters(self):
+        super().set_gguf_parameters()
+        assert self.hparams_vision is not None
+        assert self.hparams_vision["norm_type"] == "rmsnorm"
+        assert self.hparams_vision["mm_projector_type"] == "patchmergerv2"
+        n_head = self.find_vparam(["vt_num_attention_heads"])
+        self.gguf_writer.add_vision_head_dim(self.hparams_vision["qkv_hidden_size"] // n_head)

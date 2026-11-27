@@ -15,7 +15,7 @@
 #include <vector>
 
 struct server_context_meta;
-struct common_params_sampling;
+struct common_params;
 struct mtmd_context;
 struct mtmd_helper_cap;
 struct llama_vocab;
@@ -24,7 +24,7 @@ struct server_realtime_deps {
     server_queue &                 queue_tasks;
     server_response &              queue_results;
     const server_context_meta &    meta;
-    const common_params_sampling & sampling;
+    const common_params &          params;
     mtmd_context *                 mctx;
     const mtmd_helper_cap &        cap;
     const llama_vocab *            vocab;
@@ -32,6 +32,7 @@ struct server_realtime_deps {
 
 // a realtime conversation over websocket, for models that answer after the audio (e.g. LFM3-Audio):
 // the audio is prefilled as it arrives, responses follow output_modalities or the model's own switching
+// full duplex models (e.g. Hibiki) answer while they listen: the first audio opens a response that runs until it is cancelled
 void server_realtime_conversation(const server_realtime_deps & deps, server_http_context::ws_conn & conn);
 
 // one control of a realtime conversation
@@ -80,18 +81,30 @@ private:
     int32_t     n_decoded  = 0;
     llama_token sampled    = LLAMA_TOKEN_NULL; // next text token of the response, sampled right after the slot's own decode
 
-    mtmd::audio_stream_ptr stream;   // the audio of the open turn
+    mtmd::audio_stream_ptr stream;   // the audio of the open turn, or of the whole response of a full duplex model
     mtmd_helper::gen_audio gen;      // set if the model generates audio
     std::vector<float>     h_state;  // hidden state that the gen-audio pipeline steps from
     common_sampler_ptr     smpl;
     std::set<llama_token>  preserved; // special tokens of the response that go out as text (tool calls)
 
+    // full duplex: one frame per update(), h_state holds the embedding of the generated audio for the next row
+    bool duplex         = false;
+    bool duplex_pending = false; // the stream may have a row ready
+    // past the attention window: the first rows of the stream stay, 1/duplex_discard_div of the window goes at once
+    static constexpr int32_t duplex_n_keep      = 3;
+    static constexpr int32_t duplex_discard_div = 6;
+
     bool fail(const std::string & msg, enum error_type type = ERROR_TYPE_SERVER);
-    void send_result(std::string text, std::vector<float> audio, bool response_done = false);
+    void send_result(common_chat_input content, std::vector<float> audio, bool response_done = false);
     bool decode(const llama_token * tokens, const float * rows, int32_t n, bool logits_last);
     bool audio_rows();
     void sample_next();
     std::string piece(llama_token tok) const;
     bool response_start(const server_realtime_op & op);
     bool response_step();
+    void response_end();
+
+    bool duplex_update();
+    bool duplex_start();
+    bool duplex_frame();
 };

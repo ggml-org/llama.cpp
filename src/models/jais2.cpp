@@ -42,16 +42,20 @@ void llama_model_jais2::load_arch_tensors(llama_model_loader &) {
         layer.ffn_up_b   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "bias", i),   {n_ff}, 0);
         layer.ffn_down   = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {n_ff, n_embd}, 0);
         layer.ffn_down_b = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "bias", i),   {n_embd}, 0);
+
+        // numerical issues with F16 accumulators
+        prec_policy.set_acc(layer.wo,       GGML_PREC_BF16);
+        prec_policy.set_acc(layer.ffn_down, GGML_PREC_BF16);
     }
 }
 
 std::unique_ptr<llm_graph_context> llama_model_jais2::build_arch_graph(const llm_graph_params & params) const {
-    return std::make_unique<graph>(*this, params);
+    return std::make_unique<graph>(params);
 }
 
 // JAIS-2 model graph builder
 // Uses: LayerNorm (not RMSNorm), relu2 activation, separate Q/K/V, RoPE embeddings
-llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llama_model_jais2::graph::graph(const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
@@ -84,17 +88,8 @@ llama_model_jais2::graph::graph(const llama_model & model, const llm_graph_param
                     n_embd_head, n_head, n_head_kv, il);
 
             // Apply RoPE
-            Qcur = ggml_rope_ext(
-                ctx0, Qcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow
-            );
-
-            Kcur = ggml_rope_ext(
-                ctx0, Kcur, inp_pos, nullptr,
-                n_rot, rope_type, n_ctx_orig, freq_base, freq_scale,
-                ext_factor, attn_factor, beta_fast, beta_slow
-            );
+            Qcur = build_rope(Qcur, inp_pos, il);
+            Kcur = build_rope(Kcur, inp_pos, il);
 
             cb(Qcur, "Qcur_rope", il);
             cb(Kcur, "Kcur_rope", il);
