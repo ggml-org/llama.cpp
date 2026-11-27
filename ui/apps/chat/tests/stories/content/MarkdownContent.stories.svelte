@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import { AI_TUTORIAL_MD } from '../fixtures/ai-tutorial.js';
+	import { MARKDOWN_TABLES_MD } from '../fixtures/markdown-tables.js';
 	import { MERMAID_DIAGRAMS_MD } from '../fixtures/mermaid-diagrams.js';
 	import { defineMeta } from '@storybook/addon-svelte-csf';
 	import { MarkdownContent } from '#lib/components/app/index.ts';
@@ -17,6 +18,48 @@
 <Story
 	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: AI_TUTORIAL_MD }}
 	name="Default"
+/>
+
+<Story
+	args={{ class: 'max-w-[56rem] w-[calc(100vw-2rem)]', content: MARKDOWN_TABLES_MD }}
+	name="Tables"
+	play={async ({ canvasElement }) => {
+		const tables = await waitFor(() => {
+			const found = [...canvasElement.querySelectorAll('table')];
+
+			expect(found).toHaveLength(5);
+
+			return found;
+		});
+		const numbers = tables[1];
+		const sizeCell = numbers.querySelectorAll('td')[2];
+		const sizeHeader = numbers.querySelectorAll('th')[2];
+		const wrapper = numbers.closest('.table-wrapper') as HTMLElement;
+
+		// the lean look: no frame, no filled header, one hairline under each row
+		await expect(getComputedStyle(wrapper).borderTopWidth).toBe('0px');
+		await expect(getComputedStyle(sizeHeader).backgroundColor).toBe('rgba(0, 0, 0, 0)');
+		await expect(getComputedStyle(sizeHeader).borderBottomWidth).toBe('1px');
+		await expect(getComputedStyle(sizeCell).borderLeftWidth).toBe('0px');
+
+		// a right-aligned column stays aligned in the header and in the cells
+		await expect(getComputedStyle(sizeHeader).textAlign).toBe('end');
+		await expect(getComputedStyle(sizeCell).textAlign).toBe('end');
+
+		// markup models put in cells still renders: a list, and a wrapped line
+		await expect(canvasElement.querySelector('td ul li')).not.toBeNull();
+		await expect(canvasElement.querySelector('td br')).not.toBeNull();
+
+		// too many columns for the column: the wrapper scrolls, the page does not
+		const wide = (tables[4] as HTMLElement).closest('.table-wrapper') as HTMLElement;
+
+		await expect(wide.scrollWidth).toBeGreaterThan(wide.clientWidth);
+		await expect(document.documentElement.scrollWidth).toBeLessThanOrEqual(window.innerWidth);
+		// and it scrolls on a width a model name sits on, rather than crumbling
+		await expect(wide.querySelector('td')!.getBoundingClientRect().width).toBeGreaterThanOrEqual(
+			100
+		);
+	}}
 />
 
 <Story

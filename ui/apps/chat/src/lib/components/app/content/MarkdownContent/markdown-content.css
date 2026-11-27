@@ -197,39 +197,92 @@
 	border-radius: 0 0.375rem 0.375rem 0;
 }
 
-/* Tables */
+/* Tables: one hairline under each row, no cell grid and no outer frame. The
+   header is set heavier instead of filled, so it reads without a band. */
 .markdown-content :global(table) {
+	/* one line colour for the whole table, so a tinted surface can retint it once */
+	--table-line: color-mix(in oklch, var(--line-default) 55%, transparent);
+
 	width: 100%;
-	margin: 1.5rem 0;
+	margin: 1rem 0;
 	border-collapse: collapse;
-	border: 1px solid var(--line-default);
-	border-radius: 0.375rem;
-	overflow: hidden;
+	/* a table is reference material, so it sits a step under the prose */
+	font-size: 0.875rem;
+	line-height: 1.5;
+	/* a column of numbers keeps its digits under each other */
+	font-variant-numeric: tabular-nums;
+}
+
+.markdown-content :global(th),
+.markdown-content :global(td) {
+	/* wide gutters carry the column separation that the vertical rules used to */
+	padding: 0.5rem 1.25rem;
+	text-align: start;
+	vertical-align: top;
+	border-bottom: 1px solid var(--table-line);
+}
+
+/* the outer columns line up with the prose above and below the table */
+.markdown-content :global(:is(th, td):first-child) {
+	padding-inline-start: 0;
+}
+
+.markdown-content :global(:is(th, td):last-child) {
+	padding-inline-end: 0;
 }
 
 .markdown-content :global(th) {
-	background: hsl(var(--surface-muted) / 0.3);
-	border: 1px solid var(--line-default);
-	padding: 0.5rem 0.75rem;
-	text-align: left;
+	/* a header that wraps to two lines keeps its second line on the rule */
+	padding-block: 0.375rem 0.5rem;
 	font-weight: 600;
+	vertical-align: bottom;
 }
 
-.markdown-content :global(td) {
-	border: 1px solid var(--line-default);
-	padding: 0.5rem 0.75rem;
+/* GFM column alignment arrives as an align attribute, which any authored
+   text-align beats, so the three cases are restated rather than inherited */
+.markdown-content :global(:is(th, td)[align='left']) {
+	text-align: start;
 }
 
-.markdown-content :global(tr:nth-child(even)) {
-	background: hsl(var(--surface-muted) / 0.1);
+.markdown-content :global(:is(th, td)[align='center']) {
+	text-align: center;
 }
 
-/* User message markdown should keep table borders visible on light primary backgrounds */
-div.markdown-user-content :global(table),
-div.markdown-user-content :global(th),
-div.markdown-user-content :global(td),
-div.markdown-user-content :global(.table-wrapper) {
-	border-color: currentColor;
+.markdown-content :global(:is(th, td)[align='right']) {
+	text-align: end;
+}
+
+/* A table this wide is scrolled either way, so its columns keep a width a word
+   can sit on instead of crumbling to three lines each */
+.markdown-content :global(.table-wrapper table:has(th:nth-child(6)) :is(th, td)) {
+	min-width: 7rem;
+}
+
+/* a flag or a path stays one token in its cell, and the wrapper scrolls */
+.markdown-content :global(:is(th, td) code:not(pre code)) {
+	white-space: nowrap;
+}
+
+/* a list restored into a cell keeps the row as tight as its neighbours */
+.markdown-content :global(:is(th, td) :is(ul, ol)) {
+	margin: 0;
+	padding-inline-start: 1.125rem;
+}
+
+.markdown-content :global(:is(th, td) li) {
+	margin-bottom: 0.125rem;
+}
+
+/* A user bubble breaks at anywhere to fit its width, which pulls a table's
+   columns down to a few letters each; break-word keeps the min-content width */
+div.markdown-user-content :global(:is(th, td)) {
+	overflow-wrap: break-word;
+	word-break: normal;
+}
+
+/* ...and its hairlines stay visible on the tinted bubble background */
+div.markdown-user-content :global(table) {
+	--table-line: color-mix(in oklch, currentColor 25%, transparent);
 }
 
 /* Horizontal rules */
@@ -387,21 +440,10 @@ div.markdown-user-content :global(.table-wrapper) {
 	}
 }
 
-/* Advanced table enhancements */
-.markdown-content :global(table) {
-	transition: all 0.2s ease;
-}
-
+/* A row lights up under the pointer, to follow a value across a wide table */
 @media (hover: hover) and (pointer: fine) {
-	.markdown-content :global(table:hover) {
-		box-shadow:
-			0 4px 6px -1px rgb(0 0 0 / 0.1),
-			0 2px 4px -2px rgb(0 0 0 / 0.1);
-	}
-
-	.markdown-content :global(th:hover),
-	.markdown-content :global(td:hover) {
-		background: var(--surface-muted);
+	.markdown-content :global(tbody tr:hover td) {
+		background: color-mix(in oklch, var(--surface-muted) 45%, transparent);
 	}
 }
 
@@ -411,13 +453,8 @@ div.markdown-user-content :global(.table-wrapper) {
 	color: inherit;
 }
 
-.markdown-user-content :global(table:hover) {
-	box-shadow: none;
-}
-
-.markdown-user-content :global(th:hover),
-.markdown-user-content :global(td:hover) {
-	background: inherit;
+.markdown-user-content :global(tbody tr:hover td) {
+	background: transparent;
 }
 
 /* Enhanced blockquotes */
@@ -505,19 +542,18 @@ div.markdown-user-content :global(.table-wrapper) {
 	border-radius: 50%;
 }
 
-/* Scrollable tables */
+/* Scrollable tables: the wrapper is only a scroll port. The hairlines belong to
+   the rows, so a table that fits shows no box around it */
 .markdown-content :global(.table-wrapper) {
 	overflow-x: auto;
-	margin: 1.5rem 0;
-	border-radius: 0.5rem;
-	border: 1px solid var(--line-default);
+	margin: 1rem 0;
 	/* a wide table scrolls here, it does not widen the column */
 	max-width: 100%;
+	overscroll-behavior-x: contain;
 }
 
 .markdown-content :global(.table-wrapper table) {
 	margin: 0;
-	border: none;
 }
 
 /* Responsive adjustments */
@@ -534,18 +570,10 @@ div.markdown-user-content :global(.table-wrapper) {
 		font-size: 1.125rem;
 	}
 
-	.markdown-content :global(table) {
-		font-size: 0.875rem;
-	}
-
+	/* a narrower gutter, and no full-bleed: it hid the outer columns */
 	.markdown-content :global(th),
 	.markdown-content :global(td) {
-		padding: 0.375rem 0.5rem;
-	}
-
-	/* no full-bleed: it hid the outer columns */
-	.markdown-content :global(.table-wrapper) {
-		margin: 1rem 0;
+		padding-inline: 0.875rem;
 	}
 }
 
