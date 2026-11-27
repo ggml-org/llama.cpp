@@ -3251,9 +3251,6 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             } else {
                 kq_mask = ggml_add(ctx0, bias, kq_mask);
             }
-            if (cparams.flash_attn) {
-                kq_mask = ggml_cast(ctx0, kq_mask, GGML_TYPE_F16);
-            }
             cb(kq_mask, "kq_mask_bias", il);
         }
         // A cache without an exported scale uses a unit scale.
