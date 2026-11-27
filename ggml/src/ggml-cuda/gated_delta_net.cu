@@ -83,19 +83,80 @@ gated_delta_net_cuda(const float * q,
 
     float         s_shard[rows_per_lane];
     // state is stored transposed: M[col][i] = S[i][col], row col is contiguous
+#if defined(GGML_USE_HIP)
+    constexpr bool allow_vec4 = (!KDA && (rows_per_lane % 4 == 0) && (S_v >= 64));
+#else
+    constexpr bool allow_vec4 = false;
+#endif
+    constexpr int n_vec4 = rows_per_lane / 4;
+    // Uniform 16-byte alignment guard so non-aligned tensor views safely fall back to scalar loads/stores.
+    // All state/replay/token paths share the same lane mapping when use_vec4_state is true so replayed
+    // states remain bit-for-bit identical to non-replayed states.
+    const bool use_vec4_state = allow_vec4 &&
+        ((((uintptr_t) curr_state | (uintptr_t) state) & 15u) == 0u) &&
+        ((state_slot_stride & 3) == 0);
+    const bool use_vec4_qk = use_vec4_state &&
+        ((((uintptr_t) q | (uintptr_t) k) & 15u) == 0u) &&
+        (((sq1 | sq2 | sq3) & 3) == 0);
+
+    auto load_row = [&](const float * src, float * dst_reg, bool aligned16) {
+        if (allow_vec4 && use_vec4_state) {
+            if (aligned16) {
+#pragma unroll
+                for (int iv = 0; iv < n_vec4; iv++) {
+                    const float4 val = *reinterpret_cast<const float4 *>(src + (iv * lanes_per_col + lane_in_col) * 4);
+                    dst_reg[iv * 4 + 0] = val.x; dst_reg[iv * 4 + 1] = val.y;
+                    dst_reg[iv * 4 + 2] = val.z; dst_reg[iv * 4 + 3] = val.w;
+                }
+            } else {
+#pragma unroll
+                for (int iv = 0; iv < n_vec4; iv++) {
+                    const int idx4 = (iv * lanes_per_col + lane_in_col) * 4;
+                    dst_reg[iv * 4 + 0] = src[idx4 + 0]; dst_reg[iv * 4 + 1] = src[idx4 + 1];
+                    dst_reg[iv * 4 + 2] = src[idx4 + 2]; dst_reg[iv * 4 + 3] = src[idx4 + 3];
+                }
+            }
+        } else {
+#pragma unroll
+            for (int r = 0; r < rows_per_lane; r++) {
+                dst_reg[r] = src[r * lanes_per_col + lane_in_col];
+            }
+        }
+    };
+
+    auto store_row = [&](float * dst_ptr, const float * src_reg, bool aligned16) {
+        if (allow_vec4 && use_vec4_state) {
+            if (aligned16) {
+#pragma unroll
+                for (int iv = 0; iv < n_vec4; iv++) {
+                    *reinterpret_cast<float4 *>(dst_ptr + (iv * lanes_per_col + lane_in_col) * 4) =
+                        make_float4(src_reg[iv * 4 + 0], src_reg[iv * 4 + 1], src_reg[iv * 4 + 2], src_reg[iv * 4 + 3]);
+                }
+            } else {
+#pragma unroll
+                for (int iv = 0; iv < n_vec4; iv++) {
+                    const int idx4 = (iv * lanes_per_col + lane_in_col) * 4;
+                    dst_ptr[idx4 + 0] = src_reg[iv * 4 + 0]; dst_ptr[idx4 + 1] = src_reg[iv * 4 + 1];
+                    dst_ptr[idx4 + 2] = src_reg[iv * 4 + 2]; dst_ptr[idx4 + 3] = src_reg[iv * 4 + 3];
+                }
+            }
+        } else {
+#pragma unroll
+            for (int r = 0; r < rows_per_lane; r++) {
+                dst_ptr[r * lanes_per_col + lane_in_col] = src_reg[r];
+            }
+        }
+    };
 
     ggml_cuda_pdl_sync();
-#pragma unroll
-    for (int r = 0; r < rows_per_lane; r++) {
-        const int i = r * lanes_per_col + lane_in_col;
-        s_shard[r]  = curr_state[i];
-    }
+    load_row(curr_state, s_shard, true);
 
     if constexpr (replay) {
         const int     n_r = rep.n_rep[sequence];
         const float * pk  = rep.pk  + sequence * rep.sk3 + iq1   * rep.sk1;
         const float * pv  = rep.pv  + sequence * rep.sv3 + h_idx * rep.sv1;
         const float * pgb = rep.pgb + sequence * rep.sg3 + h_idx * rep.sg1;
+        const bool aligned_pk = use_vec4_state && ((((uintptr_t) rep.pk) & 15u) == 0u) && (((rep.sk1 | rep.sk2 | rep.sk3) & 3) == 0);
 
         for (int t = 0; t < n_r; t++) {
             const float * k_t      = pk + t * rep.sk2;
@@ -104,10 +165,7 @@ gated_delta_net_cuda(const float * q,
             const float   beta_val = pgb[(rep.n_pend + t) * rep.sg2];
 
             float k_reg[rows_per_lane];
-#pragma unroll
-            for (int r = 0; r < rows_per_lane; r++) {
-                k_reg[r] = k_t[r * lanes_per_col + lane_in_col];
-            }
+            load_row(k_t, k_reg, aligned_pk);
 
             float g_reg[rows_per_lane];
 #pragma unroll
@@ -131,10 +189,7 @@ gated_delta_net_cuda(const float * q,
         }
 
         if (rep.keep) {
-#pragma unroll
-            for (int r = 0; r < rows_per_lane; r++) {
-                state[col * S_v + r * lanes_per_col + lane_in_col] = s_shard[r];
-            }
+            store_row(state + col * S_v, s_shard, true);
         }
     }
 
@@ -152,12 +207,8 @@ gated_delta_net_cuda(const float * q,
         // Cache k and q in registers
         float k_reg[rows_per_lane];
         float q_reg[rows_per_lane];
-#pragma unroll
-        for (int r = 0; r < rows_per_lane; r++) {
-            const int i = r * lanes_per_col + lane_in_col;
-            k_reg[r] = k_t[i];
-            q_reg[r] = q_t[i];
-        }
+        load_row(k_t, k_reg, use_vec4_qk);
+        load_row(q_t, q_reg, use_vec4_qk);
 
         if constexpr (replay && !KDA) {
             if (rep.st[0] != nullptr) {
@@ -165,10 +216,8 @@ gated_delta_net_cuda(const float * q,
                 const bool first = blockIdx.z == 0 && threadIdx.y == 0 && col_in_warp == 0;
                 if (first && h_idx < neqk1_magic.z) {
                     float * dk = rep.st[0] + sequence * rep.st3[0] + t * rep.st2[0] + h_idx * S_v;
-#pragma unroll
-                    for (int r = 0; r < rows_per_lane; r++) {
-                        dk[r * lanes_per_col + lane_in_col] = k_reg[r];
-                    }
+                    const bool aligned_dk = use_vec4_state && ((((uintptr_t) dk) & 15u) == 0u);
+                    store_row(dk, k_reg, aligned_dk);
                 }
                 if (lane_in_col == 0) {
                     rep.st[1][sequence * rep.st3[1] + t * rep.st2[1] + h_idx * S_v + col] = v_t[col];
@@ -252,11 +301,7 @@ gated_delta_net_cuda(const float * q,
             const int target_slot = (int) n_tokens - 1 - t;
             if (target_slot >= 0 && target_slot < K) {
                 float * curr_state = state + target_slot * state_slot_stride;
-#pragma unroll
-                for (int r = 0; r < rows_per_lane; r++) {
-                    const int i = r * lanes_per_col + lane_in_col;
-                    curr_state[col * S_v + i] = s_shard[r];
-                }
+                store_row(curr_state + col * S_v, s_shard, true);
             }
         }
     }
@@ -265,11 +310,7 @@ gated_delta_net_cuda(const float * q,
         if (replay && rep.keep) {
             return;
         }
-#pragma unroll
-        for (int r = 0; r < rows_per_lane; r++) {
-            const int i          = r * lanes_per_col + lane_in_col;
-            state[col * S_v + i] = s_shard[r];
-        }
+        store_row(state + col * S_v, s_shard, true);
     }
 }
 
