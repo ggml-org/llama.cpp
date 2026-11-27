@@ -790,8 +790,6 @@ void llama_context::sched_reserve() {
         return;
     }
 
-    sched_need_reserve = false;
-
     LLAMA_LOG_INFO("%s: reserving ...\n", __func__);
 
     synchronize();
@@ -950,6 +948,8 @@ void llama_context::sched_reserve() {
 
     LLAMA_LOG_INFO("%s: reserve took %.2f ms, sched copies = %d\n",
             __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
+
+    sched_need_reserve = false;
 }
 
 void llama_context::synchronize() {
