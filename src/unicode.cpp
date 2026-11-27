@@ -1,7 +1,9 @@
 #include "unicode.h"
+
 #include "unicode-data.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -159,8 +161,8 @@ static std::vector<unicode_cpt_flags> unicode_cpt_flags_array() {
     return cpt_flags;
 }
 
-static std::unordered_map<uint8_t, std::string> unicode_byte_to_utf8_map() {
-    std::unordered_map<uint8_t, std::string> map;
+static std::array<std::string, 256> unicode_byte_to_utf8_map() {
+    std::array<std::string, 256> map;
     for (int ch = 0x21; ch <= 0x7E; ++ch) {  // u'!' to u'~'
         assert(0 <= ch && ch < 256);
         map[ch] = unicode_cpt_to_utf8(ch);
@@ -175,7 +177,7 @@ static std::unordered_map<uint8_t, std::string> unicode_byte_to_utf8_map() {
     }
     auto n = 0;
     for (int ch = 0; ch < 256; ++ch) {
-        if (map.find(ch) == map.end()) {
+        if (map[ch].empty()) {
             map[ch] = unicode_cpt_to_utf8(256 + n);
             ++n;
         }
@@ -222,18 +224,13 @@ static std::vector<int> unicode_cpt_to_byte_map() {
 
 static std::vector<std::string> unicode_byte_encoding_process(const std::vector<std::string> & bpe_words) {
     std::vector<std::string> bpe_encoded_words;
+    bpe_encoded_words.reserve(bpe_words.size());
     for (const auto & word : bpe_words) {
-        std::string text_utf;
-        auto utf_word =  unicode_cpts_from_utf8(word);
-        for (size_t i = 0; i < utf_word.size(); ++i) {
-            text_utf += unicode_cpt_to_utf8(utf_word[i]);
-        }
-
-        std::string encoded_token;
-        for (char & c : text_utf) {
+        auto & encoded_token = bpe_encoded_words.emplace_back();
+        encoded_token.reserve(word.size() * 2);
+        for (const char & c : word) {
             encoded_token += unicode_byte_to_utf8(c);
         }
-        bpe_encoded_words.emplace_back(encoded_token);
     }
     return bpe_encoded_words;
 }
@@ -1439,33 +1436,30 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
 // interface
 //
 
+static void unicode_cpt_to_utf8(uint32_t cpt, std::string & out) {
+    if (/* 0x00 <= cpt && */ cpt <= 0x7f) {
+        out.push_back(cpt);
+    } else if (cpt <= 0x7ff) {
+        out.push_back(0xc0 | ((cpt >> 6) & 0x1f));
+        out.push_back(0x80 | (cpt & 0x3f));
+    } else if (cpt <= 0xffff) {
+        out.push_back(0xe0 | ((cpt >> 12) & 0x0f));
+        out.push_back(0x80 | ((cpt >> 6) & 0x3f));
+        out.push_back(0x80 | (cpt & 0x3f));
+    } else if (cpt <= 0x10ffff) {
+        out.push_back(0xf0 | ((cpt >> 18) & 0x07));
+        out.push_back(0x80 | ((cpt >> 12) & 0x3f));
+        out.push_back(0x80 | ((cpt >> 6) & 0x3f));
+        out.push_back(0x80 | (cpt & 0x3f));
+    } else {
+        throw std::invalid_argument("invalid codepoint");
+    }
+}
+
 std::string unicode_cpt_to_utf8(uint32_t cpt) {
     std::string result;
-
-    if (/* 0x00 <= cpt && */ cpt <= 0x7f) {
-        result.push_back(cpt);
-        return result;
-    }
-    if (0x80 <= cpt && cpt <= 0x7ff) {
-        result.push_back(0xc0 | ((cpt >> 6) & 0x1f));
-        result.push_back(0x80 | (cpt & 0x3f));
-        return result;
-    }
-    if (0x800 <= cpt && cpt <= 0xffff) {
-        result.push_back(0xe0 | ((cpt >> 12) & 0x0f));
-        result.push_back(0x80 | ((cpt >> 6) & 0x3f));
-        result.push_back(0x80 | (cpt & 0x3f));
-        return result;
-    }
-    if (0x10000 <= cpt && cpt <= 0x10ffff) {
-        result.push_back(0xf0 | ((cpt >> 18) & 0x07));
-        result.push_back(0x80 | ((cpt >> 12) & 0x3f));
-        result.push_back(0x80 | ((cpt >> 6) & 0x3f));
-        result.push_back(0x80 | (cpt & 0x3f));
-        return result;
-    }
-
-    throw std::invalid_argument("invalid codepoint");
+    unicode_cpt_to_utf8(cpt, result);
+    return result;
 }
 
 std::vector<uint32_t> unicode_cpts_normalize_nfd(const std::vector<uint32_t> & cpts) {
@@ -1599,9 +1593,9 @@ unicode_cpt_flags unicode_cpt_flags_from_utf8(const std::string & utf8) {
     return unicode_cpt_flags_from_cpt(unicode_cpt_from_utf8(utf8, offset));
 }
 
-std::string unicode_byte_to_utf8(uint8_t byte) {
-    static std::unordered_map<uint8_t, std::string> map = unicode_byte_to_utf8_map();
-    return map.at(byte);
+const std::string & unicode_byte_to_utf8(uint8_t byte) {
+    static const std::array<std::string, 256> map = unicode_byte_to_utf8_map();
+    return map[byte];
 }
 
 uint8_t unicode_utf8_to_byte(const std::string & utf8) {
@@ -1845,9 +1839,9 @@ std::vector<std::string> unicode_regex_split(const std::string & text, const std
 
     size_t start = 0;
     for (size_t & offset : bpe_offsets) {
-        bpe_words.emplace_back();
+        auto & word = bpe_words.emplace_back();
         for (size_t i = start; i < start + offset; ++i) {
-            bpe_words.back() += unicode_cpt_to_utf8(cpts[i]);
+            unicode_cpt_to_utf8(cpts[i], word);
         }
         start += offset;
     }

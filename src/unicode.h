@@ -102,9 +102,9 @@ std::vector<uint32_t> unicode_cpts_normalize_nfc(const std::vector<uint32_t> & c
 unicode_cpt_flags unicode_cpt_flags_from_cpt (uint32_t cpt);
 unicode_cpt_flags unicode_cpt_flags_from_utf8(const std::string & utf8);
 
-std::string unicode_byte_to_utf8(uint8_t byte);
-uint8_t     unicode_utf8_to_byte(const std::string & utf8);
-uint8_t     unicode_cpt_to_byte (uint32_t cpt);
+const std::string & unicode_byte_to_utf8(uint8_t byte);
+uint8_t             unicode_utf8_to_byte(const std::string & utf8);
+uint8_t             unicode_cpt_to_byte(uint32_t cpt);
 
 uint32_t unicode_tolower(uint32_t cpt);
 
