@@ -2314,6 +2314,7 @@ extern "C" {
             struct ggml_tensor * sinks);
 
     // Add bias[bias_idxs[key, query], head, query] to the mask, in F32.
+    // The bias is added after the KQ scaling.
     // Queries from all streams are flattened in stream order. Indices must be in [0, bias->ne[0]).
     // If bias_idxs is NULL, bias is a dense K*Q bias with shape [n_kv, n_batch, n_head_kv, n_stream].
     GGML_API void ggml_flash_attn_ext_add_bias(
