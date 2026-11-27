@@ -22,6 +22,7 @@
 
 #include "types.glsl"
 #include "dot_product_funcs.glsl"
+#define FA_KV_ROWS_SHMEM
 #include "flash_attn_base.glsl"
 #include "flash_attn_dequant.glsl"
 
@@ -211,10 +212,9 @@ void main() {
                     uint32_t c = (idx + tid) % Bc;
                     uint32_t r = (idx + tid) / Bc;
                     if (idx + tid < Bc * Br) {
-                        uint32_t kcol;
-                        bool kv_active = fa_kv_index(j * Bc + c, kcol);
-                        if (kv_active && (!nem1_bounds_check || i * Br + r < p.nem1)) {
-                            FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + (i * Br + r) * m_stride + kcol]);
+                        uint32_t mcol;
+                        if (fa_mask_index(j * Bc + c, mcol) && (!nem1_bounds_check || i * Br + r < p.nem1)) {
+                            FLOAT_TYPE m = FLOAT_TYPE(data_m[m_offset + (i * Br + r) * m_stride + mcol]);
                             masksh[c * masksh_stride + r] = m;
                             max_mask = max(max_mask, float(m));
                         } else {
@@ -241,6 +241,8 @@ void main() {
                 }
             }
         }
+
+        fa_kv_rows_load(j);
 
         ACC_TYPE Sf[rows_per_thread][cols_per_thread];
         [[unroll]] for (uint32_t r = 0; r < rows_per_thread; ++r) {

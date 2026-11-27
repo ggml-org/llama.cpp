@@ -118,7 +118,7 @@ layout (binding = 1) readonly buffer K {uint8_t data_k[];};
 layout (binding = 2) readonly buffer V {uint8_t data_v[];};
 layout (binding = 3) readonly buffer M {uint8_t data_m[];};
 
-// Native 16-bit aliases for the sparse gather callbacks.
+// Native 16-bit aliases for the gather callbacks.
 layout (binding = 1) readonly buffer K16 {FLOAT_TYPE data_k16[];};
 layout (binding = 2) readonly buffer V16 {FLOAT_TYPE data_v16[];};
 layout (binding = 3) readonly buffer MF16 {float16_t data_mf16[];};
@@ -131,57 +131,53 @@ layout (binding = 2) readonly buffer V16V4 {FLOAT_TYPEV4 data_v16v4[];};
 uint32_t g_k_off_elem, g_v_off_elem, g_m_off_elem;
 
 FLOAT_TYPE faGatherK(const decodeBufFA_K bl_in, const uint32_t blockCoords[2], const uint32_t coordInBlock[2]) {
-    if (blockCoords[0] >= p.split_kv) { return FLOAT_TYPE(0.0); }
-    const int r = data_sparse[sparse_base + blockCoords[0]];
-    if (r < 0) { return FLOAT_TYPE(0.0); }
+    uint r;
+    if (!fa_kv_index(blockCoords[0], r)) { return FLOAT_TYPE(0.0); }
 #if !defined(BFLOAT16)
     if (USE_DECODE_K) {
-        decodeBufFA_K block = decodeBufFA_K(decodeBufFA_Byte(bl_in) + uint64_t(uint(r) - blockCoords[0]) * k_stride * FaBlockBytesK);
+        decodeBufFA_K block = decodeBufFA_K(decodeBufFA_Byte(bl_in) + uint64_t(int64_t(r) - int64_t(blockCoords[0])) * k_stride * FaBlockBytesK);
         return faDecodeK(block, blockCoords, coordInBlock);
     }
 #endif
-    return data_k16[g_k_off_elem + uint(r) * k_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1]];
+    return data_k16[g_k_off_elem + r * k_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1]];
 }
 
 FLOAT_TYPE faGatherV(const decodeBufFA_V bl_in, const uint32_t blockCoords[2], const uint32_t coordInBlock[2]) {
-    if (blockCoords[0] >= p.split_kv) { return FLOAT_TYPE(0.0); }
-    const int r = data_sparse[sparse_base + blockCoords[0]];
-    if (r < 0) { return FLOAT_TYPE(0.0); }
+    uint r;
+    if (!fa_kv_index(blockCoords[0], r)) { return FLOAT_TYPE(0.0); }
 #if !defined(BFLOAT16)
     if (USE_DECODE_V) {
-        decodeBufFA_V block = decodeBufFA_V(decodeBufFA_Byte(bl_in) + uint64_t(uint(r) - blockCoords[0]) * v_stride * FaBlockBytesV);
+        decodeBufFA_V block = decodeBufFA_V(decodeBufFA_Byte(bl_in) + uint64_t(int64_t(r) - int64_t(blockCoords[0])) * v_stride * FaBlockBytesV);
         return faDecodeV(block, blockCoords, coordInBlock);
     }
 #endif
-    return data_v16[g_v_off_elem + uint(r) * v_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1]];
+    return data_v16[g_v_off_elem + r * v_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1]];
 }
 
 #ifdef GL_NV_cooperative_matrix_decode_vector
 FLOAT_TYPEV4 faGatherKVector(const decodeBufFA_K bl_in, const uint32_t blockCoords[2], const uint32_t coordInBlock[2]) {
-    if (blockCoords[0] >= p.split_kv) { return FLOAT_TYPEV4(0.0); }
-    const int r = data_sparse[sparse_base + blockCoords[0]];
-    if (r < 0) { return FLOAT_TYPEV4(0.0); }
+    uint r;
+    if (!fa_kv_index(blockCoords[0], r)) { return FLOAT_TYPEV4(0.0); }
 #if !defined(BFLOAT16)
     if (USE_DECODE_K) {
-        decodeBufFA_K block = decodeBufFA_K(decodeBufFA_Byte(bl_in) + uint64_t(uint(r) - blockCoords[0]) * k_stride * FaBlockBytesK);
+        decodeBufFA_K block = decodeBufFA_K(decodeBufFA_Byte(bl_in) + uint64_t(int64_t(r) - int64_t(blockCoords[0])) * k_stride * FaBlockBytesK);
         return faDecodeKVector(block, blockCoords, coordInBlock);
     }
 #endif
-    const uint32_t o = g_k_off_elem + uint(r) * k_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1];
+    const uint32_t o = g_k_off_elem + r * k_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1];
     return data_k16v4[o / 4];
 }
 
 FLOAT_TYPEV4 faGatherVVector(const decodeBufFA_V bl_in, const uint32_t blockCoords[2], const uint32_t coordInBlock[2]) {
-    if (blockCoords[0] >= p.split_kv) { return FLOAT_TYPEV4(0.0); }
-    const int r = data_sparse[sparse_base + blockCoords[0]];
-    if (r < 0) { return FLOAT_TYPEV4(0.0); }
+    uint r;
+    if (!fa_kv_index(blockCoords[0], r)) { return FLOAT_TYPEV4(0.0); }
 #if !defined(BFLOAT16)
     if (USE_DECODE_V) {
-        decodeBufFA_V block = decodeBufFA_V(decodeBufFA_Byte(bl_in) + uint64_t(uint(r) - blockCoords[0]) * v_stride * FaBlockBytesV);
+        decodeBufFA_V block = decodeBufFA_V(decodeBufFA_Byte(bl_in) + uint64_t(int64_t(r) - int64_t(blockCoords[0])) * v_stride * FaBlockBytesV);
         return faDecodeVVector(block, blockCoords, coordInBlock);
     }
 #endif
-    const uint32_t o = g_v_off_elem + uint(r) * v_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1];
+    const uint32_t o = g_v_off_elem + r * v_stride + blockCoords[1] * FA_GATHER_BS + coordInBlock[1];
     return data_v16v4[o / 4];
 }
 
@@ -201,9 +197,8 @@ FLOAT_TYPEV4 faGatherVVector(const decodeBufFA_V bl_in, const uint32_t blockCoor
 
 ACC_TYPE faAddSparseMask(const uint32_t row, const uint32_t col, const ACC_TYPE elem, const uint32_t jblk) {
     const uint32_t kvslot = jblk * Bc + col;
-    if (kvslot >= p.split_kv) { return ACC_TYPE_NEG; }
-    const int r = data_sparse[sparse_base + kvslot];
-    return r < 0 ? ACC_TYPE_NEG : elem + ACC_TYPE(data_mf16[g_m_off_elem + row * m_stride + uint(r)]);
+    uint r;
+    return fa_kv_index(kvslot, r) ? elem + ACC_TYPE(data_mf16[g_m_off_elem + row * m_stride + r]) : ACC_TYPE_NEG;
 }
 
 ACC_TYPE maxReduce(const in ACC_TYPE x, const in ACC_TYPE y) {
@@ -284,8 +279,8 @@ void main() {
 
     tensorViewNV<2, false, 1, 0> tensorViewTranspose = createTensorViewNV(2, false, 1, 0);
 
-    const uint bs_k = USE_SPARSE ? max(FA_GATHER_BS, BLOCK_SIZE_K) : BLOCK_SIZE_K;
-    const uint bs_v = USE_SPARSE ? max(FA_GATHER_BS, BLOCK_SIZE_V) : BLOCK_SIZE_V;
+    const uint bs_k = GATHER_KV ? max(FA_GATHER_BS, BLOCK_SIZE_K) : BLOCK_SIZE_K;
+    const uint bs_v = GATHER_KV ? max(FA_GATHER_BS, BLOCK_SIZE_V) : BLOCK_SIZE_V;
     tensorLayoutK = setTensorLayoutBlockSizeNV(tensorLayoutK, 1, bs_k);
     tensorLayoutV = setTensorLayoutBlockSizeNV(tensorLayoutV, 1, bs_v);
 
@@ -408,13 +403,17 @@ void main() {
             }
         }
 
+#ifdef FA_KV_ROWS_SHMEM
+        fa_kv_rows_load(j);
+#endif
+
         coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator> S = coopmat<ACC_TYPE, gl_ScopeWorkgroup, Br, Bc, gl_MatrixUseAccumulator>(0);
 
         coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, HSK_pad, Bc, gl_MatrixUseB> K_T;
 
         uint32_t k_offset = ik2*p.nb12 + ik3*p.nb13;
         // F16: bs_k==1 (direct load). F32: bs_k==4 (vec4 / dequantFuncF32). Quantized types: bs_k==32.
-        if (USE_SPARSE) {
+        if (GATHER_KV) {
             coopMatLoadTensorNV(K_T, data_k, k_offset, sliceTensorLayoutNV(tensorLayoutK, j * Bc, Bc, 0, HSK_pad), tensorViewTranspose FAGATHERK);
 #if !defined(BFLOAT16)
         } else if (USE_DECODE_K) {
@@ -485,7 +484,7 @@ void main() {
 
         coopmat<FLOAT_TYPE, gl_ScopeWorkgroup, Bc, HSV_pad, gl_MatrixUseB> V;
         uint32_t v_offset = iv2*p.nb22 + iv3*p.nb23;
-        if (USE_SPARSE) {
+        if (GATHER_KV) {
             coopMatLoadTensorNV(V, data_v, v_offset, sliceTensorLayoutNV(tensorLayoutV, j * Bc, Bc, 0, HSV_pad) FAGATHERV);
 #if !defined(BFLOAT16)
         } else if (USE_DECODE_V) {

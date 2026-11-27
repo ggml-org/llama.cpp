@@ -6,6 +6,9 @@ layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {block_q8_0 data_a[];};
 layout (binding = 1) writeonly buffer D {D_TYPE data_b[];};
+#ifdef DEQUANT_TRANSPOSE
+layout (binding = 2) readonly buffer R {int data_rows[];};
+#endif
 
 void main() {
     const uint i = gl_WorkGroupID.x * 4 + gl_LocalInvocationID.x / 64;
@@ -18,6 +21,7 @@ void main() {
         return;
     }
 
+    uint a_idx = ib;
 #ifdef DEQUANT_TRANSPOSE
     // read [HS, NH, KV, NS], write [HS, KV, NH, NS]
     const uint HS = p.M, NH = p.K, KVn = p.stride_a;
@@ -27,16 +31,28 @@ void main() {
                      + ((e0 / HS) % NH) * (HS * KVn)
                      + (e0 / (HS * NH * KVn)) * (HS * KVn * NH)
                      + 16 * il;
+    // A nonzero stride_b is the size of the shared cache for row-list gathers.
+    if (p.stride_b != 0) {
+        const uint blocks_per_row = HS * NH / 32;
+        const uint row = uint(data_rows[ib / blocks_per_row]);
+        if (row >= p.stride_b) {
+            [[unroll]] for (uint l = 0; l < 16; ++l) {
+                data_b[b_idx + l] = D_TYPE(0.0);
+            }
+            return;
+        }
+        a_idx = row * blocks_per_row + ib % blocks_per_row;
+    }
 #else
     const uint b_idx = 1024*i + 32*ir + 16*il;
 #endif
 
-    const float d = float(data_a[ib].d);
+    const float d = float(data_a[a_idx].d);
 
     const uint q_idx = 16*il;
 
     [[unroll]] for (uint l = 0; l < 16; l += 2) {
-        data_b[b_idx + l    ] = D_TYPE(d * data_a[ib].qs[q_idx + l    ]);
-        data_b[b_idx + l + 1] = D_TYPE(d * data_a[ib].qs[q_idx + l + 1]);
+        data_b[b_idx + l    ] = D_TYPE(d * data_a[a_idx].qs[q_idx + l    ]);
+        data_b[b_idx + l + 1] = D_TYPE(d * data_a[a_idx].qs[q_idx + l + 1]);
     }
 }

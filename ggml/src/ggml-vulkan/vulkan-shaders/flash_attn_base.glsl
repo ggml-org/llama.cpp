@@ -30,6 +30,8 @@ const bool Q_IN_REGS       = (Flags & 32) != 0;
 // coopmat1: subgroups own Q rows, O in coopmat accumulators. K/V staged in LDS, or loaded from global memory with FLIP_DIRECT.
 const bool FLIP            = (Flags & 64) != 0;
 const bool FLIP_DIRECT     = (Flags & 128) != 0;
+const bool USE_KV_ROWS     = (Flags & 256) != 0;
+const bool GATHER_KV       = USE_SPARSE || USE_KV_ROWS;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
@@ -46,7 +48,7 @@ layout (push_constant) uniform parameter {
     uint32_t ne3;
 
     uint32_t neq2;
-    uint32_t neq3;
+    uint32_t n_kv_cache;
     uint32_t nek2;
     uint32_t nek3;
     uint32_t nev2;
@@ -88,7 +90,7 @@ layout (binding = 5) writeonly buffer OV4 {D_TYPEV4 data_ov4[];};
 
 layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 
-layout (binding = 7) readonly buffer SP {int32_t data_sparse[];};
+layout (binding = 7) readonly buffer KI {int32_t data_kv_indices[];};
 
 // Use -FLT_MAX/2 rather than -inf to reduce the possibility of NaNs, e.g. when computing Mold-M.
 #define NEG_FLT_MAX_OVER_2 uintBitsToFloat(0xFEFFFFFF)
@@ -157,7 +159,13 @@ ACC_TYPE perElemOpGetSink(const in uint32_t r, const in uint32_t c, const in ACC
 
 uint32_t i, N, KV, split_k_index, Tr, start_j, end_j,
          gqa_iq1, iq2, iq3, rk2, rk3, rv2, rv3, ik2, ik3, iv2, iv3,
-         q_stride, k_stride, v_stride, m_stride, sparse_base;
+         q_stride, k_stride, v_stride, m_stride, kv_indices_base;
+
+#ifdef FA_KV_ROWS_SHMEM
+const uint32_t kv_rows_sh_size = !USE_KV_ROWS ? 4 : (Bc >= 128 ? Bc : 128);
+shared uint32_t kv_rows_sh[kv_rows_sh_size];
+uint32_t kv_rows_sh_base = 0x80000000u;
+#endif
 
 void init_indices()
 {
@@ -197,10 +205,10 @@ void init_indices()
 
     // broadcast factors
     rk2 = p.neq2/p.nek2;
-    rk3 = p.neq3/p.nek3;
+    rk3 = p.ne3/p.nek3;
 
     rv2 = p.neq2/p.nev2;
-    rv3 = p.neq3/p.nev3;
+    rv3 = p.ne3/p.nev3;
 
     // k indices
     ik3 = iq3 / rk3;
@@ -226,27 +234,64 @@ void init_indices()
     // partitions the n_kv_max blocks.
     if (USE_SPARSE) {
         uint32_t qrow = (p.gqa_ratio > 1) ? gqa_iq1 : (i * Br);
-        sparse_base = (((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 + qrow) * p.split_kv;
+        kv_indices_base = (((iq3 % p.nem3) * p.nem2 + (iq2 % p.nem2)) * p.nem1 + qrow) * p.split_kv;
 
         uint32_t total_blocks = CEIL_DIV(p.split_kv, Bc);
         uint32_t per_blocks   = CEIL_DIV(total_blocks, p.k_num);
         start_j = min(split_k_index * per_blocks, total_blocks);
         end_j   = min((split_k_index + 1) * per_blocks, total_blocks);
+    } else if (USE_KV_ROWS) {
+        kv_indices_base = iq3 * KV;
     }
 }
 
-// Resolve a linear KV slot to a real column; false for inactive (sparse padding/-1, or dense OOB).
+// Resolve an attention column to a K/V row; false for inactive (padding or out of range).
 bool fa_kv_index(uint lin, out uint kv_col) {
-    if (USE_SPARSE) {
-        if (lin >= p.split_kv) {
+#ifdef FA_KV_ROWS_SHMEM
+    if (USE_KV_ROWS) {
+        kv_col = kv_rows_sh[lin - kv_rows_sh_base];
+        return !KV_bounds_check || lin < KV;
+    }
+#endif
+    if (GATHER_KV) {
+        if (lin >= (USE_SPARSE ? p.split_kv : KV)) {
             kv_col = 0;
             return false;
         }
-        int idx = data_sparse[sparse_base + lin];
-        kv_col = idx >= 0 ? uint(idx) : 0;
-        return idx >= 0;
+        uint idx = uint(data_kv_indices[kv_indices_base + lin]);
+        bool valid = idx < p.n_kv_cache;
+        kv_col = valid ? idx : 0;
+        return valid;
     }
     kv_col = lin;
+    return !KV_bounds_check || lin < KV;
+}
+
+#ifdef FA_KV_ROWS_SHMEM
+// padding rows read row 0, their mask is -inf
+void fa_kv_rows_load(const uint32_t j) {
+    if (!USE_KV_ROWS || j * Bc - kv_rows_sh_base <= kv_rows_sh_size - Bc) {
+        return;
+    }
+    kv_rows_sh_base = j * Bc;
+    barrier();
+    [[unroll]] for (uint32_t c = 0; c < kv_rows_sh_size; c += gl_WorkGroupSize.x) {
+        const uint32_t idx = c + gl_LocalInvocationIndex;
+        if (idx < kv_rows_sh_size) {
+            const uint32_t lin = kv_rows_sh_base + idx;
+            const uint32_t row = lin < KV ? uint(data_kv_indices[kv_indices_base + lin]) : 0;
+            kv_rows_sh[idx] = row < p.n_kv_cache ? row : 0;
+        }
+    }
+    barrier();
+}
+#endif
+
+bool fa_mask_index(uint lin, out uint mask_col) {
+    if (USE_SPARSE) {
+        return fa_kv_index(lin, mask_col);
+    }
+    mask_col = lin;
     return !KV_bounds_check || lin < KV;
 }
 

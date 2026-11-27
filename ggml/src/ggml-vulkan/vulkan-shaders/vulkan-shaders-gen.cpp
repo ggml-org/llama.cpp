@@ -736,6 +736,8 @@ void process_shaders() {
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
                 string_to_spv("flash_attn_f32_f16", "flash_attn_cm2.comp",
                     merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, true, f16acc);
+                string_to_spv("flash_attn_f32_f16", "flash_attn_cm2.comp",
+                    merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"FA_KV_ROWS_SHMEM", "1"}}), fp16, false, true, f16acc, "_rows");
 #endif
 
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
@@ -787,6 +789,9 @@ void process_shaders() {
     string_to_spv("flash_attn_f32_f16_bf16", "flash_attn_cm2.comp",
         merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}),
         true, false, true, false);
+    string_to_spv("flash_attn_f32_f16_bf16", "flash_attn_cm2.comp",
+        merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"FA_KV_ROWS_SHMEM", "1"}}),
+        true, false, true, false, "_rows");
 #endif
 
     std::map<std::string, std::string> base_dict = {{"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}};
@@ -959,11 +964,14 @@ void process_shaders() {
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
     string_to_spv("fa_decode_ph1", "flash_attn_decode_phase_1.comp", {}, true, true, false, false);
     string_to_spv("fa_decode_ph2", "flash_attn_decode_phase_2.comp", {}, true, true, false, false);
+    string_to_spv("fa_decode_ph1", "flash_attn_decode_phase_1.comp", {{"KV_ROWS", "1"}}, true, true, false, false, "_rows");
+    string_to_spv("fa_decode_ph2", "flash_attn_decode_phase_2.comp", {{"KV_ROWS", "1"}}, true, true, false, false, "_rows");
     string_to_spv("fa_prefill", "flash_attn_prefill.comp", {}, true, true, false, false);
 #endif
 
     string_to_spv("fa_sparse_compact", "flash_attn_sparse_compact.comp", {});
     string_to_spv("fa_sparse_compact_subgroup", "flash_attn_sparse_compact.comp", {{"USE_SUBGROUPS", "1"}});
+    string_to_spv("fa_kv_rows_copy", "flash_attn_kv_rows_copy.comp", {});
 
     string_to_spv("quantize_q8_1", "quantize_q8_1.comp", {});
     string_to_spv("quantize_q8_1_subgroup", "quantize_q8_1.comp", {{"USE_SUBGROUPS", "1"}});
