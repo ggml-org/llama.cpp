@@ -1,6 +1,6 @@
 # Instructions for llama.cpp
 
-AI-generated code is allowed. The user is 100% responsible for every line, however it was produced. Policy for humans: [CONTRIBUTING.md](CONTRIBUTING.md)
+AI-generated code is allowed. The user is 100% responsible for every line, however it was produced. Codebase guidelines: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 These instructions apply to ggml-org/llama.cpp only. Forks are exempt.
 

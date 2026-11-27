@@ -6,49 +6,20 @@ The project differentiates between 3 levels of contributors:
 - Collaborators (Triage): people with significant contributions, who may be responsible for some parts of the code, and are expected to maintain and review contributions for the code they own
 - Maintainers: responsible for reviewing and merging PRs, after approval from the code owners
 
-# AI Usage Policy
+# AI Usage
 
-> [!IMPORTANT]
->
-> AI-generated code is allowed. You are 100% responsible for every line, however it was produced.
->
-> Fully automated submissions (an agent committing, pushing, opening PRs or posting comments without human review) are not allowed and may result in a ban.
-
-### Requirements
-
-If AI is used to generate any portion of the code, contributors must adhere to the following requirements:
-
-1. Explicitly disclose the manner in which AI was employed.
-2. Check for an existing PR addressing the same change; if one exists, comment there to work with its author instead of opening a duplicate.
-3. Perform a comprehensive manual review prior to submitting the pull request. A proper code review usually takes something like one hour per 200-400 LOC and you should be spending **at least that much time on code review alone**.
-4. Be prepared to explain every line of code you submit when asked about it by a maintainer.
-5. If AI wrote a post for you (bug report, feature request, PR description, discussion, reply to a reviewer, ...), it must end with a footer naming the tool. You must read and agree with every word before posting it. Verbose, AI-sounding posts will not be well-received.
-
-### Checklist
-
-> [!IMPORTANT]
->
-> **If you use AI, do all of the following:**
->
-> 1. **Make sure [AGENTS.md](AGENTS.md) is loaded into your agent's context.** Skipping this step is one of the most common reasons PRs get rejected.
-> 2. **Search for related discussions, PRs and issues** to get the broader context before writing any code.
-> 3. **Run a local review pass before pushing anything**, using the [`code-review`](skills/code-review/SKILL.md) skill, once the change is implemented. Fix what it finds.
-
-Instructions for AI agents are in [AGENTS.md](AGENTS.md). Forks are exempt. Personal instructions (e.g. stating that you work on a fork) go in `AGENTS.local.md` at the repository root, which is git-ignored.
+If you use AI tools, see [AGENTS.md](AGENTS.md).
 
 # Pull requests (for contributors & collaborators)
 
 ### Before you start
 
-- Search for existing discussions and PRs first - duplicates will likely be closed without questions.
-- Features must begin with an issue, not a PR - let interest accumulate before writing code; niche features may only land as an example/tool, or on a private fork.
-- Bug-fix PRs must include a reproducible issue and a regression test that fails before your change and passes after. Fixes without a test may be closed without review.
-- New CLI or public API additions carry a **higher bar** than internal changes - justify why an existing mechanism doesn't suffice.
-- Keep it simple: complexity multiplies security risk and maintenance cost, so a simpler change that does 90% of the job is often preferred over a complex one that does 100%.
-- Meeting all of the above still doesn't guarantee a merge - see [Pull requests (for maintainers)](#pull-requests-for-maintainers).
+- Search for existing discussions and PRs first
+- Bug-fix PRs must include a reproducible issue and usually a regression test that fails before the change
+- Prefer simple and small PRs when possible
 - If you are a new contributor
-    - Limit your open PRs to 1
-    - Do not submit trivial fixes (e.g. typos, formatting changes)
+  - Limit your open PRs to 1
+  - Do not submit trivial fixes (e.g. typos, formatting changes)
 
 ### Preparing your PR
 
