@@ -3239,18 +3239,17 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         // add the bias to the mask
         // TODO: check if this is correct or if we should add it to the `kq` before the `kq_scale`
         if (bias) {
-            kq_mask = kq_mask->type == GGML_TYPE_F32 ? kq_mask : ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
+            ggml_tensor * bias_dense = bias;
             if (bias_idxs) {
                 // convert the indexed bias to dense
                 ggml_tensor * bias_table = ggml_cont(ctx0, ggml_permute(ctx0, bias, 1, 0, 2, 3));
-                ggml_tensor * bias_dense = ggml_get_rows(ctx0, bias_table, bias_idxs);
+                bias_dense = ggml_get_rows(ctx0, bias_table, bias_idxs);
                 bias_dense = ggml_reshape_4d(ctx0, bias_dense, q->ne[2], bias_idxs->ne[0], q->ne[1], n_stream);
-                bias_dense = ggml_cont(ctx0, ggml_permute(ctx0, bias_dense, 2, 0, 1, 3));
-                cb(bias_dense, "kq_bias", il);
-                kq_mask = ggml_add(ctx0, bias_dense, kq_mask);
-            } else {
-                kq_mask = ggml_add(ctx0, bias, kq_mask);
+                bias_dense = ggml_permute(ctx0, bias_dense, 2, 0, 1, 3);
             }
+            bias_dense = ggml_cast(ctx0, bias_dense, kq_mask->type);
+            cb(bias_dense, "kq_bias", il);
+            kq_mask = ggml_add(ctx0, bias_dense, kq_mask);
             cb(kq_mask, "kq_mask_bias", il);
         }
         // A cache without an exported scale uses a unit scale.
