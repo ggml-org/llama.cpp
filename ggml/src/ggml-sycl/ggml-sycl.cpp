@@ -7413,6 +7413,9 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {
+                if (op->type != GGML_TYPE_F32) { // the kernels write an F32 result
+                    return false;
+                }
                 struct ggml_tensor * a = op->src[0];
                 struct ggml_tensor * b = op->src[1];
 

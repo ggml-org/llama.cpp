@@ -165,13 +165,14 @@ void ggml_cuda_mul_mat_q(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst,
         const ggml_cuda_mm_fusion_args_host * fusion) {
     GGML_ASSERT(        src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16);
-    GGML_ASSERT(        dst->type  == GGML_TYPE_F32);
+    GGML_ASSERT(        dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_BF16);
     GGML_ASSERT(!ids || ids->type  == GGML_TYPE_I32); // Optional, used for batched GGML_MUL_MAT_ID.
 
     // Fused gate/up/GLU: src0 is the up weight, dst the GLU output.
     // Fused scale (no gate): dst is the MUL that applies the weight scale to the MUL_MAT.
     const ggml_tensor * gate = fusion ? fusion->gate : nullptr;
     ggml_cuda_mm_fusion_args_device fusion_device = {};
+    fusion_device.dst_bf16 = dst->type == GGML_TYPE_BF16;
     if (fusion) {
         GGML_ASSERT(!fusion->x_bias && !fusion->gate_bias);
         // NVFP4 weight scales (only applied for NVFP4): one value per tensor, or one per expert with ids.
@@ -210,7 +211,7 @@ void ggml_cuda_mul_mat_q(
     GGML_ASSERT(!ids || ids->nb[0] == ggml_type_size(ids->type));
 
     const char  * src0_d = (const char  *) src0->data;
-    float       *  dst_d = (float       *)  dst->data;
+    float       *  dst_d = (float       *)  dst->data; // nv_bfloat16 if fusion_device.dst_bf16
 
     // If src0 (or the fused gate weight) is a temporary compute buffer, clear any potential padding.
     for (const ggml_tensor * t : { src0, gate }) {

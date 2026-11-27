@@ -454,6 +454,9 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
                 op->type != GGML_TYPE_IQ1_S   &&
                 op->type != GGML_TYPE_IQ1_M; // missing type_traits.from_float
         case GGML_OP_MUL_MAT:
+            if (op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_BF16) {
+                return false;
+            }
             if (ggml_get_op_params_i32(op, 1) == GGML_HINT_SRC0_IS_HADAMARD &&
                 src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
                 // the hinted matmul is an FWHT of src1 for every src0 type, which reads F32 or F16 only;
@@ -465,6 +468,9 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
                    src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type ||
                    (src1->type == GGML_TYPE_F16 && ggml_get_type_traits_cpu(src0->type)->vec_dot_type == GGML_TYPE_F32);
         case GGML_OP_MUL_MAT_ID:
+            if (op->type != GGML_TYPE_F32 && op->type != GGML_TYPE_BF16) {
+                return false;
+            }
             // src1 is converted to vec_dot_type from F32 or BF16 only
             return src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16 ||
                    src1->type == ggml_get_type_traits_cpu(src0->type)->vec_dot_type;

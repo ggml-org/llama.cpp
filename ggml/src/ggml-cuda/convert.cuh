@@ -94,3 +94,16 @@ template<typename dst_t, typename src_t>
         return float(x);
     }
 }
+
+// matmul results: dst holds float, or nv_bfloat16 if dst_bf16; i counts elements of that type
+static __device__ __forceinline__ float * ggml_cuda_dst_ptr(float * dst, const int64_t i, const bool dst_bf16) {
+    return dst_bf16 ? (float *) ((nv_bfloat16 *) dst + i) : dst + i;
+}
+
+static __device__ __forceinline__ void ggml_cuda_store_dst(float * dst, const int64_t i, const float v, const bool dst_bf16) {
+    if (dst_bf16) {
+        ((nv_bfloat16 *) dst)[i] = ggml_cuda_cast<nv_bfloat16>(v);
+    } else {
+        dst[i] = v;
+    }
+}

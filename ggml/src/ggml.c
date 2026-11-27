@@ -999,6 +999,8 @@ struct ggml_context {
 
     struct ggml_object * objects_begin;
     struct ggml_object * objects_end;
+
+    enum ggml_type compute_type;
 };
 
 //
@@ -1655,6 +1657,7 @@ struct ggml_context * ggml_init(struct ggml_init_params params) {
         /*.n_objects          =*/ 0,
         /*.objects_begin      =*/ NULL,
         /*.objects_end        =*/ NULL,
+        /*.compute_type       =*/ GGML_TYPE_F32,
     };
 
     GGML_ASSERT(ctx->mem_buffer != NULL);
@@ -1717,6 +1720,15 @@ size_t ggml_get_max_tensor_size(const struct ggml_context * ctx) {
     }
 
     return max_size;
+}
+
+void ggml_set_compute_type(struct ggml_context * ctx, enum ggml_type type) {
+    GGML_ASSERT(type == GGML_TYPE_F32 || type == GGML_TYPE_BF16);
+    ctx->compute_type = type;
+}
+
+enum ggml_type ggml_get_compute_type(const struct ggml_context * ctx) {
+    return ctx->compute_type;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3390,7 +3402,7 @@ struct ggml_tensor * ggml_mul_mat(
     GGML_ASSERT(!ggml_is_transposed(a));
 
     const int64_t ne[4] = { a->ne[1], b->ne[1], b->ne[2], b->ne[3] };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, ctx->compute_type, 4, ne);
 
     result->op     = GGML_OP_MUL_MAT;
     result->src[0] = a;
@@ -3441,7 +3453,7 @@ struct ggml_tensor * ggml_mul_mat_id(
     GGML_ASSERT(ids->ne[0] % b->ne[1] == 0); // can broadcast
 
     const int64_t ne[4] = { as->ne[1], ids->ne[0], b->ne[2], 1 };
-    struct ggml_tensor * result = ggml_new_tensor(ctx, GGML_TYPE_F32, 4, ne);
+    struct ggml_tensor * result = ggml_new_tensor(ctx, ctx->compute_type, 4, ne);
 
     result->op     = GGML_OP_MUL_MAT_ID;
     result->src[0] = as;

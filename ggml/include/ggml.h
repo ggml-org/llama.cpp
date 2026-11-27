@@ -665,6 +665,13 @@ extern "C" {
     GGML_API size_t  ggml_get_mem_size       (const struct ggml_context * ctx);
     GGML_API size_t  ggml_get_max_tensor_size(const struct ggml_context * ctx);
 
+    // type of the results of the ops that compute new activations, for now only MUL_MAT and MUL_MAT_ID
+    // ggml_conv_1d, ggml_conv_2d, ggml_conv_3d and their _dw variants are built on MUL_MAT, so their results follow it too
+    // GGML_TYPE_F32 (default) or GGML_TYPE_BF16; to keep one op in F32, set F32 before it and set the type back after it
+    // not every backend supports a BF16 result or every op that reads one: check with ggml_backend_dev_supports_op before using BF16
+    GGML_API void           ggml_set_compute_type(struct ggml_context * ctx, enum ggml_type type);
+    GGML_API enum ggml_type ggml_get_compute_type(const struct ggml_context * ctx);
+
     GGML_API struct ggml_tensor * ggml_new_tensor(
             struct ggml_context * ctx,
             enum   ggml_type type,

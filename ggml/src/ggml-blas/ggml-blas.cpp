@@ -426,6 +426,10 @@ static bool ggml_backend_blas_device_supports_op(ggml_backend_dev_t dev, const s
                 return false;
             }
 
+            if (op->type != GGML_TYPE_F32) { // the result is written as F32
+                return false;
+            }
+
             return ggml_is_contiguous(src0) &&
                    ggml_is_contiguous(src1) &&
                    src1->type == GGML_TYPE_F32 &&

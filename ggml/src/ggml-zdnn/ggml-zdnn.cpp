@@ -123,6 +123,10 @@ static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_d
                     return false;
                 }
 
+                if (op->type != GGML_TYPE_F32) { // the result is written as F32
+                    return false;
+                }
+
                 if (!ggml_is_matrix(weights) || !ggml_is_matrix(inputs) ||
                     !ggml_is_contiguous(weights) || !ggml_is_contiguous(inputs) ||
                     weights->view_src != nullptr ||

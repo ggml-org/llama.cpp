@@ -16766,6 +16766,9 @@ static bool ggml_backend_vk_device_supports_op(ggml_backend_dev_t dev, const ggm
         case GGML_OP_MUL_MAT:
         case GGML_OP_MUL_MAT_ID:
             {
+                if (op->type != GGML_TYPE_F32) { // the shaders write an F32 result
+                    return false;
+                }
                 ggml_type src0_type = op->src[0]->type;
                 if (op->op == GGML_OP_MUL_MAT_ID) {
                     if (!ggml_vk_use_mul_mat_vec_id(op)) {

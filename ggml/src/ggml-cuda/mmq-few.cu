@@ -498,7 +498,8 @@ static __global__ void mul_mat_q_few(
         const char * x, const int4 * y_ptr, float * dst,
         const int nunits, const int nrows_x, const int ncols_dst, const int64_t stride_row_x, const int stride_col_dst,
         const int channel_ratio, const int64_t stride_channel_x, const int stride_channel_dst,
-        const int sample_ratio, const int64_t stride_sample_x, const int stride_sample_dst, const bool x_is_constant, const int * pairs) {
+        const int sample_ratio, const int64_t stride_sample_x, const int stride_sample_dst, const bool x_is_constant, const int * pairs,
+        const bool dst_bf16) {
 #if defined(CP_ASYNC_AVAILABLE)
     constexpr int nwarps    = MMQ_FEW_NWARPS;
     constexpr int warp_size = ggml_cuda_get_physical_warp_size();
@@ -541,7 +542,7 @@ static __global__ void mul_mat_q_few(
         x += int64_t(pair[0])*stride_channel_x;
     } else {
         x   += int64_t(sample_dst/sample_ratio)*stride_sample_x + int64_t(channel_dst/channel_ratio)*stride_channel_x;
-        dst += int64_t(sample_dst)*stride_sample_dst + int64_t(channel_dst)*stride_channel_dst;
+        dst  = ggml_cuda_dst_ptr(dst, int64_t(sample_dst)*stride_sample_dst + int64_t(channel_dst)*stride_channel_dst, dst_bf16);
     }
     const int4 * GGML_CUDA_RESTRICT y = y_ptr + (int64_t(sample_dst)*nchannels + channel_dst)*nunits*ncg*MMQ_FEW_Q8_1_INT4;
 
@@ -703,9 +704,9 @@ static __global__ void mul_mat_q_few(
                 if (i < nrows_x && j < ncols) {
                     if constexpr (has_ids) {
                         const int e = pair[2 + j]; // token*n_expert_used + slot
-                        dst[int64_t(e / ncols_dst)*stride_channel_dst + int64_t(e % ncols_dst)*stride_col_dst + i] = sum[m][c][l];
+                        ggml_cuda_store_dst(dst, int64_t(e / ncols_dst)*stride_channel_dst + int64_t(e % ncols_dst)*stride_col_dst + i, sum[m][c][l], dst_bf16);
                     } else {
-                        dst[int64_t(j)*stride_col_dst + i] = sum[m][c][l];
+                        ggml_cuda_store_dst(dst, int64_t(j)*stride_col_dst + i, sum[m][c][l], dst_bf16);
                     }
                 }
             }
@@ -714,7 +715,7 @@ static __global__ void mul_mat_q_few(
 #else
     GGML_UNUSED_VARS(x, y_ptr, dst, nunits, nrows_x, ncols_dst, stride_row_x, stride_col_dst,
         channel_ratio, stride_channel_x, stride_channel_dst,
-        sample_ratio, stride_sample_x, stride_sample_dst, x_is_constant, pairs);
+        sample_ratio, stride_sample_x, stride_sample_dst, x_is_constant, pairs, dst_bf16);
     NO_DEVICE_CODE;
 #endif // defined(CP_ASYNC_AVAILABLE)
 }
@@ -745,11 +746,12 @@ static void launch_mul_mat_q_few(const ggml_tensor * src0, const ggml_tensor * s
     const dim3 block_nums((ne01 + nrows_blk - 1) / nrows_blk, has_ids ? npairs_max : ne12, ne13);
     const dim3 block_dims(warp_size, MMQ_FEW_NWARPS, 1);
     const ggml_cuda_kernel_launch_params params(block_nums, block_dims, nbytes_shared, stream);
+    const size_t ts_dst = ggml_type_size(dst->type);
     ggml_cuda_kernel_launch(mul_mat_q_few<type, ncg, nmt, has_ids>, params,
         (const char *) src0->data, src1_q, (float *) dst->data,
-        nunits, (int) ne01, (int) ne1, (int64_t) nb01, (int) (nb1/sizeof(float)),
-        (int) (ne12/ne02), (int64_t) nb02, (int) (nb2/sizeof(float)),
-        (int) (ne13/ne03), (int64_t) nb03, (int) (nb3/sizeof(float)), x_is_constant, pairs);
+        nunits, (int) ne01, (int) ne1, (int64_t) nb01, (int) (nb1/ts_dst),
+        (int) (ne12/ne02), (int64_t) nb02, (int) (nb2/ts_dst),
+        (int) (ne13/ne03), (int64_t) nb03, (int) (nb3/ts_dst), x_is_constant, pairs, dst->type == GGML_TYPE_BF16);
 }
 
 static int mmq_few_ncg(const int64_t ncols) {
@@ -800,10 +802,10 @@ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor 
     GGML_TENSOR_BINARY_OP_LOCALS;
 
     GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32 ||  dst->type == GGML_TYPE_BF16);
     GGML_ASSERT(nb00 == ggml_type_size(src0->type));
     GGML_ASSERT(nb10 == ggml_type_size(src1->type));
-    GGML_ASSERT(nb0  == sizeof(float));
+    GGML_ASSERT(nb0  == ggml_type_size(dst->type));
     GGML_ASSERT(ne00 % QK_K == 0);
 
     cudaStream_t stream = ctx.stream();

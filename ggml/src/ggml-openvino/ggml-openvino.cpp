@@ -1973,6 +1973,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_MUL_MAT: {
+        if (op->type != GGML_TYPE_F32) {
+            return {false, "MUL_MAT with a non-F32 result is not supported"};
+        }
         if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
             return {false, "MUL_MAT with a BF16 or F32 src1 precision is not supported"};
         }
@@ -2012,6 +2015,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         break;
     }
     case GGML_OP_MUL_MAT_ID: {
+        if (op->type != GGML_TYPE_F32) {
+            return {false, "MUL_MAT_ID with a non-F32 result is not supported"};
+        }
         // Single-expert (or empty) MUL_MAT_ID is a degenerate shape that stresses GatherMatmul edge
         // cases and never occurs in real MoE; let it fall back to CPU.
         if (op->src[0] != nullptr && op->src[0]->ne[2] <= 1) {

@@ -2443,6 +2443,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
             break;
         case GGML_OP_MUL_MAT:
             {
+                // a BF16 result is not verified with aclnn
+                if (op->type != GGML_TYPE_F32) {
+                    return false;
+                }
                 if (ggml_prec_get_src(op, 1) == GGML_PREC_BF16 || ggml_prec_get_src(op, 1) == GGML_PREC_F32) {
                     return false;
                 }
@@ -2469,6 +2473,10 @@ static bool ggml_backend_cann_supports_op(ggml_backend_dev_t dev, const ggml_ten
                 }
             }
         case GGML_OP_MUL_MAT_ID:
+            // a BF16 result is not verified with aclnn
+            if (op->type != GGML_TYPE_F32) {
+                return false;
+            }
             switch (op->src[0]->type) {
                 case GGML_TYPE_F16:
                 case GGML_TYPE_F32:
