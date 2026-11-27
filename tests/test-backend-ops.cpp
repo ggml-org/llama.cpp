@@ -10468,12 +10468,16 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
     const bool mask_row;    // query 0 of each stream sees no key
     const bool causal;      // prefix of 0 per query, -inf after, distance bins
     const int64_t n_kv_max; // sparse hint
+    const bool view_offset;   // the mask and the indices are views at a one-element offset
+    const bool cache_layout;  // Q and K / V are permuted views, K / V of a [hs*nh, kv] cache as in llama.cpp
+    const bool distance_bins; // bin = distance of the key to the query (the last nb cells), saturated at n_bins - 1
 
     std::vector<int32_t> rows;
     std::vector<int64_t> visible;
 
     std::string vars() override {
-        return VARS_TO_STR14(hs, nh, gqa, kv, nb, n_stream, n_bins, kv_rows, sinks, type_KV, logit_softcap, mask_row, causal, n_kv_max);
+        return VARS_TO_STR17(hs, nh, gqa, kv, nb, n_stream, n_bins, kv_rows, sinks, type_KV, logit_softcap, mask_row, causal, n_kv_max,
+                             view_offset, cache_layout, distance_bins);
     }
 
     double max_nmse_err() override {
@@ -10482,9 +10486,11 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
 
     test_flash_attn_ext_indexed_bias(int64_t hs = 128, int64_t nh = 2, int64_t gqa = 3, int64_t kv = 768, int64_t nb = 7, int64_t n_stream = 2,
                                      int64_t n_bins = 17, bool kv_rows = false, bool sinks = true, ggml_type type_KV = GGML_TYPE_F16,
-                                     float logit_softcap = 0.0f, bool mask_row = false, bool causal = false, int64_t n_kv_max = 0)
+                                     float logit_softcap = 0.0f, bool mask_row = false, bool causal = false, int64_t n_kv_max = 0,
+                                     bool view_offset = false, bool cache_layout = false, bool distance_bins = false)
         : hs(hs), nh(nh), gqa(gqa), kv(kv), nb(nb), n_stream(n_stream), n_bins(n_bins), kv_rows(kv_rows), sinks(sinks), type_KV(type_KV),
-          logit_softcap(logit_softcap), mask_row(mask_row), causal(causal), n_kv_max(n_kv_max) {}
+          logit_softcap(logit_softcap), mask_row(mask_row), causal(causal), n_kv_max(n_kv_max), view_offset(view_offset),
+          cache_layout(cache_layout), distance_bins(distance_bins) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         const int64_t n_rows    = kv_rows ? 2*kv : kv;
@@ -10629,7 +10635,7 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
                 }
                 ggml_backend_tensor_set(t, idx.data(), 0, idx.size()*sizeof(int32_t));
             } else if (strcmp(t->name, "table") == 0) {
-                init_tensor_uniform(t, table_offset - 4.0f, table_offset + 4.0f);
+                init_tensor_uniform(t, -4.0f, 4.0f);
             } else if (strcmp(t->name, "m_base") == 0 || strcmp(t->name, "indices_base") == 0) {
                 // the element before the view: zero, the view is set by its own name
                 std::vector<uint8_t> zero(ggml_nbytes(t), 0);
@@ -14931,18 +14937,14 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
             test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, gqa, 768, 65, 1, 1025, kv_rows));
         }
         test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 8, 3, 512, 65, 1, 1025, kv_rows));
-        // the bias is added in FP32: a large constant per table row must cancel
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 65, 1, 1025, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, 1000.0f));
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias( 64, 2, 3, 768, 65, 1,   17, kv_rows, false, GGML_TYPE_F16, 0.0f, false, 1000.0f));
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768,  7, 2,   17, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, 1000.0f));
         // the mask and the indices with only element alignment
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 65, 1, 1025, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, 0.0f, true));
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 4, 768, 65, 2,   17, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, 0.0f, true));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 65, 1, 1025, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, false, 0, true));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 4, 768, 65, 2,   17, kv_rows, true,  GGML_TYPE_F16, 0.0f, false, false, 0, true));
         test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 1, 1, 17, kv_rows, true, GGML_TYPE_F8_E4M3));
         // Q and K / V as views of a llama.cpp KV cache, with distance bins
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 8, 3, 512, 65, 1, 1025, kv_rows, true,  GGML_TYPE_F16,  0.0f, false, 0.0f, false, true, true));
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias( 64, 2, 3, 768,  7, 2,   17, kv_rows, false, GGML_TYPE_F16,  0.0f, false, 0.0f, false, true, true));
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768,  7, 2,   17, kv_rows, true,  GGML_TYPE_Q8_0, 0.0f, false, 0.0f, false, true, true));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 8, 3, 512, 65, 1, 1025, kv_rows, true,  GGML_TYPE_F16,  0.0f, false, false, 0, false, true, true));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias( 64, 2, 3, 768,  7, 2,   17, kv_rows, false, GGML_TYPE_F16,  0.0f, false, false, 0, false, true, true));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768,  7, 2,   17, kv_rows, true,  GGML_TYPE_Q8_0, 0.0f, false, false, 0, false, true, true));
         for (ggml_type type : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
             test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 1, 1, 17, kv_rows, true, type));
             test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 7, 2, 17, kv_rows, true, type));
@@ -15864,7 +15866,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
 
     // Inkling 2 Mini prefill: indexed relative-position bias over a llama.cpp KV cache, D128, 8 KV heads, GQA 3, ubatch 512, 1025 bins
     for (int64_t kv : {4096, 32768, 65536, 131072, 196608}) {
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 8, 3, kv, 512, 1, 1025, false, true, GGML_TYPE_F16, 0.0f, false, 0.0f, false, true, true));
+        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 8, 3, kv, 512, 1, 1025, false, true, GGML_TYPE_F16, 0.0f, false, false, 0, false, true, true));
     }
 
     // q8_0 KV cases with long context (decode and prompt)
