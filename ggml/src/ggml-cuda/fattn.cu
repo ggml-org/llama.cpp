@@ -690,7 +690,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
-    // the tile and vec kernels implement the indexed bias, the mma kernel does not
+    // the tile, vec and mma kernels implement the indexed bias
     if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
         float logit_softcap;
         memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
@@ -701,7 +701,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                 ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type)) {
             return BEST_FATTN_KERNEL_VEC;
         }
-        return BEST_FATTN_KERNEL_TILE;
+        // the mma kernel implements the indexed bias: on NVIDIA Volta/Turing fall through
+        // to the general tile/mma choice, other architectures keep the tile kernel
+        if (!GGML_CUDA_CC_IS_NVIDIA(cc) || !(volta_mma_available(cc) || turing_mma_available(cc))) {
+            return BEST_FATTN_KERNEL_TILE;
+        }
     }
 
     if (mask && mask->ne[2] != 1) {
