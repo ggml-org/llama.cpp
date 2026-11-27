@@ -13,6 +13,7 @@ struct ggml_cuda_topk_moe_args {
     bool delayed_softmax{};
     bool prob_bias{};
     bool norm{};
+    bool norm_bias{};    // the weight sum gets SCALE (sum + bias) instead of CLAMP
     bool scale{};
     int  n_groups{};     // > 0: pick experts only from the top n_group_used expert groups
     int  n_group_used{};
@@ -22,7 +23,7 @@ void ggml_cuda_op_topk_moe(ggml_backend_cuda_context &     ctx,
                            const ggml_tensor *             logits,
                            ggml_tensor *                   weights,
                            ggml_tensor *                   ids,
-                           const ggml_tensor *             clamp,
+                           const ggml_tensor *             denom,
                            const ggml_tensor *             scale,
                            const ggml_tensor *             bias,
                            const ggml_cuda_topk_moe_args & args);

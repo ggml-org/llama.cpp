@@ -1,6 +1,8 @@
 import pytest
 import requests
+import signal
 import socket
+import sys
 from utils import *
 
 server = ServerPreset.tinyllama2()
@@ -143,3 +145,29 @@ def test_server_model_aliases_and_tags():
     assert set(model["tags"]) == {"chat", "fim", "small"}
     # id is derived from first alias (alphabetical order from std::set)
     assert model["id"] == "code"
+
+
+def test_server_models_sse_single_model():
+    global server
+    server.start()
+    # a client connecting after the load gets the last status replayed
+    with requests.get(server.make_url("/models/sse"), stream=True, timeout=10) as res:
+        assert res.status_code == 200
+        assert res.headers["Content-Type"].startswith("text/event-stream")
+        line = next(x for x in res.iter_lines() if x)
+    event = json.loads(line.decode("utf-8").removeprefix("data: "))
+    model_id = server.make_request("GET", "/models").body["data"][0]["id"]
+    assert event["model"] == model_id
+    assert event["event"] == "status_change"
+    assert event["data"]["status"] == "loaded"
+    assert event["data"]["info"]["id"] == model_id
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console control event")
+def test_server_ctrl_break():
+    global server
+    server.share_console = True
+    server.start()
+    server.process.send_signal(signal.CTRL_BREAK_EVENT)
+    # exit code 0 means a clean shutdown, the default handler would end it with STATUS_CONTROL_C_EXIT
+    assert server.process.wait(timeout=60) == 0

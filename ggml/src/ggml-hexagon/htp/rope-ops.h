@@ -13,6 +13,10 @@ struct htp_rope_kernel_params {
     uint32_t n_hvx;
     uint32_t vtcm_size;
 
+    float    theta_scale;
+    float    theta_scale_32;
+    float    corr_dims[2];
+
     struct fastdiv_values div_ne2_ne1;
     struct fastdiv_values div_ne1;
 };
@@ -36,12 +40,13 @@ struct htp_rope_vtcm_layout {
 static inline void htp_rope_vtcm_layout_build(
     struct htp_rope_vtcm_layout * L,
     uint32_t ne00,
+    size_t elem_size,
     uint32_t n_hvx,
     uint32_t n_freq_factors
 ) {
-    const size_t src0_row_size             = ne00 * sizeof(float);
+    const size_t src0_row_size             = ne00 * elem_size;
     const size_t src0_row_size_aligned     = hex_round_up((uint32_t) src0_row_size, 128);
-    const size_t theta_cache_size_aligned  = hex_round_up((uint32_t) src0_row_size, 256);
+    const size_t theta_cache_size_aligned  = hex_round_up((uint32_t) (ne00 * sizeof(float)), 256);
     const size_t freq_factors_size_aligned = hex_round_up(n_freq_factors * sizeof(float), 256);
 
     L->src0_row_size_aligned     = src0_row_size_aligned;

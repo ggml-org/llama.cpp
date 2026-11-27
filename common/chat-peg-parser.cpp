@@ -650,19 +650,16 @@ static std::pair<std::string, std::string> parse_key_spec(const std::string & ke
 
 // Mode 1: function_is_key — parse {"function_name": {...}}
 common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
-    const ordered_json & tools,
-    const std::string &  args_key,
-    const std::string &  effective_args_key,
-    const std::string &  call_id_key,
-    const std::string &  gen_call_id_key) {
+    const ordered_json &            tools,
+    const common_chat_tool_choice & tool_choice,
+    const std::string &             args_key,
+    const std::string &             effective_args_key,
+    const std::string &             call_id_key,
+    const std::string &             gen_call_id_key) {
 
     auto tool_choices = choice();
 
-    for (size_t i = 0; i < tools.size(); i++) {
-        const auto & tool_def = tools[i];
-        if (!tool_def.contains("function")) {
-            continue;
-        }
+    common_chat_foreach_tool(tools, tool_choice, [&](size_t i, const ordered_json & tool_def) {
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
         ordered_json   params   = common_chat_tool_parameters(function);
@@ -723,18 +720,19 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
         );
 
         tool_choices |= rule("tool-" + std::to_string(i), tool_parser);
-    }
+    });
 
     return tool_choices;
 }
 
 // Mode 2: Nested keys (dot notation like "function.name")
 common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
-    const ordered_json & tools,
-    const std::string &  effective_name_key,
-    const std::string &  effective_args_key,
-    const std::string &  call_id_key,
-    const std::string &  gen_call_id_key) {
+    const ordered_json &            tools,
+    const common_chat_tool_choice & tool_choice,
+    const std::string &             effective_name_key,
+    const std::string &             effective_args_key,
+    const std::string &             call_id_key,
+    const std::string &             gen_call_id_key) {
 
     auto tool_choices = choice();
 
@@ -745,11 +743,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
     std::string nested_name_field = !name_spec.first.empty() ? name_spec.second  : effective_name_key;
     std::string nested_args_field = !args_spec.first.empty() ? args_spec.second  : effective_args_key;
 
-    for (size_t i = 0; i < tools.size(); i++) {
-        const auto & tool_def = tools[i];
-        if (!tool_def.contains("function")) {
-            continue;
-        }
+    common_chat_foreach_tool(tools, tool_choice, [&](size_t i, const ordered_json & tool_def) {
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
         ordered_json   params   = common_chat_tool_parameters(function);
@@ -796,7 +790,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
         tool_parser_body = tool_parser_body + nested_field + space() + tool_close(literal("}"));
 
         tool_choices |= rule("tool-" + std::to_string(i), tool(tool_parser_body));
-    }
+    });
 
     return tool_choices;
 }
@@ -804,6 +798,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
 // Mode 3: Flat keys with optional ID fields and parameter ordering
 common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
     const ordered_json &             tools,
+    const common_chat_tool_choice &  tool_choice,
     const std::string &              effective_name_key,
     const std::string &              effective_args_key,
     const std::string &              call_id_key,
@@ -815,11 +810,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
     auto name_key_parser = literal("\"" + effective_name_key + "\"");
     auto args_key_parser = literal("\"" + effective_args_key + "\"");
 
-    for (size_t i = 0; i < tools.size(); i++) {
-        const auto & tool_def = tools[i];
-        if (!tool_def.contains("function")) {
-            continue;
-        }
+    common_chat_foreach_tool(tools, tool_choice, [&](size_t i, const ordered_json & tool_def) {
         const auto &   function = tool_def.at("function");
         std::string    name     = function.at("name");
         ordered_json   params   = common_chat_tool_parameters(function);
@@ -888,7 +879,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
         ordered_body = ordered_body + space() + tool_close(literal("}"));
 
         tool_choices |= rule("tool-" + std::to_string(i), tool(ordered_body));
-    }
+    });
 
     return tool_choices;
 }
@@ -942,7 +933,8 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
                                                        const std::string &              call_id_key,
                                                        const std::string &              gen_call_id_key,
                                                        const std::vector<std::string> & parameters_order,
-                                                       bool                             accept_openai_wrapper) {
+                                                       bool                             accept_openai_wrapper,
+                                                       const common_chat_tool_choice &  tool_choice) {
     if (!tools.is_array() || tools.empty()) {
         return eps();
     }
@@ -953,14 +945,14 @@ common_peg_parser common_chat_peg_builder::standard_json_tools(
     // Dispatch to the appropriate builder based on the JSON layout mode
     common_peg_parser tool_choices = eps();
     if (function_is_key) {
-        tool_choices = build_json_tools_function_is_key(tools, args_key, effective_args_key, call_id_key, gen_call_id_key);
+        tool_choices = build_json_tools_function_is_key(tools, tool_choice, args_key, effective_args_key, call_id_key, gen_call_id_key);
     } else {
         auto name_spec = parse_key_spec(effective_name_key);
         auto args_spec = parse_key_spec(effective_args_key);
         if (!name_spec.first.empty() || !args_spec.first.empty()) {
-            tool_choices = build_json_tools_nested_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key);
+            tool_choices = build_json_tools_nested_keys(tools, tool_choice, effective_name_key, effective_args_key, call_id_key, gen_call_id_key);
         } else {
-            tool_choices = build_json_tools_flat_keys(tools, effective_name_key, effective_args_key, call_id_key, gen_call_id_key, parameters_order, accept_openai_wrapper);
+            tool_choices = build_json_tools_flat_keys(tools, tool_choice, effective_name_key, effective_args_key, call_id_key, gen_call_id_key, parameters_order, accept_openai_wrapper);
         }
     }
 

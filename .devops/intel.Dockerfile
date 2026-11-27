@@ -11,12 +11,17 @@ FROM docker.io/node:$NODE_VERSION AS web
 
 ARG APP_VERSION
 
-WORKDIR /app/tools/ui
+WORKDIR /app/ui/apps/chat
 
-COPY tools/ui/package.json tools/ui/package-lock.json ./
+COPY ui/apps/chat/package.json ui/apps/chat/package-lock.json ./
 RUN npm ci
 
-COPY tools/ui/ ./
+COPY ui/apps/chat/ ./
+# the app compiles Llama UI, Llama Voice and the harness from their sources next to it
+COPY ui/lib/ui/package.json /app/ui/lib/ui/package.json
+COPY ui/lib/ui/src/lib/ /app/ui/lib/ui/src/lib/
+COPY ui/lib/voice/src/ /app/ui/lib/voice/src/
+COPY ui/lib/harness/src/ /app/ui/lib/harness/src/
 RUN LLAMA_BUILD_NUMBER="$APP_VERSION" npm run build
 
 FROM docker.io/intel/deep-learning-essentials:$ONEAPI_VERSION AS build
@@ -41,7 +46,7 @@ WORKDIR /app
 
 COPY . .
 
-COPY --from=web /app/tools/ui/dist tools/ui/dist
+COPY --from=web /app/ui/apps/chat/dist ui/apps/chat/dist
 
 RUN if [ "${GGML_SYCL_F16}" = "ON" ]; then \
         echo "GGML_SYCL_F16 is set" \

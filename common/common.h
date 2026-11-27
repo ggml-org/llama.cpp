@@ -701,7 +701,9 @@ struct common_params {
 
     // UI configs
     bool ui = true;
+    bool ui_agent = false; // agent mode in Llama Chat, no server tools and no MCP proxy
     bool ui_mcp_proxy = false;
+    bool ui_mcp_proxy_allow_private_urls = false; // allow the MCP CORS proxy to reach local or private addresses
     std::string ui_config_json;
 
     // "advanced" endpoints are disabled by default for better security
@@ -796,6 +798,7 @@ struct common_params {
     std::string tts_lang = "";
     std::string tts_voice = "";
     std::string tts_speaker_file = "";
+    std::string tts_speaker_text = "";
 
     bool is_gen_docs = false; // whether we are running inside llama-gen-docs
 };
@@ -1001,6 +1004,9 @@ enum common_decision_type {
     COMMON_DECISION_TYPE_UNKNOWN, // a decision model of a type that is not supported
 };
 
+// lfm3-d1: max questions packed in one prompt
+#define COMMON_DECISION_LFM3_D1_SET_SIZE 16
+
 common_decision_type common_get_decision_type(const struct llama_model * model);
 
 // metadata of a GGUF file, read without loading the model
@@ -1116,6 +1122,7 @@ struct common_batch {
         llama_embd   state; // non-owning view of the data passed to set_embd_state(), data == NULL if none
         std::vector<llama_seq_id> seq_ids_extra; // see add_seq()
         int32_t      decision_order = 0; // see llama_batch_ext_set_decision_order()
+        int32_t      decision_group = 0; // see llama_batch_ext_set_decision_group()
         int32_t      embd_row = -1; // see add_embd_row(), -1 if none
         int32_t      state_row = -1; // see set_embd_state_row(), -1 if none
     };

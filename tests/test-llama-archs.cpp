@@ -19,6 +19,7 @@
 #include <memory>
 #include <random>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -176,6 +177,7 @@ static void usage(char ** argv) {
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
+    LOG("  --rpc <endpoints>        Add RPC servers (comma-separated host:port), must precede -b\n");
     LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
@@ -300,15 +302,20 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_KIMI_K31
+            || arch == LLM_ARCH_RAON1_MINI
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4
+            || arch == LLM_ARCH_HY_V4_FLASH
             || arch == LLM_ARCH_XING4_0) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
         if (arch == LLM_ARCH_MISTRAL_LARGE4) {
             n_layer = 4; // cover NoPE, shared indexer and KV sharing layers
+        }
+        if (arch == LLM_ARCH_HY_V4_FLASH) {
+            n_layer = 4; // dense + MoE across both sparse and sliding attention layers
         }
     } else if (arch == LLM_ARCH_GLM5_NEXT) {
         // several heads so that -sm tensor can split them and the MLA flash attention has GQA > 1
@@ -326,7 +333,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
         n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
-    } else if (arch == LLM_ARCH_INKLING2) {
+    } else if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP) {
         n_embd  = 128;
         n_head  = 4;
         n_ff    = 24;
@@ -337,7 +344,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (arch == LLM_ARCH_QWEN3) {
         n_head_kv = 1; // MQA coverage
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE ||
+            arch == LLM_ARCH_ZAYA1) {
         n_head_kv = 2; // GQA coverage
     }
     if (arch == LLM_ARCH_BEAM) {
@@ -381,16 +389,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
             arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_KIMI_K31 ||
-            arch == LLM_ARCH_GLM5_NEXT
+            arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_HY_V4_FLASH || arch == LLM_ARCH_RAON1_MINI
             ) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
-            n_head_per_layer.push_back(il == 1 ? 0 : n_head);
+            // hy_v4_flash: the odd layers are sliding-window, with twice the heads
+            n_head_per_layer.push_back(arch == LLM_ARCH_HY_V4_FLASH
+                    ? (il % 2 ? 2*n_head : n_head)
+                    : (il == 1 ? 0 : n_head));
         }
         // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
-        if (arch == LLM_ARCH_GLM5_NEXT) {
+        if (arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_RAON1_MINI) {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
             // the MLA cache holds one latent head
             for (uint32_t & n : n_head_per_layer) {
@@ -399,7 +410,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         } else {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
         }
-        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
+        if (arch == LLM_ARCH_HY_V4_FLASH) {
+            // MLA-as-MQA: one latent KV head on every layer, whatever the query head count
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, uint32_t(1));
+        } else {
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
+        }
     } else if (arch == LLM_ARCH_METIS16) {
         // the layer types repeat in every pass
         std::vector<uint32_t> n_head_kv_per_layer;
@@ -427,8 +443,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_KIMI_K31
+            || arch == LLM_ARCH_RAON1_MINI
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
+            || arch == LLM_ARCH_HY_V4_FLASH
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_XING4_0) {
@@ -471,6 +489,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,    1e-6f);
     ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,          1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,       uint32_t(8));
     ms.add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,            (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) ? uint32_t(64) : uint32_t(512));
@@ -495,15 +514,22 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE || arch == LLM_ARCH_DOMYN_EDGE ||
+            arch == LLM_ARCH_HY_V4_FLASH) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
             pattern.push_back(il % 2);
         }
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
-        if (arch == LLM_ARCH_FLINT) {
+        if (arch == LLM_ARCH_FLINT || arch == LLM_ARCH_DOMYN_EDGE) {
             ms.add_kv(LLM_KV_ATTENTION_ROPE_PATTERN, pattern);
+        }
+        if (arch == LLM_ARCH_DOMYN_EDGE) {
+            // SWA (rope) layers use a smaller head dim than the full-attention (nope) layers
+            ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH_SWA,   n_embd_head/2);
+            ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH_SWA, n_embd_head/2);
+            ms.add_kv(LLM_KV_ROPE_DIMENSION_COUNT_SWA, n_embd_head/2);
         }
     } else if (arch == LLM_ARCH_LFM3) {
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>({0, 0, 1}));
@@ -523,6 +549,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
 
     if (arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE) {
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, false);
+    }
+
+    if (arch == LLM_ARCH_RAON1_MINI) {
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE, 1.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, true);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT, uint32_t(4));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON, 1e-5f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE, 2.0f);
     }
 
     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
@@ -579,6 +613,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     // summing to n_rot / 2 (n_rot is 64 in this fixture)
     if (arch == LLM_ARCH_BAILINGMOE3) {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({8, 12, 12, 0}));
+    } else if (arch == LLM_ARCH_HY_V4_FLASH) {
+        // the published files carry the VL sections, so the text model runs the M-RoPE path
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({12, 10, 10, 0}));
     } else {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
     }
@@ -597,6 +634,53 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             indexer_types.push_back(il % 2 ? 0 : 1);
         }
         ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
+    }
+
+    if (arch == LLM_ARCH_HY_V4_FLASH) {
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,     uint32_t(4));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,   1.0e-6f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE, 2.0f);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,           10.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,       1.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,        true);
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,         10000.0f);
+        // the indexer lives on the non-SWA layers, the even ones here
+        {
+            std::vector<uint32_t> indexer_types;
+            indexer_types.reserve(n_layer);
+            for (uint32_t il = 0; il < n_layer; il++) {
+                indexer_types.push_back(il % 2 ? 0 : 1);
+            }
+            ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, uint32_t(2));
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, uint32_t(96));
+
+        // one Engram module on layer 1, the head offsets are the running sum of the bucket counts
+        {
+            // the loader reads the bucket ranges as u64 arrays
+            const std::vector<uint64_t> primes = {7, 11, 13, 17};
+            std::vector<uint64_t> offsets;
+            uint64_t base = 0;
+            for (uint64_t p : primes) {
+                offsets.push_back(base);
+                base += p;
+            }
+            ms.add_kv(LLM_KV_PLE_LAYERS,                  std::vector<uint32_t>({1}));
+            ms.add_kv(LLM_KV_PLE_NGRAM_SIZE,              uint32_t(3));
+            ms.add_kv(LLM_KV_PLE_HEADS_PER_NGRAM,         uint32_t(2));
+            ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,  uint32_t(32));
+            // n_modules * ngram_size multipliers, odd as the reference derives them
+            ms.add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS,       std::vector<uint64_t>({3, 5, 7}));
+            ms.add_kv(LLM_KV_PLE_HEAD_OFFSETS,            offsets);
+            ms.add_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES,        primes);
+            ms.add_kv(LLM_KV_ENGRAM_PAD_TOKEN_ID,         uint32_t(1));
+            std::vector<int32_t> token_map(n_vocab);
+            for (uint32_t t = 0; t < n_vocab; t++) {
+                token_map[t] = (int32_t) t;
+            }
+            ms.add_kv(LLM_KV_ENGRAM_TOKEN_MAP,            token_map);
+        }
     }
 
     if (arch == LLM_ARCH_MISTRAL_LARGE4) {
@@ -696,7 +780,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_MUDD_TAP_INDICES,            std::vector<int32_t>({-1, -1, -1, -1, 0, 2, 1, 3}));
     }
 
-    if (arch == LLM_ARCH_INKLING2) {
+    if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP) {
+        const bool loop = arch == LLM_ARCH_INKLING2_LOOP;
         ms.add_kv(LLM_KV_ATTENTION_RELATIVE_LENGTH,   uint32_t(4));
         ms.add_kv(LLM_KV_ATTENTION_RELATIVE_EXTENT,   uint32_t(16));
         ms.add_kv(LLM_KV_ATTENTION_QK_CLIP,           0.25f);
@@ -704,6 +789,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_FLOOR,   uint32_t(4));
         ms.add_kv(LLM_KV_ATTENTION_LOG_SCALE_ALPHA,   0.1f);
         ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(2));
+        if (loop) {
+            // prelude 0, core 1, coda 2; the loader adds slot 3 for the second pass over the core
+            ms.add_kv(LLM_KV_LOOP_START,     uint32_t(1));
+            ms.add_kv(LLM_KV_LOOP_END,       uint32_t(2));
+            ms.add_kv(LLM_KV_LOOP_COUNT,     uint32_t(2));
+            ms.add_kv(LLM_KV_LOOP_GATE_RANK, uint32_t(8));
+            ms.add_kv(LLM_KV_LOOP_VARYING,   false);
+        }
         ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(4));
         ms.add_kv(LLM_KV_VOCAB_SIZE,                  n_vocab + 2);
         ms.add_kv(LLM_KV_VOCAB_SIZE_UNPADDED,         n_vocab);
@@ -740,11 +833,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (moe) {
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
         ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);  // distinct from n_ff so a saver key-clobber surfaces on reload
-        ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       n_ff);
+        // a latent width distinct from n_ff_exp catches a transposed routed_down / routed_up
+        ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       arch == LLM_ARCH_HY_V4_FLASH ? uint32_t(64) : n_ff);
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : arch == LLM_ARCH_CLOVER_MOE ? 4 : 2));
-        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(2));
+        ms.add_kv(LLM_KV_EXPERT_USED_COUNT,          uint32_t(arch == LLM_ARCH_ZAYA1 ? 1 : 2)); // ZAYA routes top-1
         ms.add_kv(LLM_KV_EXPERT_SHARED_COUNT,        uint32_t(1));
 
         uint32_t gating_func = 2;
@@ -785,6 +879,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, std::vector<uint32_t>{n_ff, n_ff / 2, n_ff, n_ff});
     }
 
+    if (arch == LLM_ARCH_ZONOS3) {
+        ms.add_kv(LLM_KV_MOE_LATENT_SIZE,            n_embd / 2);
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
+    }
+
     ms.add_kv(LLM_KV_POSNET_EMBEDDING_LENGTH,   n_embd);
     ms.add_kv(LLM_KV_POSNET_BLOCK_COUNT,        n_layer);
     ms.add_kv(LLM_KV_CONVNEXT_EMBEDDING_LENGTH, n_embd);
@@ -793,8 +892,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE ? 256 : 2*n_embd);
-    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(4));
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_ZONOS3 ? 256 : 2*n_embd);
+    ms.add_kv(LLM_KV_ROUTER_HIDDEN_SIZE,        n_embd);
+    ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(arch == LLM_ARCH_ZAYA1 ? 2 : 4)); // ZAYA CCA convs have kernel 2
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
     ms.add_kv(LLM_KV_SSM_TIME_STEP_RANK,        n_head);
     ms.add_kv(LLM_KV_SSM_GROUP_COUNT,           arch == LLM_ARCH_PLAMO2 ? 0 : uint32_t(2));
@@ -814,7 +914,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_WKV_HEAD_SIZE,               n_embd/n_head);
     ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(3));
     ms.add_kv(LLM_KV_RESIDUAL_SCALE,              3.5565588200778455f);
-    ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(12));
+    // the inkling2_loop core boundaries must be multiples of the block size
+    ms.add_kv(LLM_KV_ATTN_RES_BLOCK_SIZE,         uint32_t(arch == LLM_ARCH_INKLING2_LOOP ? 1 : 12));
     ms.add_kv(LLM_KV_ACTIVATION_SITU_BETA,        4.0f);
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
@@ -1014,9 +1115,62 @@ static bool check_causal_attn_toggle(
     return ok;
 }
 
+// speculative decoding: each step decodes a token and 0 to n_draft_max drafts, then rejects the drafts
+// the logits of the token must match a decode without drafts
+static double check_draft_rollback(llama_model * model, const std::vector<llama_token> & tokens, const std::vector<float> & logits_ref) {
+    const uint32_t n_vocab     = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    const uint32_t n_tokens    = tokens.size();
+    const uint32_t n_draft_max = 2;
+
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx           = 0;
+    ctx_params.n_threads       = 4;
+    ctx_params.n_threads_batch = 4;
+    ctx_params.n_ubatch        = 64;
+    ctx_params.n_rs_seq        = n_draft_max;
+
+    llama_context_ptr lctx(llama_init_from_model(model, ctx_params));
+    if (!lctx) {
+        throw std::runtime_error("failed to create llama context");
+    }
+
+    common_batch batch(lctx.get());
+    for (uint32_t pos = 0; pos < n_tokens/2; pos++) {
+        batch.add(tokens[pos], pos, 0, false);
+    }
+    if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+        throw std::runtime_error("failed to decode batch");
+    }
+
+    std::vector<float> logits;
+    std::vector<float> ref;
+    for (uint32_t pos = n_tokens/2; pos < n_tokens; pos++) {
+        batch.clear();
+        batch.add(tokens[pos], pos, 0, true);
+        const uint32_t n_draft = pos % (n_draft_max + 1);
+        for (uint32_t i = 1; i <= n_draft; i++) {
+            batch.add((tokens[pos] + i) % n_vocab, pos + i, 0, true);
+        }
+        if (llama_process(lctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+            throw std::runtime_error("failed to decode batch");
+        }
+
+        const float * logits_ith = llama_get_logits_ith(lctx.get(), 0);
+        logits.insert(logits.end(), logits_ith, logits_ith + n_vocab);
+        ref.insert(ref.end(), logits_ref.begin() + (size_t) pos*n_vocab, logits_ref.begin() + (size_t) (pos + 1)*n_vocab);
+
+        if (!llama_memory_seq_rm(llama_get_memory(lctx.get()), 0, pos + 1, -1)) {
+            throw std::runtime_error("failed to reject the drafts");
+        }
+    }
+
+    return nmse(ref, logits);
+}
+
 static bool moe_mandatory(const llm_arch arch) {
     switch (arch) {
         case LLM_ARCH_FLINT:
+        case LLM_ARCH_ZAYA1:
         case LLM_ARCH_LLAMA4:
         case LLM_ARCH_MAION_CODER:
         case LLM_ARCH_COHERE2MOE:
@@ -1053,6 +1207,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_HUNYUAN_MOE:
         case LLM_ARCH_HY_V3:
         case LLM_ARCH_HY_V4:
+        case LLM_ARCH_HY_V4_FLASH:
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_SMALLTHINKER:
@@ -1067,6 +1222,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_KIMI_K31:
+        case LLM_ARCH_RAON1_MINI:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
@@ -1077,7 +1233,9 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_MUSE_SPARK:
         case LLM_ARCH_KOLIBRI1:
         case LLM_ARCH_METIS16:
+        case LLM_ARCH_ZONOS3:
         case LLM_ARCH_INKLING2:
+        case LLM_ARCH_INKLING2_LOOP:
             return true;
         default:
             return false;
@@ -1126,6 +1284,9 @@ static bool arch_supported(const llm_arch arch) {
             arch == LLM_ARCH_NEO_BERT || arch == LLM_ARCH_JINA_BERT_V2 || arch == LLM_ARCH_JINA_BERT_V3 || arch == LLM_ARCH_EUROBERT) {
         return false; // TODO vocab
     }
+    if (arch == LLM_ARCH_KOKORO || arch == LLM_ARCH_TINY_VOCA) {
+        return false; // TODO encoder without memory, a sequence must fit in one ubatch
+    }
     if (arch == LLM_ARCH_PLM) {
         return false; // TODO tensor shapes
     }
@@ -1138,7 +1299,7 @@ static bool arch_supported(const llm_arch arch) {
     // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
 #ifdef GGML_USE_WEBGPU
     if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
-            arch == LLM_ARCH_HY_V4) {
+            arch == LLM_ARCH_HY_V4 || arch == LLM_ARCH_HY_V4_FLASH) {
         return false;
     }
 #endif // GGML_USE_WEBGPU
@@ -1439,6 +1600,18 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                                 status_nmse = "\033[1;31mFAIL\033[0m (toggle)";
                             }
                             test_ok = false;
+                        }
+
+                        // the k-pool layout is updated in place when drafts are rejected
+                        // TODO: the meta backend aborts with n_rs_seq > 0 (view of permuted tensor not implemented)
+                        if ((arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+                            const double nmse_rollback = check_draft_rollback(model_and_ctx_dev.first.get(), tokens, logits_dev);
+                            if (!(nmse_rollback <= 1e-4)) {
+                                if (test_ok) {
+                                    status_nmse = "\033[1;31mFAIL\033[0m (rollback)";
+                                }
+                                test_ok = false;
+                            }
                         }
                     }
 
@@ -1811,6 +1984,31 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
     return n_failed == 0 ? 0 : 1;
 }
 
+static bool add_rpc_devices(const std::string & endpoints) {
+    ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (rpc_reg == nullptr) {
+        LOG_ERR("%s: RPC backend not available\n", __func__);
+        return false;
+    }
+    typedef ggml_backend_reg_t (*add_server_t)(const char * endpoint);
+    auto add_server = (add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (add_server == nullptr) {
+        LOG_ERR("%s: RPC backend has no ggml_backend_rpc_add_server\n", __func__);
+        return false;
+    }
+    std::stringstream ss(endpoints);
+    std::string endpoint;
+    while (std::getline(ss, endpoint, ',')) {
+        ggml_backend_reg_t reg = add_server(endpoint.c_str());
+        if (reg == nullptr) {
+            LOG_ERR("%s: failed to connect to RPC server %s\n", __func__, endpoint.c_str());
+            return false;
+        }
+        ggml_backend_register(reg);
+    }
+    return true;
+}
+
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -1888,6 +2086,16 @@ int main(int argc, char ** argv) {
                     return 1;
                 }
                 target_backend = ggml_backend_dev_name(dev);
+            } else {
+                usage(argv);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--rpc") == 0) {
+            if (i + 1 < argc) {
+                // must precede -b so that the RPC devices can be selected by name
+                if (!add_rpc_devices(argv[++i])) {
+                    return 1;
+                }
             } else {
                 usage(argv);
                 return 1;

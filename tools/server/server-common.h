@@ -143,7 +143,7 @@ json server_model_architecture_json(
 bool lora_all_alora(const std::vector<common_adapter_lora_info> & loras);
 
 // if the two sets of loras are different, they require a cache clear unless the
-// change is only from aloras to aloras.
+// change is only from aloras to aloras. equal sets never require a clear.
 bool lora_should_clear_cache(
         const std::vector<common_adapter_lora_info> & current,
         const std::vector<common_adapter_lora_info> & next);
@@ -836,6 +836,9 @@ static inline server_state server_state_from_str(const std::string & str) {
     if (str == "sleeping")    return SERVER_STATE_SLEEPING;
     GGML_ASSERT(false && "invalid server_state string");
 }
+
+// the model name reported by the server: the first alias, else the model's repo or path
+std::string server_get_model_name(const common_params & params);
 
 // the role of this process and, when it is a child of a router, its side of the protocol
 struct server_role {

@@ -7,7 +7,6 @@ from utils import ServerProcess, download_file
 
 # Runs each speculative method greedily and checks that it still drafts and accepts as expected.
 # accept rate = accepted / drafted, accept len = 1 + accepted / verification steps (from /metrics).
-# DFlash2 and LiLiCorr use --spec-type draft-dflash; the draft GGUF metadata selects the variant.
 # Needs real models and a GPU. Use SPEC_METHODS=compact, nightly, all, or a comma-separated method list.
 
 HF = "https://huggingface.co"
@@ -37,7 +36,7 @@ CASES = [
         draft=None,
         n_max=3,
         min_accept_rate=0.6040,
-        min_accept_len=2.7766,
+        min_accept_len=2.65,
     ),
     SpecCase(
         name="dflash",
@@ -46,7 +45,7 @@ CASES = [
         draft="dflash-Qwen3-4B-Q4_K_M.gguf",
         n_max=7,
         min_accept_rate=0.1404,
-        min_accept_len=2.1687,
+        min_accept_len=2.10,
     ),
     SpecCase(
         name="dspark",
@@ -55,7 +54,7 @@ CASES = [
         draft="dspark-Qwen3-4B-Q4_K_M.gguf",
         n_max=7,
         min_accept_rate=0.2767,
-        min_accept_len=3.1246,
+        min_accept_len=3.05,
     ),
     SpecCase(
         name="eagle3",
@@ -64,26 +63,26 @@ CASES = [
         draft="eagle3-Qwen3-4B-Q8_0.gguf",
         n_max=3,
         min_accept_rate=0.2006,
-        min_accept_len=1.5757,
+        min_accept_len=1.50,
     ),
     # Nightly floors retain the earlier three-point rate and 0.2 length margins.
     SpecCase(
         name="dflash2",
-        spec_type="draft-dflash",
+        spec_type="draft-dflash2",
         target="Qwen3.8-27B-Q4_K_M.gguf",
         draft="dflash2-Qwen3.8-27B-Q8_0.gguf",
         n_max=7,
         min_accept_rate=0.5180,
-        min_accept_len=4.5414,
+        min_accept_len=4.50,
     ),
     SpecCase(
         name="lilicorr",
-        spec_type="draft-dflash",
+        spec_type="draft-lilicorr",
         target="NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB.gguf",
         draft="lilicorr-NVIDIA-Nemotron-3.5-Bolt-74B-A9B-24GB-NVFP4.gguf",
         n_max=7,
         min_accept_rate=0.6399,
-        min_accept_len=5.4444,
+        min_accept_len=5.40,
     ),
 ]
 

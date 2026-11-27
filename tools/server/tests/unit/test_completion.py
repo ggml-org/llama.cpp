@@ -811,3 +811,122 @@ def test_completion_checkpoint_kept_after_restore():
     for suffix in suffixes[1:]:
         assert len(suffix) > server.n_ubatch + 4
         assert cache_n(prefix + suffix) == len(prefix) - 1
+
+
+# hybrid model with SWA: a checkpoint or a state right before the new tokens must be reused, even if it is less than n_swa tokens away
+def test_completion_checkpoint_hybrid_swa():
+    global server
+    server = ServerPreset.tinylfm3omni()
+    server.n_slots = 1
+    server.n_batch = 16
+    # one token per ubatch, like the generated tokens: the runs with and without the cache go through the same kernels
+    server.n_ubatch = 1
+    server.cache_ram = 0
+    server.temperature = 0.0
+    server.start()
+
+    def complete(prompt, cache_prompt=True, n_predict=4):
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "n_predict": n_predict,
+            "n_probs": 5,
+            "cache_prompt": cache_prompt,
+            "return_tokens": True,
+        })
+        assert res.status_code == 200
+        return res.body
+
+    def top_logprobs(body):
+        return [(p["id"], p["logprob"]) for p in body["completion_probabilities"][0]["top_logprobs"]]
+
+    def assert_same_output(actual, expected):
+        assert actual["tokens"] == expected["tokens"]
+        assert top_logprobs(actual) == top_logprobs(expected)
+
+    # shorter than n_swa (256), so that every checkpoint is within the SWA window of the prompt end
+    prefix = [1000 + i for i in range(200)]
+    suffix = [5000 + i for i in range(20)]
+
+    # the new prompt drops the generated tokens: the state is rolled back to the checkpoint 4 tokens before the end
+    expected = complete(prefix + suffix, cache_prompt=False)
+    complete(prefix)
+    actual = complete(prefix + suffix)
+    assert actual["timings"]["cache_n"] == len(prefix) - 4
+    assert_same_output(actual, expected)
+
+    # the new prompt continues after the generated tokens: the state is used as it is
+    first = complete(prefix)
+    prompt = prefix + first["tokens"] + suffix
+    expected = complete(prompt, cache_prompt=False)
+    first = complete(prefix)
+    assert prefix + first["tokens"] + suffix == prompt
+    actual = complete(prompt)
+    # the last generated token was sampled, but never processed
+    assert actual["timings"]["cache_n"] == len(prefix) + len(first["tokens"]) - 1
+    assert actual["timings"]["prompt_n"] == len(suffix) + 1
+    assert_same_output(actual, expected)
+
+
+# the prompt cache has to be consulted even when the selected slot already holds a usable prefix, and even when the slot was picked by id
+# ref: https://github.com/ggml-org/llama.cpp/issues/28139
+# ref: https://github.com/ggml-org/llama.cpp/issues/28276
+PROMPT_HEAD = "The capital of France is Paris. " * 2
+PROMPT_TAIL = "The river Seine runs slowly through the middle of the old stone city. "
+
+# PROMPT_SHORT is a strict prefix of PROMPT_LONG and covers more of it than the default --slot-prompt-similarity, so the slot is selected by the LCP loop
+PROMPT_SHORT = PROMPT_HEAD + PROMPT_TAIL*6
+PROMPT_LONG  = PROMPT_SHORT + PROMPT_TAIL*18
+PROMPT_OTHER = "Whiskers the cat climbed the tall oak tree behind the red barn. " * 12
+
+
+def prompt_cache_server():
+    global server
+    server.n_slots = 2
+    server.n_ctx = 2048
+    server.n_batch = 512
+    server.cache_ram = 512
+    server.start()
+
+
+def completion_cached(prompt: str, id_slot: int | None = None):
+    data = {"prompt": prompt, "cache_prompt": True, "n_predict": 0, "temperature": 0.0}
+    if id_slot is not None:
+        data["id_slot"] = id_slot
+    res = server.make_request("POST", "/completion", data=data)
+    assert res.status_code == 200
+    return res.body["timings"]["prompt_n"], res.body["timings"]["cache_n"]
+
+
+def test_prompt_cache_used_when_slot_pinned_by_id_is_empty():
+    global server
+    prompt_cache_server()
+
+    n_cold, _ = completion_cached(PROMPT_LONG, id_slot=0)
+    assert n_cold > 100
+
+    # push the state of slot 0 into the prompt cache
+    completion_cached(PROMPT_OTHER, id_slot=0)
+
+    # slot 1 is empty, so f_keep has no meaning here - the cache still holds the exact state for this prompt and has to be used
+    n_pinned, n_cached = completion_cached(PROMPT_LONG, id_slot=1)
+    assert n_cached == n_cold - n_pinned
+    assert n_pinned < n_cold
+
+
+def test_prompt_cache_used_when_slot_holds_a_shorter_prefix():
+    global server
+    prompt_cache_server()
+
+    # warm slot 1 before the long state reaches the cache, otherwise this request would consume the cached entry itself
+    n_short, _ = completion_cached(PROMPT_SHORT, id_slot=1)
+
+    n_cold, _ = completion_cached(PROMPT_LONG, id_slot=0)
+    assert n_cold > n_short
+
+    # push the long state of slot 0 into the prompt cache
+    completion_cached(PROMPT_OTHER, id_slot=0)
+
+    # slot 1 holds a prefix of PROMPT_LONG and would be reused as is, but the cache holds the whole state and is the better start
+    n_reuse, n_cached = completion_cached(PROMPT_LONG, id_slot=1)
+    assert n_cached == n_cold - n_reuse
+    assert n_reuse < n_cold - n_short

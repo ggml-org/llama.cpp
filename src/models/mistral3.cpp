@@ -4,8 +4,6 @@ void llama_model_mistral3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE, hparams.f_attn_temp_scale, false);
 
-    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, hparams.yarn_beta_fast,    false);
-    ml.get_key(LLM_KV_ROPE_SCALING_YARN_BETA_SLOW, hparams.yarn_beta_slow,    false);
     ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,   hparams.rope_yarn_log_mul, false);
 
     ml.get_key(LLM_KV_REALTIME_DELAY_TOKENS, hparams.n_tokens_delay, false);
@@ -248,11 +246,7 @@ llama_model_mistral3::graph::graph(const llm_graph_params & params) : llm_graph_
                     LLM_FFN_SILU, true,
                     hparams.expert_weights_scale,
                     LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
-                    il,
-                    nullptr, nullptr,
-                    model.layers[il].ffn_up_exps_s,
-                    model.layers[il].ffn_gate_exps_s,
-                    model.layers[il].ffn_down_exps_s);
+                    il);
             cb(cur, "ffn_moe_out", il);
         }
         cur = ggml_add(ctx0, cur, ffn_inp);

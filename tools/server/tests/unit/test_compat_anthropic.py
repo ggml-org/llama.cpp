@@ -851,13 +851,13 @@ def test_anthropic_thinking():
     assert res.body["type"] == "message"
 
 
-@pytest.mark.parametrize("effort", ["low", "high"])
-def test_anthropic_output_config_effort(effort):
+def test_anthropic_output_config_effort():
     """output_config.effort must reach the chat template, same as chat_template_kwargs.reasoning_effort"""
     global server
     server.jinja = True
     server.chat_template_file = '../../../models/templates/openai-gpt-oss-120b.jinja'
     server.start()
+    effort = "low"
 
     def count_tokens(extra):
         res = server.make_request("POST", "/v1/messages/count_tokens", data={

@@ -1047,8 +1047,8 @@ class tensor_traits_common : public tensor_traits_base {
                         return true;
                 }
             case GGML_OP_FLASH_ATTN_EXT:
-                // K/V row lists are handled by the generic CPU path
-                if (op->src[5] != nullptr) {
+                // K/V row lists and the indexed bias are handled by the generic CPU path
+                if (op->src[5] != nullptr || ggml_flash_attn_ext_has_indexed_bias(op)) {
                     return false;
                 }
                 forward_flash_attn_ext_f16(params, op);
@@ -1156,7 +1156,8 @@ class tensor_traits_common : public tensor_traits_base {
                 }
                 return true;
             case GGML_OP_GATED_DELTA_NET:
-                if (params->use_ref) {
+                // the generic kernel does the replay of pending tokens (op param 1)
+                if (params->use_ref || ggml_get_op_params_i32(op, 1) != 0) {
                     return false;
                 }
                 switch (op->src[0]->type) {

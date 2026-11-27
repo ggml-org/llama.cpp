@@ -1,3 +1,5 @@
+#pragma once
+
 // Simplified API for asynchronous data loading.
 
 #include "common.cuh"

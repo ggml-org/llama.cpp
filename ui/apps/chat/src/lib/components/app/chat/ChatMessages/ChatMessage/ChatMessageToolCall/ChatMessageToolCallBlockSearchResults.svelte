@@ -1,0 +1,172 @@
+<script lang="ts">
+	import * as HoverCard from '@ggml-org/llama-ui/ui/hover-card';
+	import { Globe, Loader2 } from '@lucide/svelte';
+	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
+	import { AgenticSectionType } from '#lib/enums/index.ts';
+	import { mcpStore } from '#lib/stores/index.ts';
+	import type { AgenticSection, SearchResult } from '#lib/types/index.ts';
+	import {
+		buildProxiedIconUrl,
+		extractSearchQuery,
+		extractSearchResults,
+		faviconForUrl,
+		sanitizeExternalUrl
+	} from '#lib/utils/index.ts';
+
+	interface Props {
+		section: AgenticSection;
+		open?: boolean;
+		isStreaming?: boolean;
+		onToggle?: () => void;
+	}
+
+	let { isStreaming = false, onToggle, open = $bindable(false), section }: Props = $props();
+
+	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
+	const isStreamingCall = $derived(section.type === AgenticSectionType.TOOL_CALL_STREAMING);
+	const showSpinner = $derived(isPending || (isStreamingCall && isStreaming));
+
+	const results = $derived(extractSearchResults(section.toolResult));
+	const query = $derived(extractSearchQuery(section.toolArgs));
+
+	// Verb reflects state: "Searching" while the call is in flight, "Searched"
+	// once results (or a definitive empty response) have arrived. Lets the
+	// heading read as a live progress indicator rather than a completed
+	// retrospective.
+	const title = $derived.by(() => {
+		const verb = showSpinner ? 'Searching' : 'Searched';
+
+		return query ? `${verb} web for "${query}"` : `${verb} web`;
+	});
+
+	function hideBrokenIcon(event: Event) {
+		(event.currentTarget as HTMLImageElement).style.display = 'none';
+	}
+
+	function formatPublishDate(iso: string | undefined): string | null {
+		if (!iso) return null;
+
+		try {
+			const date = new Date(iso);
+
+			if (Number.isNaN(date.getTime())) return iso;
+
+			return date.toLocaleDateString(undefined, {
+				day: 'numeric',
+				month: 'short',
+				year: 'numeric'
+			});
+		} catch {
+			return iso;
+		}
+	}
+
+	function hostFor(url: string): string | null {
+		try {
+			return new URL(url).host;
+		} catch {
+			return null;
+		}
+	}
+
+	function hasDetails(result: SearchResult): boolean {
+		return Boolean(result.highlights || result.published || result.author);
+	}
+</script>
+
+{#snippet pill(result: SearchResult)}
+	{@const faviconUrl = buildProxiedIconUrl(faviconForUrl(result.url), mcpStore.isProxyAvailable)}
+	{@const safeUrl = sanitizeExternalUrl(result.url)}
+	{@const showHoverCard = safeUrl !== null && hasDetails(result)}
+	{#if safeUrl}
+		<HoverCard.Root closeDelay={100} openDelay={150}>
+			<HoverCard.Trigger
+				class="hover:bg-muted/80 focus-visible:ring-ring inline-flex max-w-full items-center gap-1.5 rounded-full border bg-muted px-2.5 py-1 text-caption transition-colors outline-none focus-visible:ring-2"
+				href={safeUrl}
+				rel="noopener noreferrer"
+				target="_blank"
+			>
+				{#if faviconUrl}
+					<img
+						alt=""
+						class="size-3 shrink-0 rounded-sm"
+						onerror={hideBrokenIcon}
+						src={faviconUrl}
+					/>
+				{:else}
+					<Globe class="text-muted-foreground/70 size-icon-xs shrink-0" />
+				{/if}
+
+				<span class="truncate font-medium text-foreground/80">{result.title}</span>
+			</HoverCard.Trigger>
+
+			{#if showHoverCard}
+				{@const publishDate = formatPublishDate(result.published)}
+				{@const host = hostFor(safeUrl)}
+				<HoverCard.Content align="start" class="w-80 max-w-[90vw]" side="top" sideOffset={6}>
+					<div class="flex flex-col gap-2 px-2 py-1.5">
+						<a
+							class="line-clamp-3 text-label leading-snug hover:underline"
+							href={safeUrl}
+							rel="noopener noreferrer"
+							target="_blank">{result.title}</a
+						>
+
+						{#if publishDate || result.author}
+							<div class="text-muted-foreground flex items-center gap-1.5 text-caption">
+								{#if publishDate}
+									<span>{publishDate}</span>
+								{/if}
+
+								{#if publishDate && result.author}
+									<span class="opacity-50">&middot;</span>
+								{/if}
+
+								{#if result.author}
+									<span class="truncate">{result.author}</span>
+								{/if}
+							</div>
+						{/if}
+
+						{#if result.highlights}
+							<p
+								class="text-popover-foreground/85 line-clamp-5 text-caption leading-relaxed whitespace-pre-line"
+							>
+								{result.highlights}
+							</p>
+						{/if}
+
+						{#if host}
+							<div class="text-muted-foreground/80 truncate text-caption">{host}</div>
+						{/if}
+					</div>
+				</HoverCard.Content>
+			{/if}
+		</HoverCard.Root>
+	{/if}
+{/snippet}
+
+<CollapsibleContentBlock
+	class="my-2"
+	{onToggle}
+	{open}
+	pinnedChevron
+	shimmerTitle={showSpinner}
+	{title}
+>
+	{#if results.length > 0}
+		<div class="flex flex-wrap items-center gap-2 pb-1">
+			{#each results as result (result.url)}
+				{@render pill(result)}
+			{/each}
+		</div>
+	{:else if showSpinner}
+		<div class="text-muted-foreground/70 flex items-center gap-2 py-1 text-caption italic">
+			<Loader2 class="size-icon-xs animate-spin" />
+
+			<span>Searching...</span>
+		</div>
+	{:else}
+		<div class="text-muted-foreground/70 py-1 text-caption italic">No results</div>
+	{/if}
+</CollapsibleContentBlock>

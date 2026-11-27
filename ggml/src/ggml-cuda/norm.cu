@@ -2,10 +2,18 @@
 #include "convert.cuh"
 #include <cstdint>
 
-template <int block_size>
-static __global__ void norm_f32(
-        const float * x, float * dst, const int ncols, const int nchannels, const int nsamples,
-        const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps) {
+template <int block_size, bool do_multiply = false, bool do_add = false>
+static __global__ void norm_f32(const float * x,
+                                float *       dst,
+                                const int     ncols,
+                                const int     nchannels,
+                                const int     nsamples,
+                                const int64_t stride_row,
+                                const int64_t stride_channel,
+                                const int64_t stride_sample,
+                                const float   eps,
+                                const float * mul,
+                                const float * add) {
     const int nrows = gridDim.x;
     const int row   = blockIdx.x;
     const int tid   = threadIdx.x;
@@ -36,7 +44,14 @@ static __global__ void norm_f32(
             const float inv_std = rsqrtf(var + eps);
 
             for (int col = tid; col < ncols; col += block_size) {
-                dstc[col] = (xc[col] - mean) * inv_std;
+                float v = (xc[col] - mean) * inv_std;
+                if constexpr (do_multiply) {
+                    v *= mul[col];
+                }
+                if constexpr (do_add) {
+                    v += add[col];
+                }
+                dstc[col] = v;
             }
 
             if constexpr (block_size > WARP_SIZE) {
@@ -384,16 +399,81 @@ static __global__ void l2_norm_f32(
     }
 }
 
-static void norm_f32_cuda(
-        const float * x, float * dst, const int ncols, const int nrows, const int nchannels, const int nsamples,
-        const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample, const float eps, cudaStream_t stream) {
+// l2_norm with an optional per-column weight before it and SCALE (+ an optional MUL by a per-channel/sample factor) after it,
+// with the reduction of l2_norm_f32
+template <int block_size, bool has_w, bool has_f>
+static __global__ void l2_clip_f32(
+        const float * x, const float * w, const float * f, float * dst, const int ncols, const int nchannels, const int nsamples,
+        const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample,
+        const int64_t w_stride_row, const int64_t w_stride_channel, const int64_t w_stride_sample,
+        const int64_t f_stride_channel, const int64_t f_stride_sample, const float eps, const float scale, const float bias) {
+    ggml_cuda_pdl_lc();
+    const int nrows = gridDim.x;
+    const int row   = blockIdx.x;
+    const int tid   = threadIdx.x;
+
+    extern __shared__ float s_sum[];
+
+    ggml_cuda_pdl_sync();
+
+    for (int sample = blockIdx.z; sample < nsamples; sample += gridDim.z) {
+        for (int channel = blockIdx.y; channel < nchannels; channel += gridDim.y) {
+            const float * xc   = x   + sample*stride_sample + channel*stride_channel + row*stride_row;
+            const float * wc   = has_w ? w + sample*w_stride_sample + channel*w_stride_channel + row*w_stride_row : nullptr;
+            float       * dstc = dst + ((sample*nchannels + channel)*nrows + row)*ncols;
+
+            float tmp = 0.0f;
+
+            for (int col = tid; col < ncols; col += block_size) {
+                const float xi = has_w ? xc[col]*wc[col] : xc[col];
+                tmp += xi * xi;
+            }
+
+            tmp = block_reduce<block_reduce_method::SUM, block_size>(tmp, s_sum);
+
+            const float l2 = rsqrtf(fmaxf(tmp, eps * eps));
+            const float fc = has_f ? f[sample*f_stride_sample + channel*f_stride_channel] : 1.0f;
+
+            for (int col = tid; col < ncols; col += block_size) {
+                const float xi = has_w ? xc[col]*wc[col] : xc[col];
+                const float yi = scale*(l2*xi) + bias;
+                dstc[col] = has_f ? yi*fc : yi;
+            }
+
+            if constexpr (block_size > WARP_SIZE) {
+                __syncthreads();
+            }
+        }
+    }
+}
+
+template <bool do_multiply = false, bool do_add = false>
+static void norm_f32_cuda(const float * x,
+                          float *       dst,
+                          const int     ncols,
+                          const int     nrows,
+                          const int     nchannels,
+                          const int     nsamples,
+                          const int64_t stride_row,
+                          const int64_t stride_channel,
+                          const int64_t stride_sample,
+                          const float   eps,
+                          cudaStream_t  stream,
+                          const float * mul = nullptr,
+                          const float * add = nullptr) {
     const dim3 blocks_num(nrows, MIN(nchannels, UINT16_MAX), MIN(nsamples, UINT16_MAX));
-    if (ncols < 1024) {
+    if (do_multiply && ncols <= 2048) {
+        const dim3 block_dims(256, 1, 1);
+        norm_f32<256, do_multiply, do_add><<<blocks_num, block_dims, 32 * sizeof(float2), stream>>>(
+            x, dst, ncols, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, mul, add);
+    } else if (!do_multiply && ncols < 1024) {
         const dim3 block_dims(WARP_SIZE, 1, 1);
-        norm_f32<WARP_SIZE><<<blocks_num, block_dims, 0, stream>>>(x, dst, ncols, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps);
+        norm_f32<WARP_SIZE, do_multiply, do_add><<<blocks_num, block_dims, 0, stream>>>(
+            x, dst, ncols, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, mul, add);
     } else {
         const dim3 block_dims(1024, 1, 1);
-        norm_f32<1024><<<blocks_num, block_dims, block_dims.x > WARP_SIZE ? 32 * sizeof(float2): 0, stream>>>(x, dst, ncols, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps);
+        norm_f32<1024, do_multiply, do_add><<<blocks_num, block_dims, 32 * sizeof(float2), stream>>>(
+            x, dst, ncols, nchannels, nsamples, stride_row, stride_channel, stride_sample, eps, mul, add);
     }
 }
 
@@ -591,10 +671,75 @@ static void l2_norm_f32_cuda(
     }
 }
 
-void ggml_cuda_op_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+template <bool has_w, bool has_f>
+static void l2_clip_f32_cuda(
+        const float * x, const float * w, const float * f, float * dst, const int ncols, const int nrows, const int nchannels, const int nsamples,
+        const int64_t stride_row, const int64_t stride_channel, const int64_t stride_sample,
+        const int64_t w_stride_row, const int64_t w_stride_channel, const int64_t w_stride_sample,
+        const int64_t f_stride_channel, const int64_t f_stride_sample, const float eps, const float scale, const float bias, cudaStream_t stream) {
+    const dim3 blocks_num(nrows, MIN(nchannels, UINT16_MAX), MIN(nsamples, UINT16_MAX));
+    if (ncols < 1024) {
+        const ggml_cuda_kernel_launch_params params(blocks_num, dim3(WARP_SIZE, 1, 1), 0, stream);
+        ggml_cuda_kernel_launch(l2_clip_f32<WARP_SIZE, has_w, has_f>, params, x, w, f, dst, ncols, nchannels, nsamples,
+                stride_row, stride_channel, stride_sample, w_stride_row, w_stride_channel, w_stride_sample,
+                f_stride_channel, f_stride_sample, eps, scale, bias);
+    } else {
+        const ggml_cuda_kernel_launch_params params(blocks_num, dim3(1024, 1, 1), 32 * sizeof(float), stream);
+        ggml_cuda_kernel_launch(l2_clip_f32<1024, has_w, has_f>, params, x, w, f, dst, ncols, nchannels, nsamples,
+                stride_row, stride_channel, stride_sample, w_stride_row, w_stride_channel, w_stride_sample,
+                f_stride_channel, f_stride_sample, eps, scale, bias);
+    }
+}
+
+void ggml_cuda_op_l2_clip(ggml_backend_cuda_context & ctx, const ggml_tensor * x, const ggml_tensor * w, const ggml_tensor * l2_norm,
+        const ggml_tensor * scale, const ggml_tensor * f, ggml_tensor * dst) {
+    GGML_ASSERT(x->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 && x->nb[0] == sizeof(float));
+    GGML_ASSERT(ggml_is_contiguous(dst) && ggml_are_same_shape(x, dst));
+
+    GGML_TENSOR_LOCALS(int64_t, ne0, x, ne);
+    GGML_TENSOR_LOCALS(size_t,  nb0, x, nb);
+
+    // broadcast dimensions of w and f have a stride of 0
+    auto bcast_stride = [](const ggml_tensor * t, int dim) -> int64_t {
+        return t->ne[dim] == 1 ? 0 : (int64_t) (t->nb[dim]/sizeof(float));
+    };
+
+    const int64_t ws1 = w ? bcast_stride(w, 1) : 0;
+    const int64_t ws2 = w ? bcast_stride(w, 2) : 0;
+    const int64_t ws3 = w ? bcast_stride(w, 3) : 0;
+    const int64_t fs2 = f ? bcast_stride(f, 2) : 0;
+    const int64_t fs3 = f ? bcast_stride(f, 3) : 0;
+
+    const float * x_d = (const float *) x->data;
+    const float * w_d = w ? (const float *) w->data : nullptr;
+    const float * f_d = f ? (const float *) f->data : nullptr;
+    float       * d_d = (float *) dst->data;
+
+    const float eps = ggml_get_op_params_f32(l2_norm, 0);
+    const float s   = ggml_get_op_params_f32(scale, 0);
+    const float b   = ggml_get_op_params_f32(scale, 1);
+
+    const int64_t s01 = nb01/sizeof(float);
+    const int64_t s02 = nb02/sizeof(float);
+    const int64_t s03 = nb03/sizeof(float);
+
+    cudaStream_t stream = ctx.stream();
+
+    if (w && f) {
+        l2_clip_f32_cuda<true,  true >(x_d, w_d, f_d, d_d, ne00, ne01, ne02, ne03, s01, s02, s03, ws1, ws2, ws3, fs2, fs3, eps, s, b, stream);
+    } else if (w) {
+        l2_clip_f32_cuda<true,  false>(x_d, w_d, f_d, d_d, ne00, ne01, ne02, ne03, s01, s02, s03, ws1, ws2, ws3, fs2, fs3, eps, s, b, stream);
+    } else if (f) {
+        l2_clip_f32_cuda<false, true >(x_d, w_d, f_d, d_d, ne00, ne01, ne02, ne03, s01, s02, s03, ws1, ws2, ws3, fs2, fs3, eps, s, b, stream);
+    } else {
+        l2_clip_f32_cuda<false, false>(x_d, w_d, f_d, d_d, ne00, ne01, ne02, ne03, s01, s02, s03, ws1, ws2, ws3, fs2, fs3, eps, s, b, stream);
+    }
+}
+
+void ggml_cuda_op_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst, ggml_tensor * mul, ggml_tensor * add) {
     const ggml_tensor * src0 = dst->src[0];
     const float * src0_d = (const float *) src0->data;
-    float * dst_d = (float *) dst->data;
+    float *             dst_d  = (float *) (add ? add : mul ? mul : dst)->data;
     cudaStream_t stream = ctx.stream();
 
     GGML_ASSERT(src0->type == GGML_TYPE_F32);
@@ -612,7 +757,19 @@ void ggml_cuda_op_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t s02 = nb02 / ts0;
     const int64_t s03 = nb03 / ts0;
 
-    norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
+    if (mul) {
+        const ggml_tensor * weight   = mul->src[0] == dst ? mul->src[1] : mul->src[0];
+        const float *       weight_d = (const float *) weight->data;
+        if (add) {
+            const ggml_tensor * bias = add->src[0] == mul ? add->src[1] : add->src[0];
+            norm_f32_cuda<true, true>(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream, weight_d,
+                                      (const float *) bias->data);
+        } else {
+            norm_f32_cuda<true, false>(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream, weight_d);
+        }
+    } else {
+        norm_f32_cuda(src0_d, dst_d, ne00, ne01, ne02, ne03, s01, s02, s03, eps, stream);
+    }
 }
 
 void ggml_cuda_op_group_norm(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {

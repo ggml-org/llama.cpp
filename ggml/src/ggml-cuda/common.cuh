@@ -59,7 +59,7 @@
 // While BW spans CC 1000, 1100 & 1200, we are integrating Tensor Core instructions available to 1200 family, see
 // https://docs.nvidia.com/cutlass/media/docs/cpp/blackwell_functionality.html#blackwell-sm120-gemms
 #define GGML_CUDA_CC_BLACKWELL       1200
-#define GGML_CUDA_CC_DGX_SPARK       1210
+#define GGML_CUDA_CC_GB10            1210
 #define GGML_CUDA_CC_RUBIN           1300
 #define GGML_CUDA_CC_OFFSET_AMD      0x1000000
 #define GGML_CUDA_CC_OFFSET_MTHREADS 0x0100000
@@ -412,6 +412,11 @@ static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignm
            tensor->nb[3] % alignment == 0;
 }
 
+static bool ggml_cuda_is_view_or_noop(const ggml_tensor * t) {
+    return ggml_is_empty(t) || t->op == GGML_OP_RESHAPE || t->op == GGML_OP_TRANSPOSE ||
+           t->op == GGML_OP_VIEW || t->op == GGML_OP_PERMUTE || t->op == GGML_OP_NONE;
+}
+
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
     return 64;
@@ -451,6 +456,16 @@ static __device__ __forceinline__ T ggml_cuda_shfl_xor(T value, int lane_mask, i
 static __device__ __forceinline__ ggml_cuda_thread_mask_t ggml_cuda_ballot(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
     return __ballot_sync(mask, predicate);
 }
+
+static __device__ __forceinline__ int ggml_cuda_popc(ggml_cuda_thread_mask_t x) {
+    static_assert(sizeof(ggml_cuda_thread_mask_t) == 4 || sizeof(ggml_cuda_thread_mask_t) == 8, "unsupported thread mask type");
+    if constexpr (sizeof(ggml_cuda_thread_mask_t) == 4) {
+        return __popc(x);
+    } else {
+        return __popcll(x);
+    }
+}
+template<typename T> static __device__ __forceinline__ int ggml_cuda_popc(T x) = delete; // Makes implicit type casts result in an error.
 
 static __device__ __forceinline__ int ggml_cuda_all(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
     return __all_sync(mask, predicate);
@@ -901,7 +916,7 @@ static __device__ __forceinline__ float ggml_cuda_ue4m3_to_fp32(uint8_t x) {
     // but CDNA3 supports only e4m3_fnuz (no inf).
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.
     const __hip_fp8_e4m3_fnuz xf = *reinterpret_cast<const __hip_fp8_e4m3_fnuz *>(&bits);
-    return static_cast<float>(xf) / 2;
+    return static_cast<float>(xf);
 #else
 #if defined(FP8_AVAILABLE) && !defined(GGML_USE_HIP)
     const uint32_t bits = x * (x != 0x7F && x != 0xFF); // Convert NaN to 0.0f to match CPU implementation.
@@ -1036,6 +1051,12 @@ static const uint3 init_fastdiv_values(uint64_t d_64) {
     uint32_t L = 0;
     while (L < 32 && (uint32_t{ 1 } << L) < d) {
         L++;
+        if (L == 32) {
+            // Shifting uint32_t by 32 to the right is undefined behavior.
+            // On NVIDIA it will produce 0.
+            // On AMD the value by which is shifted is masked with & 31 so it is shifting by 0 bits.
+            GGML_ABORT("undefined behavior in fastdiv");
+        }
     }
 
     uint32_t mp = (uint32_t) ((uint64_t{ 1 } << 32) * ((uint64_t{ 1 } << L) - d) / d + 1);
@@ -1293,6 +1314,7 @@ struct ggml_cuda_device_info {
         size_t  total_vram;
         int     warp_size;                      // Number of threads in a dispatch
         bool    supports_cooperative_launch;    // whether cooperative launch is supported
+        bool    prefer_fp32_acc;                // prefer BF16 inputs with FP32 accumulation for quantized cuBLAS
         int     physical_device;                // backing physical CUDA device for this (virtual) device
         int     physical_share_count;           // number of (virtual) devices sharing this device's physical GPU
         int     virtual_index;                  // index of this (virtual) device among those sharing its physical GPU

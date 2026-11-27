@@ -1,4 +1,6 @@
 #include "fused-gemm.hpp"
+#include "fused-gemm-esimd.hpp"
+#include "quants.hpp"
 
 #include <sycl/ext/oneapi/matrix/matrix.hpp>
 
@@ -17,7 +19,6 @@ namespace mx = sycl::ext::oneapi::experimental::matrix;
 // superblock into steps of this width. The sub-groups of a work-group each walk their own K range
 // and are summed at the end.
 static constexpr int FG_BK     = QK4_NL;
-static constexpr int FG_KSPLIT = 4;
 
 // Element traits of one joint_matrix operand type. The A stage and the B pack compute in f32 and
 // convert once, in registers, when they write the element, so any type costs the same one pass.
@@ -113,6 +114,15 @@ using fg_half = sycl::half;
 using fg_bf16 = sycl::ext::oneapi::bfloat16;
 using fg_tf32 = mx::precision::tf32;
 
+// The combinations the ESIMD grouped GEMM (fused-gemm-esimd.cpp) stands in for: 8 x SG x 16 with f16
+// or bf16 operands, the shape of one dpas, on sub-group 16 (Xe2, Xe-HPC) or 8 (Xe-HPG). Its B is
+// packed and tiled as theirs is.
+template <typename S> static constexpr bool fg_esimd_combo() {
+    return S::TM == 8 && S::TN == S::SG && S::TK == 16 && (S::SG == 16 || S::SG == 8) &&
+           std::is_same_v<typename S::ta, typename S::tb> &&
+           (std::is_same_v<typename S::ta, fg_half> || std::is_same_v<typename S::ta, fg_bf16>);
+}
+
 // One bit of GGML_SYCL_XMX_GATHER_SHAPES per combination. Only combinations some device lists in
 // matrix_combinations are built (appendix of sycl_ext_oneapi_matrix and the runtime's own list).
 template <typename F> static void fg_visit_combo(int idx, F && f);
@@ -152,29 +162,7 @@ template <typename F> static void fg_visit_combo(int idx, F && f) {
 // size, since IGC fails on the other ones. A JIT build keeps them all, but each combination lands in
 // its own device image (joint_matrix is an optional kernel feature) and only a combination the
 // device reports is launched, so the runtime never asks IGC for the others.
-#if defined(__SYCL_DEVICE_ONLY__)
-#    if __SYCL_TARGET_INTEL_GPU_ACM_G10__ || __SYCL_TARGET_INTEL_GPU_ACM_G11__ || __SYCL_TARGET_INTEL_GPU_ACM_G12__ || \
-        __SYCL_TARGET_INTEL_GPU_ARL_H__
-#        define FG_AOT_SG 8
-#    elif __SYCL_TARGET_INTEL_GPU_PVC__ || __SYCL_TARGET_INTEL_GPU_PVC_VG__ || __SYCL_TARGET_INTEL_GPU_BMG_G21__ || \
-        __SYCL_TARGET_INTEL_GPU_BMG_G31__ || __SYCL_TARGET_INTEL_GPU_LNL_M__ || __SYCL_TARGET_INTEL_GPU_PTL_H__ ||   \
-        __SYCL_TARGET_INTEL_GPU_PTL_U__ || __SYCL_TARGET_INTEL_GPU_WCL__ || __SYCL_TARGET_INTEL_GPU_NVL_S__ ||       \
-        __SYCL_TARGET_INTEL_GPU_NVL_U__ || __SYCL_TARGET_INTEL_GPU_NVL_P__
-#        define FG_AOT_SG 16
-#    elif __SYCL_TARGET_INTEL_GPU_TGLLP__ || __SYCL_TARGET_INTEL_GPU_RKL__ || __SYCL_TARGET_INTEL_GPU_ADL_S__ || \
-        __SYCL_TARGET_INTEL_GPU_ADL_P__ || __SYCL_TARGET_INTEL_GPU_ADL_N__ || __SYCL_TARGET_INTEL_GPU_DG1__ ||   \
-        __SYCL_TARGET_INTEL_GPU_MTL_U__ || __SYCL_TARGET_INTEL_GPU_MTL_H__
-#        define FG_AOT_SG 0 // no XMX
-#    endif
-#endif
-
-template <int SG> static constexpr bool fg_built() {
-#if defined(FG_AOT_SG)
-    return SG == FG_AOT_SG;
-#else
-    return true;
-#endif
-}
+// (FG_AOT_SG is defined in fused-gemm.hpp, which the ESIMD kernels share)
 
 // Upper bound on the tile count when total_rows rows are routed to n_as experts: the worst case gives
 // each expert one row and fills whole tiles with the rest. The bound depends only on the shape, not
@@ -434,19 +422,23 @@ static __dpct_inline__ void fg_pack_quarter(const float * __restrict__ t, typena
     }
 }
 
+// 32 values from 16 qs bytes, as in IQ4_NL blocks and IQ4_XS sub-blocks: the low nibbles fill the
+// first half of the step and the high nibbles the second, so the halves land at a[0..7] and a[8..15]
 template <typename E>
-static __dpct_inline__ void fg_stage_a(const block_iq4_xs * __restrict__ xrow, const int kb, typename E::pair * a) {
-    FG_SUPERBLOCK(block_iq4_xs);
-    // low nibbles fill the first half of the step, high nibbles the second, so the two halves
-    // land at a[0..7] and a[8..15] and no quarter loop is needed
-    const float d = (float) blk->d *
-        ((((blk->scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) | (((blk->scales_h >> (2 * ib)) & 3) << 4)) - 32);
-    const uint8_t * q4 = blk->qs + 16 * ib;
+static __dpct_inline__ void fg_decode_iq4(const uint8_t * __restrict__ q4, const float d, typename E::pair * a) {
 #pragma unroll
     for (int j = 0; j < 8; ++j) {
         a[j]     = E::make(d * kvalues_iq4nl[q4[2 * j] & 0xf], d * kvalues_iq4nl[q4[2 * j + 1] & 0xf]);
         a[8 + j] = E::make(d * kvalues_iq4nl[q4[2 * j] >> 4],  d * kvalues_iq4nl[q4[2 * j + 1] >> 4]);
     }
+}
+
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_iq4_xs * __restrict__ xrow, const int kb, typename E::pair * a) {
+    FG_SUPERBLOCK(block_iq4_xs);
+    const float d = (float) blk->d *
+        ((((blk->scales_l[ib / 2] >> (4 * (ib % 2))) & 0xf) | (((blk->scales_h >> (2 * ib)) & 3) << 4)) - 32);
+    fg_decode_iq4<E>(blk->qs + 16 * ib, d, a);
 }
 
 template <typename E>
@@ -834,6 +826,22 @@ template <> struct fg_soa<block_q6_K> {
     }
 };
 
+template <ggml_type type> struct fg_soa_iq4 {
+    static constexpr bool supported = true;
+    // [qs][per-block records]; k step kb is 32-value group kb % groups of block ib
+    template <typename E>
+    static __dpct_inline__ void stage(const uint8_t * x, const size_t nblocks, const size_t ib, const int kb,
+                                      typename E::pair * a) {
+        constexpr int groups = ggml_sycl_reordered::block_q_t<type>::traits::qk / QK4_NL;
+        const int64_t g      = (int64_t) ib * groups + kb % groups;
+        fg_decode_iq4<E>(x + 16 * g, ggml_sycl_reordered::iq4_group_scale<type>(x + nblocks * groups * 16, g), a);
+    }
+};
+
+template <> struct fg_soa<block_iq4_nl> : fg_soa_iq4<GGML_TYPE_IQ4_NL> {};
+
+template <> struct fg_soa<block_iq4_xs> : fg_soa_iq4<GGML_TYPE_IQ4_XS> {};
+
 
 // one SG_ROWS x BN output tile: B columns [b0, b0 + BN) of packed_b go to dst columns [n0, n1),
 // n1 - n0 <= BN
@@ -991,6 +999,15 @@ static void grouped_dequant_gemm_launch(const char * src0_dd, const size_t exper
                                         float * dst, const int M, const int Npad, const int K, const int64_t n_tiles,
                                         const int64_t groups_m, dpct::queue_ptr stream,
                                         ggml_sycl_grouped_gemm_rows dst_rows = {}) {
+    if constexpr (fg_esimd_combo<S>() && ggml_sycl_grouped_gemm_esimd_has<block_q_t>) {
+        // the register-operand ESIMD kernel, either weight layout: no SLM A image (GGML_SYCL_MMID_ESIMD)
+        if (ggml_sycl_grouped_gemm_esimd_enabled() &&
+            ggml_sycl_grouped_gemm_esimd<block_q_t, typename S::tsb, S::SG>(src0_dd, expert_stride, tiles_ptr, packed,
+                                                                            dst, M, Npad, K, dst_rows, reordered,
+                                                                            n_tiles, stream)) {
+            return;
+        }
+    }
     stream->submit([&](sycl::handler & cgh) {
         sycl::local_accessor<typename S::tsa, 1> tile_a(FG_KSPLIT * S::SG_ROWS * FG_BK, cgh);
         sycl::local_accessor<float, 1>          tile_c(FG_KSPLIT * S::SG_ROWS * S::BN, cgh);
@@ -1085,6 +1102,45 @@ template <typename F> static bool fg_visit_type(ggml_type type, bool reordered, 
         case GGML_TYPE_Q6_K:    return fg_visit_layout<block_q6_K>(reordered, f);
         default:                return false;
     }
+}
+
+// The ESIMD grouped GEMM loads A straight into its dpas operands, so the joint_matrix tile shape
+// means nothing to it; it runs on the fg_esimd_combo of the picked operand type and sub-group size. A
+// grouped call whose weight it covers is moved there from any other shape of that type and sub-group
+// size, if the device lists it, whatever GGML_SYCL_XMX_GATHER_SHAPES allows: the shape bits choose
+// among joint_matrix tiles.
+// A call the ESIMD kernel then declines (a shape it does not take) runs that combination's joint_matrix
+// kernel.
+static int fg_esimd_remap(dpct::queue_ptr stream, int combo, ggml_type src0_type, bool reordered) {
+    if (combo < 0 || !ggml_sycl_grouped_gemm_esimd_enabled()) {
+        return combo;
+    }
+    bool covered = false;
+    fg_visit_type(src0_type, reordered, [&](auto tag) {
+        using T = decltype(tag);
+        covered = ggml_sycl_grouped_gemm_esimd_has<typename T::type>;
+    });
+    if (!covered) {
+        return combo;
+    }
+    int target = -1;
+    fg_visit_combo(combo, [&](auto s) {
+        using S = decltype(s);
+        if constexpr (std::is_same_v<typename S::ta, typename S::tb>) {
+            for (int idx = 0; idx < FG_N_COMBOS; ++idx) {
+                fg_visit_combo(idx, [&](auto t) {
+                    using U = decltype(t);
+                    if constexpr (fg_esimd_combo<U>() && U::SG == S::SG && std::is_same_v<typename U::ta, typename S::ta>) {
+                        target = idx;
+                    }
+                });
+            }
+        }
+    });
+    if (target < 0 || target == combo || !(fg_device_combos(stream->get_device()) & (1 << target))) {
+        return combo;
+    }
+    return target;
 }
 
 template <typename S>
@@ -1201,7 +1257,7 @@ bool ggml_sycl_grouped_dequant_gemm(ggml_type src0_type, bool reordered, const v
     if (!ggml_sycl_grouped_dequant_gemm_shape_ok(src0_type, M, K, total_rows, n_active)) {
         return false;
     }
-    const int combo = fg_pick_combo(stream, GGML_TYPE_F32, src1_prec);
+    const int combo = fg_esimd_remap(stream, fg_pick_combo(stream, GGML_TYPE_F32, src1_prec), src0_type, reordered);
     if (combo < 0) {
         return false;
     }
@@ -1407,7 +1463,7 @@ bool ggml_sycl_grouped_dequant_gemm_device_supported(ggml_type src0_type, bool r
     if (grouped_gemm_max_tiles(total_rows, n_as, GGML_SYCL_FG_BN) > INT32_MAX / GGML_SYCL_FG_BN) {
         return false;
     }
-    const int combo = fg_pick_combo(stream, GGML_TYPE_F32, src1_prec);
+    const int combo = fg_esimd_remap(stream, fg_pick_combo(stream, GGML_TYPE_F32, src1_prec), src0_type, reordered);
     if (combo < 0) {
         return false;
     }
@@ -1428,7 +1484,7 @@ bool ggml_sycl_grouped_dequant_gemm_device(ggml_type src0_type, bool reordered, 
                                                         n_tokens, M, K, stream)) {
         return false;
     }
-    const int combo = fg_pick_combo(stream, GGML_TYPE_F32, src1_prec);
+    const int combo = fg_esimd_remap(stream, fg_pick_combo(stream, GGML_TYPE_F32, src1_prec), src0_type, reordered);
     bool launched = false;
     fg_visit_combo(combo, [&](auto s) {
         launched = fg_grouped_device_run<decltype(s)>(src0_type, reordered, src0_base, expert_stride, src1, dst,
