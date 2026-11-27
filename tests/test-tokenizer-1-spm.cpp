@@ -11,6 +11,7 @@
 #include <locale>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 #include <atomic>
 
@@ -118,6 +119,60 @@ int main(int argc, char ** argv) {
 
     llama_free(ctx);
     llama_model_free(model);
+
+    {
+        auto mparams = llama_model_default_params();
+        mparams.vocab_only = true;
+
+        llama_model_kv_override overrides[2] = {};
+        overrides[0].tag = LLAMA_KV_OVERRIDE_TYPE_STR;
+        snprintf(overrides[0].key, sizeof(overrides[0].key), "%s", "tokenizer.ggml.metaspace.prepend_scheme");
+        snprintf(overrides[0].val_str, sizeof(overrides[0].val_str), "%s", "first");
+        mparams.kv_overrides = overrides;
+
+        model = llama_model_load_from_file(fname.c_str(), mparams);
+        if (model == NULL) {
+            fprintf(stderr, "%s: error: failed to load vocab '%s'\n", __func__, fname.c_str());
+            return 1;
+        }
+
+        vocab = llama_model_get_vocab(model);
+        const llama_token bos = llama_vocab_bos(vocab);
+        const llama_token nl = llama_vocab_nl(vocab);
+
+        // Llama SPM token IDs and decoded text for 'Hello' with and without a leading space
+        const std::vector<std::tuple<std::string, std::vector<llama_token>, std::string>> tests = {
+            { "<s>Hello",          { bos, 10994 }, "<s>Hello" },
+            { "<s>\nHello",        { bos, nl, 10994 }, "<s>\nHello" },
+            { "Hello",             { 15043 }, "Hello" },
+            { " Hello",            { 15043 }, "Hello" },
+            { "\xE2\x96\x81Hello", { 15043 }, "Hello" },
+        };
+
+        for (const auto & [input, expected_tokens, expected_text] : tests) {
+            const auto tokens = common_tokenize(vocab, input, false, true);
+            if (tokens != expected_tokens) {
+                fprintf(stderr, "%s : error: tokenization of '%s' with metaspace prepend_scheme 'first' does not match the expected tokens\n",
+                    __func__, input.c_str());
+                return 4;
+            }
+
+            const auto text = common_detokenize(vocab, tokens);
+            if (text != expected_text) {
+                fprintf(stderr, "%s : error: detokenization of '%s' with metaspace prepend_scheme 'first' produced '%s' instead of '%s'\n",
+                    __func__, input.c_str(), text.c_str(), expected_text.c_str());
+                return 5;
+            }
+        }
+
+        const auto tokens = common_tokenize(vocab, "Hello", true, true);
+        if (common_detokenize(vocab, tokens, false) != "Hello") {
+            fprintf(stderr, "%s : error: detokenization with a skipped BOS retains the space prefix\n", __func__);
+            return 6;
+        }
+
+        llama_model_free(model);
+    }
 
     llama_backend_free();
 

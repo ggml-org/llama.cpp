@@ -110,7 +110,7 @@ Although OpenVINO supports a wide range of [Intel hardware](https://docs.openvin
 
 **NPU:**
 - All other quantized tensors are requantized to `Q4_0_128`.
-- For a `Q6_K` token embedding, `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` selects another layout.
+- For a `Q6_K` token embedding, `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` selects another layout. When it is set, it also applies to a `Q4_K` or `Q5_K` token embedding.
 - The validated models use `Q4_K_M` files.
 
 **Layout names:**
@@ -882,7 +882,9 @@ The defaults fit most models. The variables below trade one property for another
 | Variable | Device | Type | Default | Description |
 |---|---|---|---|---|
 | `GGML_OPENVINO_PREFILL_CHUNK_SIZE` | NPU | Integer | `256` | Number of tokens that the NPU processes in one prefill step. A larger value can make long prompts faster, and makes the first load longer. Zero or a negative value means the default. Example: `GGML_OPENVINO_PREFILL_CHUNK_SIZE=512`. |
-| `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` | NPU | String | `q8_0_c` | How a `Q6_K` `token_embd.weight` is stored for the NPU: `q8_0_c` (8-bit, one scale per row), `f16`, `q4_0_128` (4-bit, one scale per 128 weights) or `q4_0_c` (4-bit, one scale per row). The 4-bit layouts use less memory at some cost in accuracy; `f16` uses more memory. Keep the default unless memory is tight. |
+| `GGML_OPENVINO_KV_ONLY_PREFILL` | NPU | Boolean | `1` | For models whose last layers reuse the KV cache of an earlier layer (Gemma 3n and Gemma 4 E2B/E4B): compile the prefill with only the KV-cache writes as outputs, which drops those layers and the output layer from it, and compute the output token of a batch with one decode step. Takes effect only without `GGML_OPENVINO_NPU_HFA_PREFILL`, and not for models with recurrent state; with decode KV windows (`GGML_OPENVINO_NPU_BLOB_PREBUILD=1`) the output step runs the decode graph of the window that covers the output token. A batch that needs more than one output token switches to the full prefill. `0` turns it off. |
+| `GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT` | NPU | String | `q8_0_c` | How a `Q6_K` `token_embd.weight` is stored for the NPU: `q8_0_c` (8-bit, one scale per row), `f16`, `q4_0_128` (4-bit, one scale per 128 weights) or `q4_0_c` (4-bit, one scale per row). The 4-bit layouts use less memory at some cost in accuracy; `f16` uses more memory. Keep the default unless memory is tight. When set, it also applies to a `Q4_K` or `Q5_K` `token_embd.weight`, which otherwise keeps the 8-bit layout of the other weights; with a tied output layer (Gemma 4 E2B) `q4_0_128` stores it in about half the memory. |
+| `GGML_OPENVINO_NPU_HOST_GATHER` | NPU | Boolean | `0` | Look up the rows of large embedding tables (64 MiB or more) on the host, from the GGUF data, and pass them to the NPU graph as an input, instead of binding the whole table to the NPU. A table used only for such lookups, such as the per-layer embedding table of Gemma 3n and Gemma 4 E2B/E4B, is then not converted for the NPU at all. Lowers memory and decode time for such models. |
 | `GGML_OPENVINO_GDN_DECOMPOSE` | all | Boolean | auto | Translate `GATED_DELTA_NET` (Qwen3.5) into MatMul operations instead of the OpenVINO `GatedDeltaNet` op. Unset: on for the Lunar Lake NPU, off elsewhere. `0` turns it off, `1` turns it on for any device. Try `1` for Qwen3.5 on the Panther Lake NPU. |
 | `GGML_OPENVINO_MANUAL_GQA_ATTN` | CPU, GPU | Boolean | on for GPU | Build grouped-query attention from separate MatMul operations. Unset: on for GPU, off for CPU and NPU. `1` turns it on, `0` turns it off. Try `1` on the CPU for faster decode. |
 | `GGML_OPENVINO_REQUANT_KQUANT` | CPU, GPU | String | `not set` | Requantize `Q6_K` and `Q5_K` weights to a 4-bit layout instead of `Q8_0_C`: faster decode for lower accuracy. One of `q4_asym64`, `q4_asym64_all` (also `Q4_K`), `q4_sym128`, `q4_sym128_all` (also `Q4_K`) or `native` (no requantization). On GPU with `Q4_K_M` files use `q4_asym64_all`, because `q4_asym64` does not compile there. |
@@ -903,10 +905,10 @@ export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=/tmp/ov_cache
 # CPU or GPU, later runs (optional): require the cached model and skip the weight upload and the compilation.
 export GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY=1
 
-# NPU: add the weightless bank.
+# NPU: valid cached models are imported. Otherwise the run compiles them, writes them without weights plus one
+# shared weights file, and logs a warning.
 export GGML_OPENVINO_DEVICE=NPU
 export GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR=/tmp/ov_cache
-export GGML_OPENVINO_NPU_WEIGHTLESS_BANK=1
 ./build/ReleaseOV/bin/llama-cli -m ~/models/Llama-3.2-1B-Instruct-Q4_K_M.gguf -c 512
 
 # NPU, later runs (optional): use less memory. The run fails if a cached model is missing.
@@ -919,12 +921,11 @@ export GGML_OPENVINO_SELF_CONTAINED_MMAP=1
 | Variable | Device | Type | Default | Description |
 |---|---|---|---|---|
 | `GGML_OPENVINO_COMPILED_MODEL_CACHE_ONLY` | CPU, GPU | Boolean | `0` | Require an existing cached model and skip the weight upload and the compilation. Needs mmap model loading (the default on Linux and Windows) and a model that runs fully on OpenVINO. |
-| `GGML_OPENVINO_NPU_WEIGHTLESS_BANK` | NPU | Boolean | `0` | Requires `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR`. Write the prefill and decode models without weights, plus one shared weights file. Later runs read the weights from that file and keep one copy in memory. |
-| `GGML_OPENVINO_SELF_CONTAINED_MMAP` | NPU | Boolean | `0` | Later runs only. Requires `GGML_OPENVINO_NPU_WEIGHTLESS_BANK=1` and an existing cache. Use the memory-mapped GGUF file as the model buffer, which lowers the host memory peak. Fails if a cached model is missing; run once without it to build the cache. |
+| `GGML_OPENVINO_SELF_CONTAINED_MMAP` | NPU | Boolean | `0` | Later runs only. Requires `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` with an existing cache. Use the memory-mapped GGUF file as the model buffer, which lowers the host memory peak. Fails if a cached model is missing, for example after a change of the model, `-c` or another setting; run once without it to build the cache. |
 | `GGML_OPENVINO_CACHE_DIR` | all | String | `not set` | Directory for the cache of the OpenVINO plugin itself. `GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR` is the recommended cache. |
 
 - One directory can hold the cached models of different models and settings.
-- NPU: each prefill length enters the cache in a run without `GGML_OPENVINO_SELF_CONTAINED_MMAP`.
+- NPU, with the default settings: the first prompt writes the prefill model of every KV window up to `-c`, so later runs with the same `-c` find a cached model for any prompt length.
 - See [Compiled model cache](../../ggml/src/ggml-openvino/README.md#compiled-model-cache) for the workflow and the restrictions.
 
 </details>

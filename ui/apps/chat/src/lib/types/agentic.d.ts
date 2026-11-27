@@ -101,6 +101,8 @@ export interface AgenticSession {
 	flowRootMessageId: string | null;
 	/** When the running flow started (ms since epoch); null when idle. */
 	startedAt: number | null;
+	/** When each call of the running flow started (ms since epoch), by tool call id. */
+	toolCallStartedAt: Record<string, number>;
 }
 
 /**
@@ -120,8 +122,6 @@ export interface AgenticFlowCallbacks {
 	onReasoningChunk?: (chunk: string) => void;
 	/** Tool calls being streamed (partial, accumulating) for the current turn */
 	onToolCallsStreaming?: (toolCalls: ApiChatCompletionToolCall[]) => void;
-	/** Attachments extracted from tool results */
-	onAttachments?: (messageId: string, extras: DatabaseMessageExtra[]) => void;
 	/** Model name detected from response */
 	onModel?: (model: string) => void;
 	onCompletionId?: (id: string) => void;

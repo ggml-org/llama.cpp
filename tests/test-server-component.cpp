@@ -520,7 +520,8 @@ static void test_server_pipe(testing & t) {
         server_pipe<int> p;
         std::thread producer([&]() {
             for (int i = 0; i < n; i++) {
-                p.write(int(i));
+                int x = i;
+                p.write(std::move(x));
             }
             p.close_write();
         });

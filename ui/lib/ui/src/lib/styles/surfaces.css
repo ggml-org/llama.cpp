@@ -110,6 +110,92 @@
 	border-radius: var(--inset-group-radius);
 }
 
+/* Inset list: a phone sheet's native-style list. `inset-list` is an inset group of rows;
+   `inset-list-row` is a row, tappable as a whole, its icon outside the divider;
+   `inset-list-row-body` holds the label and value, and its top border is the divider, which
+   starts at the label and is dropped on the first row. `inset-list-title` sits above a group
+   and `inset-list-caption` below it. */
+@utility inset-list {
+	@apply inset-group-surface;
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+@utility inset-list-row {
+	@apply text-body;
+	display: flex;
+	width: 100%;
+	min-height: 3rem;
+	align-items: center;
+	gap: 0.75rem;
+	padding-inline: 1rem;
+	text-align: left;
+	transition: background-color 150ms;
+
+	&:active {
+		background-color: var(--surface-pressed);
+	}
+
+	&:disabled {
+		pointer-events: none;
+		opacity: 0.5;
+	}
+}
+
+@utility inset-list-row-body {
+	display: flex;
+	min-width: 0;
+	min-height: 3rem;
+	flex: 1 1 0%;
+	align-items: center;
+	align-self: stretch;
+	gap: 0.5rem;
+	border-top: 1px solid color-mix(in oklab, var(--line-default) 60%, transparent);
+
+	/* the first row of a group has no divider, whether the row is an inset-list-row or built
+	   by hand around one (a row split into two targets) */
+	.inset-list-row:first-child &,
+	.inset-list > :first-child & {
+		border-top-width: 0;
+	}
+}
+
+@utility inset-list-title {
+	@apply text-body;
+	padding-inline: 1rem;
+	font-weight: 500;
+	color: var(--fg-muted);
+}
+
+@utility inset-list-caption {
+	@apply text-caption;
+	padding-inline: 1rem;
+	color: var(--fg-muted);
+}
+
+/* A sheet's round corner key, close or back: 1rem from the top edge and from the side, outside
+   the header's flow, so a title row centered at 2.125rem lines up with its middle */
+@utility sheet-key {
+	@apply matte-key;
+	position: absolute;
+	top: 1rem;
+	left: 1rem;
+	z-index: 10;
+	display: flex;
+	width: 2.25rem;
+	height: 2.25rem;
+	align-items: center;
+	justify-content: center;
+	border-radius: calc(infinity * 1px);
+	background-color: var(--surface-page);
+	box-shadow: var(--elevation-key);
+
+	&:where(.dark, .dark *) {
+		background-color: color-mix(in oklab, var(--fg-muted) 15%, transparent);
+	}
+}
+
 /* the row a sidebar list is on: the inset group's edge and shade around a tint. It keeps the
    row's own radius, and hover or press fills (bg-*) still paint over it */
 @utility selected-row-surface {

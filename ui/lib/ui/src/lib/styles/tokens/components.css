@@ -17,6 +17,10 @@
 	/* a step rounder than a card, so the rows inside it (its radius less its padding, see the
 	   nested surfaces in Llama Chat's app.css) keep soft corners */
 	--inset-group-radius: 1rem;
+	/* a sheet's groups are rounder: they sit in a panel with the screen's own corner radius, and
+	   their rows are a finger tall. A drawer sets --inset-group-radius to this, and a finger-tall
+	   field or button shares it */
+	--sheet-group-radius: 1.25rem;
 
 	/* selected row: the page a sidebar row opens is on. A tint of the text colour, under hover's,
 	   with the inset group's edge and shade so it reads as picked out rather than hovered */

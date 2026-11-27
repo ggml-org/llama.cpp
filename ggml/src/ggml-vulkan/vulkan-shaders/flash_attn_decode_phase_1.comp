@@ -16,6 +16,8 @@ layout (binding = 1) readonly buffer KV4 {f16vec4 data_kv4[];};
 layout (binding = 2) readonly buffer M {float16_t data_m[];};
 layout (binding = 3) buffer P {float16_t data_p[];};
 layout (binding = 4) buffer MAX {float data_max[];};
+layout (binding = 5) readonly buffer BT {float data_bias_table[];};
+layout (binding = 6) readonly buffer BI {int data_bias_idx[];};
 
 layout (push_constant) uniform parameter
 {
@@ -54,6 +56,7 @@ layout (constant_id = 6) const uint pmat_count = 4;
 layout (constant_id = 7) const uint TM = 8;
 layout (constant_id = 8) const uint TN = 16;
 layout (constant_id = 9) const uint shmem_size = 49152;
+layout (constant_id = 10) const uint BiasBins = 0;
 
 const uint TK = 16;
 const uint sg_count = WorkGroupSize / SubGroupSize;
@@ -293,6 +296,17 @@ void main() {
 
                 [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {
                     Of[r][idx] = Of[r][idx] + Maskf[idx];
+                }
+
+                if (BiasBins != 0 && sg * warp_o_row + r < gqa_ratio) {
+                    const uint bias_q = batch_idx * p.neq1 + out_r + out_idx * Br;
+                    const uint bias_t = (bias_q * p.neq2 + head_q_idx) * BiasBins;
+                    [[unroll]] for (uint idx = 0; idx < p_reduce / SubGroupSize; ++idx) {
+                        const uint mask_offset = idx * SubGroupSize + mask_base;
+                        if (mask_offset < p.nek1) {
+                            Of[r][idx] += data_bias_table[bias_t + data_bias_idx[bias_q * p.nek1 + mask_offset]];
+                        }
+                    }
                 }
 
                 float Mtempf = NEG_FLT_MAX_OVER_2;

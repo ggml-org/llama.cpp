@@ -615,7 +615,7 @@ static void ggml_compute_forward_add_q_f32(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    GGML_ASSERT(ggml_is_quantized(src0->type) || src0->type == GGML_TYPE_F8_E4M3);
+    GGML_ASSERT(ggml_is_quantized(src0->type) || ggml_needs_scale(src0->type));
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT(ne00 % ggml_blck_size(type) == 0);
 
@@ -965,7 +965,7 @@ static void ggml_compute_forward_add1_q_f32(
     GGML_ASSERT(nb1 <= nb2);
     GGML_ASSERT(nb2 <= nb3);
 
-    GGML_ASSERT(ggml_is_quantized(src0->type) || src0->type == GGML_TYPE_F8_E4M3);
+    GGML_ASSERT(ggml_is_quantized(src0->type) || ggml_needs_scale(src0->type));
     GGML_ASSERT(dst->type == src0->type);
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
 
@@ -9722,6 +9722,7 @@ static void ggml_compute_forward_flash_attn_ext_f16(
 void ggml_compute_forward_flash_attn_ext(
         const ggml_compute_params * params,
         ggml_tensor * dst) {
+    GGML_ASSERT(ggml_validate_flash_attn_ext_indexed_bias(dst));
     switch (ggml_prec_get_acc(dst)) {
         case GGML_PREC_UNDEFINED:
         case GGML_PREC_F32:

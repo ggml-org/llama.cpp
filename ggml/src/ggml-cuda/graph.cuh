@@ -1,6 +1,6 @@
 #pragma once
 
-// CUDA graph capture and concurrent stream state, only needed by ggml-cuda.cu
+// CUDA graph capture and concurrent stream state, only needed by ggml-cuda.cu and fusion.cu
 
 #include "common.cuh"
 

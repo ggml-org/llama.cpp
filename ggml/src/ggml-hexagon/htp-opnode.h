@@ -91,7 +91,7 @@ struct htp_opnode {
         // Build inputs (preserving optional nullptrs)
         if (htp_is_hadamard(this->node)) {
             this->inputs.push_back(this->node->src[1]);
-        } else {
+        } else if (this->node->op != GGML_OP_FILL) {
             int n_inputs = n_active_src(this->node);
             for (int i = 0; i < n_inputs; i++) {
                 this->inputs.push_back(this->node->src[i]);

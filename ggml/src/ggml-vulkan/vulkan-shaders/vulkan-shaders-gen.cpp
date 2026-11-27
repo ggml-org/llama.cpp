@@ -736,6 +736,8 @@ void process_shaders() {
 #if defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
                 string_to_spv("flash_attn_f32_f16", "flash_attn_cm2.comp",
                     merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}), fp16, false, true, f16acc);
+                string_to_spv("flash_attn_f32_f16", "flash_attn_cm2.comp",
+                    merge_maps(fa_base_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"FA_BIAS_STAGE", "1"}}), fp16, false, true, f16acc, "_bias");
 #endif
 
 #if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
@@ -787,6 +789,9 @@ void process_shaders() {
     string_to_spv("flash_attn_f32_f16_bf16", "flash_attn_cm2.comp",
         merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}}),
         true, false, true, false);
+    string_to_spv("flash_attn_f32_f16_bf16", "flash_attn_cm2.comp",
+        merge_maps(fa_bf16_dict, {{"Q_TYPE", "float"}, {"D_TYPE", "float"}, {"D_TYPEV4", "vec4"}, {"FA_BIAS_STAGE", "1"}}),
+        true, false, true, false, "_bias");
 #endif
 
     std::map<std::string, std::string> base_dict = {{"FLOAT_TYPE", "float"}, {"FLOAT_TYPEV2", "vec2"}};

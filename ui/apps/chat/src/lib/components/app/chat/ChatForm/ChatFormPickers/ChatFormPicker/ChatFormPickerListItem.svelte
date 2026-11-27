@@ -1,12 +1,14 @@
 <script lang="ts">
 	import { UI_DATA_ATTRS } from '#lib/constants/index.ts';
+	import { hasPointerMoved } from '#lib/utils/index.ts';
 	import type { Snippet } from 'svelte';
 
 	interface Props {
 		isSelected?: boolean;
 		disabled?: boolean;
 		onclick: () => void;
-		onmouseenter?: () => void;
+		/** Called when the user moves the pointer over the row, not when the row renders under it. */
+		onhover?: () => void;
 		dataIndex?: number;
 		children: Snippet;
 		class?: string;
@@ -19,14 +21,16 @@
 		disabled = false,
 		isSelected = false,
 		onclick,
-		onmouseenter
+		onhover
 	}: Props = $props();
 </script>
 
 <button
 	{disabled}
 	{onclick}
-	{onmouseenter}
+	onmousemove={(event) => {
+		if (hasPointerMoved(event)) onhover?.();
+	}}
 	type="button"
 	{...{ [UI_DATA_ATTRS.PICKER_INDEX]: dataIndex }}
 	class="flex w-full cursor-pointer items-start gap-3 rounded-lg px-3 py-2 text-left hover:bg-accent/50 {isSelected

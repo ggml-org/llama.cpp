@@ -16,6 +16,9 @@
 #include <openvino/pass/make_stateful.hpp>
 #include <openvino/pass/manager.hpp>
 
+#include <set>
+#include <string>
+
 namespace ov {
 namespace frontend {
 namespace ggml {
@@ -31,6 +34,8 @@ struct GraphTraits {
     Device device = Device::CPU;
     bool is_static = false;    // static shapes (NPU, or GGML_OPENVINO_FORCE_STATIC)
     bool is_stateful = false;  // KV cache kept inside the model (GGML_OPENVINO_STATEFUL_EXECUTION)
+    bool kv_only_outputs = false;  // static KV-only prefill: keep only the cache outputs (GGML_OPENVINO_KV_ONLY_PREFILL)
+    std::set<std::string> cache_output_names;
 };
 
 GraphTraits analyze_graph(const GgmlDecoder & decoder);

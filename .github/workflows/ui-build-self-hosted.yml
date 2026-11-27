@@ -33,6 +33,9 @@ jobs:
       - name: Build application
         run: npm run build
         working-directory: ui/apps/chat
+        env:
+          # as in ui-build.yml: the UI under test has the Hugging Face lib
+          VITE_PUBLIC_HUGGING_FACE: "true"
 
       - name: Upload built UI
         uses: actions/upload-artifact@v6

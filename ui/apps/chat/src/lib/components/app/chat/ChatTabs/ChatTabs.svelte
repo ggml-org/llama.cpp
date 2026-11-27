@@ -2,7 +2,11 @@
 	import ChatTabsItem from './ChatTabsItem.svelte';
 	import ChatTabsNewChatButton from './ChatTabsNewChatButton.svelte';
 	import { ArrowRightToLine, ListX, Square, SquarePen, X } from '@lucide/svelte';
-	import { ContextMenuActions, ScrollCarousel } from '#lib/components/app/index.ts';
+	import {
+		ContextMenuActions,
+		ConversationActions,
+		ScrollCarousel
+	} from '#lib/components/app/index.ts';
 	import {
 		CHAT_TABS_MAX_WIDTH,
 		NEW_CHAT_LABEL,
@@ -25,16 +29,20 @@
 	let activeId = $derived(view.activeId);
 
 	let tabs = $derived(
-		view.ids.map((id) =>
-			id === NEW_CHAT_TAB_ID
-				? { href: view.hrefFor(id), icon: SquarePen, id, name: NEW_CHAT_LABEL }
-				: {
-						href: view.hrefFor(id),
-						id,
-						name:
-							conversationsStore.conversations.find((c) => c.id === id)?.name ?? UNNAMED_CHAT_LABEL
-					}
-		)
+		view.ids.map((id) => {
+			if (id === NEW_CHAT_TAB_ID) {
+				return { href: view.hrefFor(id), icon: SquarePen, id, name: NEW_CHAT_LABEL };
+			}
+
+			const conversation = conversationsStore.conversations.find((c) => c.id === id);
+
+			return {
+				conversation,
+				href: view.hrefFor(id),
+				id,
+				name: conversation?.name ?? UNNAMED_CHAT_LABEL
+			};
+		})
 	);
 
 	// hide the New chat button while a new-chat tab is already open
@@ -126,6 +134,20 @@
 	});
 </script>
 
+{#snippet tabItem(tab: (typeof tabs)[number], actions: MenuAction[])}
+	<ContextMenuActions {actions}>
+		<ChatTabsItem
+			isActive={tab.id === activeId}
+			isLoading={loadingIds.has(tab.id)}
+			onActivate={(id) => tabsStore.activate(id)}
+			onAuxClick={handleAuxClick}
+			onClose={handleClose}
+			onStop={handleStop}
+			{tab}
+		/>
+	</ContextMenuActions>
+{/snippet}
+
 <nav
 	aria-label="Open conversations"
 	class={[
@@ -143,17 +165,21 @@
 			innerClass="items-center gap-1.25"
 		>
 			{#each tabs as tab (tab.id)}
-				<ContextMenuActions actions={tabActions(tab.id)}>
-					<ChatTabsItem
+				<!-- a chat's tab also offers what its sidebar row does, after the tab's own actions -->
+				{#if tab.conversation}
+					<ConversationActions
+						conversation={tab.conversation}
 						isActive={tab.id === activeId}
-						isLoading={loadingIds.has(tab.id)}
-						onActivate={(id) => tabsStore.activate(id)}
-						onAuxClick={handleAuxClick}
-						onClose={handleClose}
-						onStop={handleStop}
-						{tab}
-					/>
-				</ContextMenuActions>
+						leadingActions={tabActions(tab.id)}
+						showOpenInNewTab={false}
+					>
+						{#snippet children(actions)}
+							{@render tabItem(tab, actions)}
+						{/snippet}
+					</ConversationActions>
+				{:else}
+					{@render tabItem(tab, tabActions(tab.id))}
+				{/if}
 			{/each}
 
 			{#if showNewChatButton}

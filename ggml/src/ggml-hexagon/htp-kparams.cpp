@@ -108,39 +108,6 @@ htp_op_code htp_op_remap(const struct ggml_tensor * t) {
     return HTP_OP_INVALID;
 }
 
-bool htp_rows_stride(const int64_t * ne, const size_t * nb, size_t * stride) {
-    size_t s = 0, next = 0;
-    for (int i = 1; i < GGML_MAX_DIMS; i++) {
-        if (ne[i] == 1) continue;
-        if (s == 0) { s = nb[i]; next = s * ne[i]; continue; }
-        if (nb[i] != next) return false;
-        next *= ne[i];
-    }
-    *stride = s ? s : nb[1];
-    return true;
-}
-
-bool htp_matmul_can_collapse(const struct ggml_tensor * src0, const struct ggml_tensor * src1, const struct ggml_tensor * dst) {
-    size_t s1, sd;
-    return (dst->op == GGML_OP_MUL_MAT || dst->op == GGML_OP_ADD) &&
-           src0->ne[2] == 1 && src0->ne[3] == 1 && src1->ne[2] * src1->ne[3] > 1 &&
-           src1->nb[0] == ggml_type_size(src1->type) && htp_rows_stride(src1->ne, src1->nb, &s1) &&
-           dst->nb[0] == ggml_type_size(dst->type) && htp_rows_stride(dst->ne, dst->nb, &sd);
-}
-
-ggml_tensor htp_tensor_collapse_rows(const struct ggml_tensor * t) {
-    size_t stride = 0;
-    htp_rows_stride(t->ne, t->nb, &stride);
-    ggml_tensor c = *t;
-    c.ne[1] = t->ne[1] * t->ne[2] * t->ne[3];
-    c.ne[2] = 1;
-    c.ne[3] = 1;
-    c.nb[1] = stride;
-    c.nb[2] = c.nb[1] * c.ne[1];
-    c.nb[3] = c.nb[2];
-    return c;
-}
-
 bool htp_kparams_solve_allreduce(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * dst,
@@ -164,7 +131,7 @@ bool htp_kparams_solve_allreduce(
     const bool is_contiguous = ggml_is_contiguous(dst);
 
     const uint32_t ne0 = (uint32_t) dst->ne[0];
-    const uint32_t ne1 = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
+    const uint32_t ne1 = (uint32_t) ggml_nrows(dst);
     kparams->ne0 = (int32_t) ne0;
     kparams->ne1 = (int32_t) ne1;
 
@@ -306,7 +273,7 @@ static bool htp_flash_attn_is_hmx_eligible(
 
     GGML_UNUSED(sinks);
 
-    if (opt_fa_select > 2) {
+    if (opt_fa_select >= 4) {
         return true;
     }
 
@@ -322,7 +289,16 @@ static bool htp_flash_attn_is_hmx_eligible(
     const uint32_t S             = k->ne[1];
     const uint32_t total_threads = n_hvx * htp_session_mdev_count(sess);
 
-    if (DK > 256 || (DK == 256 && (DV > 256 || n_kv_heads < total_threads))) {
+    if (DK > 256 || DV > 256) {
+        return true;
+    }
+
+    // W8A8 HMX pads M=1 decode rows to 64, so HVX is much faster for Q8_0 KV decode.
+    if (k->type == GGML_TYPE_Q8_0 || v->type == GGML_TYPE_Q8_0) {
+        return false;
+    }
+
+    if (DK == 256 && n_kv_heads < total_threads) {
         return true;
     }
 
@@ -431,14 +407,33 @@ static bool htp_kparams_solve_flash_attn(
     kparams->n_head_log2 = 1u << (uint32_t) std::floor(std::log2(n_head));
     kparams->m0 = std::pow(2.0f, -(max_bias) / kparams->n_head_log2);
     kparams->m1 = std::pow(2.0f, -(max_bias / 2.0f) / kparams->n_head_log2);
+    kparams->broadcast_rk2 = init_fastdiv_values(q->ne[2] / k->ne[2]);
+    kparams->broadcast_rk3 = init_fastdiv_values(q->ne[3] / k->ne[3]);
+    kparams->broadcast_rv2 = init_fastdiv_values(q->ne[2] / v->ne[2]);
+    kparams->broadcast_rv3 = init_fastdiv_values(q->ne[3] / v->ne[3]);
 
     if (htp_flash_attn_is_hmx_eligible(sess, q, k, v, sinks)) {
         const uint32_t DK_pad = hex_round_up(DK, 64);
         const uint32_t DV_pad = hex_round_up(DV, 64);
-        size_t Br = 0, Bc = 0;
-        int ret = hmx_fa_find_chunk_size(&Br, &Bc, G, DK_pad, DV_pad, neq1, nek1, vtcm_size, n_hvx, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head, fa_team_size);
-        if (ret == 0) {
-            kparams->kernel_type = HTP_FA_KERNEL_HMX;
+        const bool use_w8a8 = (opt_fa_select >= 3 && k->type == GGML_TYPE_Q8_0 && v->type == GGML_TYPE_Q8_0 &&
+                               DK % 32 == 0 && DV % 32 == 0 && DK <= 768);
+        const bool has_mask       = (mask != nullptr);
+        const bool mask_broadcast = (has_mask && mask->ne[2] == 1);
+
+        struct hmx_fa_layout_params lp = {};
+        lp.kernel_type    = use_w8a8 ? HTP_FA_KERNEL_HMX_W8A8 : HTP_FA_KERNEL_HMX_F16;
+        lp.q_type         = q->type;
+        lp.gqa_factor     = G;
+        lp.DK             = DK_pad;
+        lp.DV             = DV_pad;
+        lp.n_hvx          = n_hvx;
+        lp.n_heads        = n_head;
+        lp.has_mask       = has_mask;
+        lp.mask_broadcast = mask_broadcast;
+        lp.has_sinks      = (sinks != nullptr);
+
+        if (hmx_fa_find_chunk_size(&lp, neq1, nek1, vtcm_size, fa_team_size) == 0) {
+            kparams->kernel_type = lp.kernel_type;
             if (logit_softcap == 0.0f) {
                 kparams->scale         = scale * (float) M_LOG2E;
                 kparams->logit_softcap = 0.0f;
@@ -446,15 +441,18 @@ static bool htp_kparams_solve_flash_attn(
                 kparams->scale         = scale;
                 kparams->logit_softcap = logit_softcap * (float) M_LOG2E;
             }
-            kparams->Br                  = Br;
-            kparams->Bc                  = Bc;
-            kparams->n_kv_blocks         = (nek1 + Bc - 1) / Bc;
-            kparams->n_hvx               = (kparams->n_kv_blocks >= 3 && n_hvx >= 2) ? n_hvx : 1;
-            kparams->u.hmx.g_br          = hex_align_up(G * Br, 32);
-            kparams->u.hmx.pipeline      = (kparams->n_kv_blocks >= 3 && n_hvx >= 2) ? 1 : 0;
-            kparams->vtcm_size           = hmx_fa_compute_vtcm_usage(G, DK_pad, DV_pad, Br, Bc, kparams->n_hvx, kparams->u.hmx.pipeline != 0, (q->type == GGML_TYPE_F32), sinks != nullptr, n_head);
-            kparams->u.hmx.mask_broadcast = (mask != nullptr && mask->ne[2] == 1) ? 1 : 0;
-            kparams->u.hmx.div_G         = init_fastdiv_values(G);
+            kparams->Br                   = lp.Br;
+            kparams->Bc                   = lp.Bc;
+            kparams->n_kv_blocks          = (nek1 + lp.Bc - 1) / lp.Bc;
+            kparams->n_hvx                = (kparams->n_kv_blocks >= 3 && n_hvx >= 2) ? n_hvx : 1;
+            kparams->u.hmx.g_br           = hex_align_up(G * lp.Br, use_w8a8 ? HMX_W8A8_ACT_TILE_N_ROWS : HMX_FP16_TILE_N_ROWS);
+            kparams->u.hmx.mask_broadcast = mask_broadcast ? 1 : 0;
+            // vtcm_mask_buf is single-buffered for non-broadcast masks, so disable block pipelining.
+            kparams->u.hmx.pipeline       = (kparams->n_kv_blocks >= 3 && n_hvx >= 2 && (!has_mask || mask_broadcast)) ? 1 : 0;
+            lp.n_hvx                      = kparams->n_hvx;
+            lp.pipeline                   = (kparams->u.hmx.pipeline != 0);
+            kparams->vtcm_size            = hmx_fa_compute_vtcm_usage(&lp);
+            kparams->u.hmx.div_G          = init_fastdiv_values(G);
             if (mask) {
                 kparams->src3_div2 = init_fastdiv_values(mask->ne[2]);
                 kparams->src3_div3 = init_fastdiv_values(mask->ne[3]);
@@ -469,11 +467,20 @@ static bool htp_kparams_solve_flash_attn(
     kparams->n_kv_blocks = (k->ne[1] + 64 - 1) / 64;
     kparams->n_hvx       = n_hvx;
 
-    const size_t size_q_row_padded = hex_round_up(q->ne[0] * ((q->type == GGML_TYPE_F32) ? 4 : 2), 128);
+    const size_t size_q_row_padded = hex_round_up(htp_tensor_get_row_size(q->type, q->ne[0]), 128);
     const size_t size_k_row_padded = hex_round_up(k->ne[0] * 2, 128);
     const size_t size_v_row_padded = hex_round_up(v->ne[0] * 2, 128);
 
-    kparams->vtcm_size = hvx_fa_compute_vtcm_usage(DK, DV, (q->type == GGML_TYPE_F32), mask != nullptr, sinks != nullptr, n_head, n_hvx);
+    struct hvx_fa_layout_params hvx_lp = {};
+    hvx_lp.q_type    = q->type;
+    hvx_lp.DK        = DK;
+    hvx_lp.DV        = DV;
+    hvx_lp.n_heads   = n_head;
+    hvx_lp.n_hvx     = n_hvx;
+    hvx_lp.has_mask  = (mask != nullptr);
+    hvx_lp.has_sinks = (sinks != nullptr);
+
+    kparams->vtcm_size = hvx_fa_compute_vtcm_usage(&hvx_lp);
     if ((size_t) kparams->vtcm_size > vtcm_size) {
         HEX_VERBOSE("ggml-hex: skip flash_attn_ext because VTCM needed (%d) > budget (%zu)\n",
                     kparams->vtcm_size, vtcm_size);
@@ -500,6 +507,7 @@ static bool htp_kparams_solve_flash_attn(
 static bool htp_kparams_solve_gated_delta_net(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
+    const struct ggml_tensor * dst_cache,
     struct htp_gdn_kernel_params * kparams
 ) {
     if (opt_gdn_select < 1) {
@@ -514,21 +522,33 @@ static bool htp_kparams_solve_gated_delta_net(
     const struct ggml_tensor * g     = op->src[3];
     const struct ggml_tensor * beta  = op->src[4];
     const struct ggml_tensor * state = op->src[5];
-    const struct ggml_tensor * pend_k  = op->src[6];
+    const bool has_ids = op->src[6] != nullptr && op->src[7] == nullptr &&
+                         (op->src[6]->type == GGML_TYPE_I32 || op->src[6]->type == GGML_TYPE_I64);
+    const struct ggml_tensor * ids     = has_ids ? op->src[6] : nullptr;
+    const struct ggml_tensor * pend_k  = has_ids ? nullptr    : op->src[6];
     const struct ggml_tensor * pend_v  = op->src[7];
     const struct ggml_tensor * pend_gb = op->src[8];
     const struct ggml_tensor * n_rep   = op->src[9];
-    const struct ggml_tensor * dst   = op;
+    const struct ggml_tensor * dst     = op;
     const bool replay = pend_k != nullptr;
 
-    if (q->type != GGML_TYPE_F32 || k->type != GGML_TYPE_F32 || v->type != GGML_TYPE_F32 ||
-        g->type != GGML_TYPE_F32 || beta->type != GGML_TYPE_F32 || state->type != GGML_TYPE_F32 ||
-        dst->type != GGML_TYPE_F32) {
+    auto is_act_type = [](ggml_type t) {
+        return t == GGML_TYPE_F32 || t == GGML_TYPE_F16;
+    };
+
+    if (!is_act_type(q->type) || !is_act_type(k->type) || !is_act_type(v->type) ||
+        g->type != GGML_TYPE_F32 || beta->type != GGML_TYPE_F32 || state->type != GGML_TYPE_F32) {
+        return false;
+    }
+    if (dst_cache && (dst_cache->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst_cache))) {
+        return false;
+    }
+    if (dst->type != GGML_TYPE_F32 && !(dst_cache != nullptr && dst->type == GGML_TYPE_F16)) {
         return false;
     }
 
     if (!ggml_is_contiguous_rows(q) || !ggml_is_contiguous_rows(k) || !ggml_is_contiguous_rows(v) ||
-        !ggml_is_contiguous(g) || !ggml_is_contiguous(beta) || !ggml_is_contiguous(state) ||
+        !ggml_is_contiguous(g) || !ggml_is_contiguous(beta) || (!ids && !ggml_is_contiguous(state)) ||
         !ggml_is_contiguous(dst)) {
         return false;
     }
@@ -550,11 +570,19 @@ static bool htp_kparams_solve_gated_delta_net(
     if ((g->ne[0] != 1 && g->ne[0] != S_v) || beta->ne[0] != 1) {
         return false;
     }
-    if (state->ne[0] != S_v || state->ne[1] != S_v || state->ne[2] != H || state->ne[3] != n_seqs) {
+    if (ids) {
+        if ((ids->type != GGML_TYPE_I32 && ids->type != GGML_TYPE_I64) ||
+            !ggml_is_contiguous_rows(ids) ||
+            ids->ne[0] < n_seqs || !ggml_is_vector(ids) ||
+            state->ne[0] != S_v * S_v * H || !ggml_is_contiguous_rows(state) ||
+            (state->nb[1] % sizeof(float)) != 0 || !ggml_is_matrix(state)) {
+            return false;
+        }
+    } else if (state->ne[0] != S_v || state->ne[1] != S_v || state->ne[2] != H || state->ne[3] != n_seqs) {
         return false;
     }
     if (dst->ne[0] != S_v * H || dst->ne[1] != n_tokens * n_seqs + S_v * n_seqs * K ||
-        dst->ne[2] != 1 || dst->ne[3] != 1) {
+        !ggml_is_matrix(dst)) {
         return false;
     }
     if ((pend_v != nullptr) != replay || (pend_gb != nullptr) != replay || (n_rep != nullptr) != replay) {
@@ -591,9 +619,8 @@ static bool htp_kparams_solve_gated_delta_net(
     struct htp_gdn_vtcm_layout hvx_layout;
     uint32_t n_heads_batch = 1;
 
-    if (can_use_hmx && htp_gdn_hmx_solve_layout(&hmx_layout, (uint32_t) S_v, HTP_GDN_CHUNK_SIZE, total_rows, vtcm_size, n_hvx, true, &n_heads_batch)) {
+    if (can_use_hmx && htp_gdn_hmx_solve_layout(&hmx_layout, (uint32_t) S_v, HTP_GDN_CHUNK_SIZE, total_rows, vtcm_size, n_hvx, &n_heads_batch)) {
         kparams->kernel_type   = HTP_GDN_KERNEL_HMX_CHUNKED;
-        kparams->pipeline      = hmx_layout.pipeline ? 1 : 0;
         kparams->chunk_size    = HTP_GDN_CHUNK_SIZE;
         kparams->n_chunks      = ((uint32_t) n_tokens + HTP_GDN_CHUNK_SIZE - 1) / HTP_GDN_CHUNK_SIZE;
         kparams->n_heads_batch = (uint16_t) n_heads_batch;
@@ -604,7 +631,6 @@ static bool htp_kparams_solve_gated_delta_net(
             return false;
         }
         kparams->kernel_type   = HTP_GDN_KERNEL_HVX_RECURRENT;
-        kparams->pipeline      = 0;
         kparams->n_heads_batch = 1;
         kparams->vtcm_size     = (uint32_t) hvx_layout.total_bytes;
     }
@@ -617,7 +643,7 @@ static bool htp_kparams_solve_gated_delta_net(
     kparams->K                   = (uint32_t) K;
     kparams->total_rows          = total_rows;
     kparams->kda                 = (g->ne[0] == S_v) ? 1 : 0;
-    kparams->state_seq_stride    = (uint32_t) (state->nb[3] / sizeof(float));
+    kparams->state_seq_stride    = (uint32_t) ((ids ? state->nb[1] : state->nb[3]) / sizeof(float));
     kparams->state_size_per_snap = (uint32_t) (S_v * S_v * H * n_seqs);
     kparams->scale               = 1.0f / sqrtf((float) S_v);
 
@@ -638,7 +664,7 @@ static bool htp_matmul_is_hmx_eligible(
 ) {
     GGML_UNUSED(dst);
 
-    if (src1->type != GGML_TYPE_F32 && (src1->type != GGML_TYPE_F16 || is_matmul_id)) {
+    if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) {
         return false;
     }
 
@@ -668,7 +694,7 @@ static bool htp_matmul_is_hmx_eligible(
         return false;
     }
 
-    if (src0->nb[0] > src0->nb[1] || src1->nb[0] > src1->nb[1]) {
+    if (ggml_is_transposed(src0) || ggml_is_transposed(src1)) {
         return false;
     }
 
@@ -684,6 +710,7 @@ static bool htp_kparams_solve_hmx_mm(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * act,
+    const struct ggml_tensor * bias,
     const struct ggml_tensor * dst,
     int wtype,
     int ne00_padded,
@@ -694,28 +721,25 @@ static bool htp_kparams_solve_hmx_mm(
     int ne11_padded,
     bool is_matmul_id,
     bool is_batched,
-    size_t src2_size,
     size_t vtcm_budget,
-    struct htp_mm_kernel_params * kparams
+    struct htp_mm_kernel_params * kparams,
+    bool is_glu = false
 ) {
+    GGML_UNUSED(act);
+    const bool     bias_is_2d        = bias && (bias->ne[1] > 1);
+    const bool     bias_batched      = bias && (bias->ne[2] > 1 || bias->ne[3] > 1);
     const bool     is_tiled          = ggml_hexagon_tensor_will_tile(src0);
     const int      aligned_tile_size = is_tiled ? htp_tensor_get_tile_padded_size(wtype) : 0;
     const int      n_hvx             = (int) htp_session_n_hvx(sess);
     const uint32_t mdev_count        = htp_session_mdev_count(sess);
-    const int      ne10              = act->ne[0];
 
     int m_for_solver        = ne11;
     int m_for_solver_padded = ne11_padded;
     if (!is_matmul_id && mdev_count > 1 && ((uint32_t) ne11 >= mdev_count)) {
-        const uint32_t rows_per_chunk = dst ? htp_mdev_rows_per_chunk(dst) : 1;
-        const uint32_t total_chunks   = rows_per_chunk ? ((uint32_t) ne11 / rows_per_chunk) : 0;
-        if (total_chunks >= mdev_count) {
-            const uint32_t chunks_per_mdev = (total_chunks + mdev_count - 1) / mdev_count;
-            const uint32_t m_dev0          = chunks_per_mdev * rows_per_chunk;
-            const uint32_t m_last          = (uint32_t) ne11 > (mdev_count - 1) * m_dev0 ? (uint32_t) ne11 - (mdev_count - 1) * m_dev0 : 0;
-            m_for_solver                   = (int) std::max(m_dev0, m_last);
-            m_for_solver_padded            = hex_round_up(std::max(m_for_solver, 32), 32);
-        }
+        const uint32_t m_dev0 = ((uint32_t) ne11 + mdev_count - 1) / mdev_count;
+        const uint32_t m_last = (uint32_t) ne11 > (mdev_count - 1) * m_dev0 ? (uint32_t) ne11 - (mdev_count - 1) * m_dev0 : 0;
+        m_for_solver          = (int) std::max(m_dev0, m_last);
+        m_for_solver_padded   = hex_round_up(std::max(m_for_solver, 32), 32);
     }
     const bool pipeline       = is_matmul_id ? false : htp_mm_hmx_pipeline(m_for_solver);
     const bool is_batched_val = is_matmul_id ? false : is_batched;
@@ -727,30 +751,77 @@ static bool htp_kparams_solve_hmx_mm(
     bool use_grouped = false;
     int act_hvx_selected = 0;
 
-    if (is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1) {
-        if (htp_mm_hmx_solve_batched_params(wtype, ne00_padded, ne01_padded, m_for_solver, group_size, n_hvx, pipeline, src2_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+    const uint8_t  fp16_kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
+    uint8_t        kernel_type      = fp16_kernel_type;
+    const uint32_t min_k            = htp_int_hmx_min_k((int) wtype);
+    const bool     allow_w8a8       = (opt_mm_select >= 3) && (!dst || ggml_prec_get_acc(dst) != GGML_PREC_F32);
+    if (is_tiled && htp_is_int_hmx_weight_type((int) wtype) && allow_w8a8 &&
+        ne00_padded >= (int) min_k && (ne00_padded % min_k) == 0) {
+        kernel_type = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_W8A8_BATCHED : HTP_MM_KERNEL_HMX_W8A8_2D;
+    }
+
+    if (is_glu && !htp_mm_kernel_is_hmx_2d(kernel_type)) {
+        return false;
+    }
+
+    size_t bias_size = bias ? hex_round_up(ggml_nbytes(bias), 128) : 0;
+    const size_t res_out_elem_size = dst ? ggml_type_size(dst->type) : sizeof(float);
+    if (!is_glu && is_batched_val && wtype == GGML_TYPE_F16 && !is_tiled && group_size > 1 && !bias_batched) {
+        if (htp_mm_hmx_solve_batched_params(wtype, ne00_padded, ne01_padded, m_for_solver, group_size, n_hvx, pipeline, bias_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
             use_grouped = true;
         }
     }
 
     if (!use_grouped) {
+        // HMX 2D DMA-writes output slices per (mc, nc) chunk and streams 2D residual slices when pipelined.
+        const size_t res_in_elem_size  = (pipeline && !is_matmul_id && bias_is_2d) ? ggml_type_size(bias->type) : 0;
+        if (res_in_elem_size > 0) {
+            bias_size = 0;
+        }
+
         int m_id_rows = 0;
         if (dst && is_matmul_id) {
             const int n_experts = ne02 > 0 ? ne02 : 1;
             const size_t total_expert_rows = (size_t) dst->ne[1] * dst->ne[2];
             int m_per_expert = (int) ((total_expert_rows + n_experts - 1) / n_experts);
-            if (mdev_count > 1 && htp_can_row_partition(dst)) {
+            if (mdev_count > 1) {
                 m_per_expert = (m_per_expert + (int) mdev_count - 1) / (int) mdev_count;
             }
             m_id_rows = hex_round_up(std::max(m_per_expert, 32), 32);
         }
         const uint32_t cost_m = is_matmul_id ? (uint32_t) m_id_rows : (uint32_t) m_for_solver;
-        if (!htp_mm_hmx_solve_2d_params(wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, src2_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
-            return false;
+        // Non-grouped HMX_BATCHED dispatches to hmx_mm_2d_f32 (full 2D layout, not grouped-batched layout).
+        const uint8_t solve_ktype = htp_mm_kernel_is_hmx_int(kernel_type) ? kernel_type : HTP_MM_KERNEL_HMX_2D;
+        if (is_glu) {
+            if (!htp_mm_hmx_solve_2d_params_glu(solve_ktype, wtype, ne00_padded, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, aligned_tile_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+                if (htp_mm_kernel_is_hmx_int(kernel_type)) {
+                    kernel_type = HTP_MM_KERNEL_HMX_2D;
+                    if (!htp_mm_hmx_solve_2d_params_glu(HTP_MM_KERNEL_HMX_2D, wtype, ne00_padded, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, aligned_tile_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+        } else if (!htp_mm_hmx_solve_2d_params_ex(solve_ktype, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, res_in_elem_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+            if (htp_mm_kernel_is_hmx_int(kernel_type)) {
+                kernel_type = fp16_kernel_type;
+                if (!htp_mm_hmx_solve_2d_params_ex(HTP_MM_KERNEL_HMX_2D, wtype, ne00_padded, m_id_rows, ne01_padded, m_for_solver_padded, cost_m, n_hvx, pipeline, is_matmul_id, aligned_tile_size, bias_size, res_in_elem_size, res_out_elem_size, vtcm_budget, &m_chunk, &n_chunk, &act_hvx_selected, &vtcm_size)) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
         }
     }
 
+    const uint32_t hmx_n_groups = htp_mm_kernel_is_hmx_int(kernel_type)
+                                ? (((uint32_t) ne00_padded + HTP_MM_HMX_W8A8_KGROUP - 1u) / HTP_MM_HMX_W8A8_KGROUP)
+                                : 1u;
+    const uint32_t n_k_tiles    = std::max(1, ne00_padded / 32);
+
     kparams->n_hmx              = 1;
+    kparams->hmx_n_groups       = (int32_t) hmx_n_groups;
     kparams->pipeline           = pipeline ? 1 : 0;
     kparams->m_chunk            = m_chunk;
     kparams->n_chunk            = n_chunk;
@@ -758,12 +829,13 @@ static bool htp_kparams_solve_hmx_mm(
     kparams->n_act_hvx          = act_hvx_selected;
     kparams->tile_size          = is_tiled ? htp_tensor_get_tile_size(wtype) : 0;
     kparams->aligned_tile_size  = aligned_tile_size;
-    kparams->act_row_size       = htp_mm_tiled_act_row_size(wtype, ne10);
     kparams->vtcm_size          = vtcm_size;
     kparams->div_n_act_hvx      = init_fastdiv_values(act_hvx_selected);
     kparams->div_ne00_padded    = init_fastdiv_values(ne00_padded);
-    kparams->vtcm_bias_size     = (int32_t) src2_size;
-    kparams->kernel_type        = (is_batched && !is_matmul_id) ? HTP_MM_KERNEL_HMX_BATCHED : HTP_MM_KERNEL_HMX_2D;
+    kparams->div_hmx_n_groups   = init_fastdiv_values(hmx_n_groups);
+    kparams->div_n_k_tiles      = init_fastdiv_values(n_k_tiles);
+    kparams->vtcm_bias_size     = (int32_t) bias_size;
+    kparams->kernel_type        = kernel_type;
     return true;
 }
 
@@ -781,7 +853,7 @@ static void htp_kparams_solve_hvx_mm(
     int ne12,
     int ne13,
     bool is_matmul_id,
-    const size_t src2_row_size,
+    const size_t bias_row_size,
     size_t vtcm_budget,
     struct htp_mm_kernel_params * kparams
 ) {
@@ -798,6 +870,8 @@ static void htp_kparams_solve_hvx_mm(
     GGML_UNUSED(ne03);
 
     const int src1_nrows = ne11 * ne12 * ne13;
+    const size_t act_elem_size = ggml_type_size(src1->type);
+    const size_t dst_row_size  = dst ? (size_t) dst->ne[0] * sizeof(float) : 0;
 
     if (is_tiled) {
         kparams->tile_size         = htp_tensor_get_tile_size(wtype);
@@ -816,7 +890,7 @@ static void htp_kparams_solve_hvx_mm(
             for (uint32_t d = max_prefetch; d >= 2; d /= 2) {
                 htp_mm_hvx_vtcm_layout_build(
                     &L, kparams->kernel_type, wtype, ne10, src1_nrows, n_hvx,
-                    0, src0->nb[1], kparams->act_row_size, 0, d, true, false
+                    dst_row_size, src0->nb[1], act_elem_size, 0, d, true, false
                 );
                 if (L.total_bytes <= vtcm_budget) {
                     best_n_prefetch = d;
@@ -843,7 +917,7 @@ static void htp_kparams_solve_hvx_mm(
                 for (uint32_t d = max_prefetch; d >= 2; d /= 2) {
                     htp_mm_hvx_vtcm_layout_build(
                         &L, kparams->kernel_type, wtype, ne10, src1_nrows, n_hvx,
-                        dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, d, false, false
+                        dst_row_size, src0->nb[1], act_elem_size, bias_row_size, d, false, false
                     );
                     if (L.total_bytes <= vtcm_budget) {
                         best_n_prefetch = d;
@@ -854,7 +928,7 @@ static void htp_kparams_solve_hvx_mm(
                 uint32_t m_chunk = 0;
                 if (htp_mm_hvx_solve_vtcm_params(
                         kparams->kernel_type, wtype, ne10, src1_nrows, n_hvx,
-                        dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, best_n_prefetch, vtcm_budget,
+                        dst_row_size, src0->nb[1], act_elem_size, bias_row_size, best_n_prefetch, vtcm_budget,
                         &L, &m_chunk)) {
                     kparams->n_prefetch     = best_n_prefetch;
                     kparams->m_chunk        = (m_chunk < (uint32_t) src1_nrows) ? m_chunk : 0;
@@ -884,7 +958,7 @@ static void htp_kparams_solve_hvx_mm(
         uint32_t m_chunk = 0;
         if (htp_mm_hvx_solve_vtcm_params(
                 ktype, wtype, ne10, src1_nrows, n_hvx,
-                dst->nb[1], src0->nb[1], src1->nb[1], src2_row_size, 16, vtcm_budget,
+                dst_row_size, src0->nb[1], act_elem_size, bias_row_size, 16, vtcm_budget,
                 &L, &m_chunk)) {
             kparams->kernel_type    = ktype;
             kparams->m_chunk        = (m_chunk < (uint32_t) src1_nrows) ? m_chunk : 0;
@@ -903,9 +977,8 @@ static bool htp_kparams_solve_matmul_impl(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
+    const struct ggml_tensor * bias,
     const struct ggml_tensor * dst,
-    const size_t src2_row_size,
-    const size_t src2_size,
     struct htp_mm_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
@@ -932,12 +1005,12 @@ static bool htp_kparams_solve_matmul_impl(
 
     const bool hmx_enabled = (htp_session_n_hmx(sess) > 0) && (opt_mm_select >= 2);
     if (hmx_enabled && htp_matmul_is_hmx_eligible(src0, src1, dst, is_matmul_id, is_batched)) {
-        if (htp_kparams_solve_hmx_mm(sess, src0, src1, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, src2_size, vtcm_budget, kparams)) {
+        if (htp_kparams_solve_hmx_mm(sess, src0, src1, bias, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, is_matmul_id, is_batched, vtcm_budget, kparams)) {
             goto finalize;
         }
     }
 
-    htp_kparams_solve_hvx_mm(sess, src0, src1, dst, wtype, is_tiled, ne02, ne03, ne10, ne11, ne12, ne13, is_matmul_id, src2_row_size, vtcm_budget, kparams);
+    htp_kparams_solve_hvx_mm(sess, src0, src1, dst, wtype, is_tiled, ne02, ne03, ne10, ne11, ne12, ne13, is_matmul_id, bias ? bias->nb[1] : 0, vtcm_budget, kparams);
 
 finalize:
     kparams->div_ne12_ne1 = init_fastdiv_values(ne12 * ne11);
@@ -961,7 +1034,7 @@ static bool htp_matmul_check_types(
 ) {
     const bool is_matmul_id = (dst->op == GGML_OP_MUL_MAT_ID);
 
-    if (dst->type != GGML_TYPE_F32) {
+    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
         return false;
     }
 
@@ -971,7 +1044,8 @@ static bool htp_matmul_check_types(
 
     if (is_matmul_id) {
         const struct ggml_tensor * src2 = dst->src[2];
-        if (src1->type != GGML_TYPE_F32 || !src2 || src2->type != GGML_TYPE_I32) {
+        const bool src1_ok = (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16);
+        if (!src1_ok || !src2 || src2->type != GGML_TYPE_I32) {
             return false;
         }
         switch (src0->type) {
@@ -1043,11 +1117,6 @@ static bool htp_matmul_check_types(
             return src0->ne[0] % ggml_blck_size(src0->type) == 0;
 
         case GGML_TYPE_F32:
-            if (src1->type != GGML_TYPE_F32) {
-                return false;
-            }
-            return src0->nb[1] >= src0->nb[0];
-
         case GGML_TYPE_F16:
         case GGML_TYPE_BF16:
             return src0->nb[1] >= src0->nb[0];
@@ -1072,59 +1141,36 @@ static bool htp_kparams_solve_matmul(
     if (htp_matmul_can_collapse(src0, src1, dst)) {
         const ggml_tensor src1_collapsed = htp_tensor_collapse_rows(src1);
         const ggml_tensor dst_collapsed  = htp_tensor_collapse_rows(dst);
-        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, &dst_collapsed, 0, 0, kparams);
+        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, nullptr, &dst_collapsed, kparams);
     }
-    return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, 0, 0, kparams);
-}
-
-bool htp_matmul_add_can_collapse(
-    const struct ggml_tensor * src0,
-    const struct ggml_tensor * src1,
-    const struct ggml_tensor * src2,
-    const struct ggml_tensor * dst
-) {
-    if (!htp_matmul_can_collapse(src0, src1, dst)) {
-        return false;
-    }
-    if (!src2) {
-        return true;
-    }
-    const int64_t src2_nrows = src2->ne[1] * src2->ne[2] * src2->ne[3];
-    if (src2_nrows == 1) {
-        return true;
-    }
-    size_t s2;
-    return src2->nb[0] == ggml_type_size(src2->type) &&
-           ggml_are_same_shape(src2, dst) &&
-           htp_rows_stride(src2->ne, src2->nb, &s2);
+    return htp_kparams_solve_matmul_impl(sess, src0, src1, nullptr, dst, kparams);
 }
 
 bool htp_kparams_solve_matmul_add(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
-    const struct ggml_tensor * src2,
+    const struct ggml_tensor * bias,
     const struct ggml_tensor * dst,
     struct htp_mm_kernel_params * kparams
 ) {
-    if (htp_matmul_add_can_collapse(src0, src1, src2, dst)) {
+    if (htp_matmul_add_can_collapse(src0, src1, bias, dst)) {
         const ggml_tensor src1_collapsed = htp_tensor_collapse_rows(src1);
         const ggml_tensor dst_collapsed  = htp_tensor_collapse_rows(dst);
-        const ggml_tensor src2_collapsed = (src2 && (src2->ne[1] * src2->ne[2] * src2->ne[3] > 1))
-                                           ? htp_tensor_collapse_rows(src2)
-                                           : (src2 ? *src2 : ggml_tensor{});
-        const struct ggml_tensor * p_src2 = src2 ? &src2_collapsed : nullptr;
-        const size_t src2_size = p_src2 ? hex_round_up(ggml_nbytes(p_src2), 128) : 0;
-        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, &dst_collapsed, p_src2 ? p_src2->nb[1] : 0, src2_size, kparams);
+        const ggml_tensor bias_collapsed = (bias && (ggml_nrows(bias) > 1))
+                                           ? htp_tensor_collapse_rows(bias)
+                                           : (bias ? *bias : ggml_tensor{});
+        const struct ggml_tensor * p_bias = bias ? &bias_collapsed : nullptr;
+        return htp_kparams_solve_matmul_impl(sess, src0, &src1_collapsed, p_bias, &dst_collapsed, kparams);
     }
-    const size_t src2_size = src2 ? hex_round_up(ggml_nbytes(src2), 128) : 0;
-    return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, src2 ? src2->nb[1] : 0, src2_size, kparams);
+    return htp_kparams_solve_matmul_impl(sess, src0, src1, bias, dst, kparams);
 }
 
 bool htp_kparams_solve_mmnx(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * act,
+    const struct ggml_tensor * dst,
     int32_t n_weights,
     struct htp_mm_kernel_params * kparams
 ) {
@@ -1147,36 +1193,40 @@ bool htp_kparams_solve_mmnx(
 
     const bool is_tiled    = ggml_hexagon_tensor_will_tile(src0);
     const int  wtype       = (is_tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
-    const int  ne00_padded = is_tiled ? hex_round_up(ne00, 32) : ne00;
+    const int  ne00_padded = is_tiled ? hex_round_up(ne00, htp_tensor_get_tile_k(wtype)) : ne00;
     const int  ne11_padded = hex_round_up(ne11, 32);
     const int  ne01_tiled  = hex_round_up(ne01, 32);
     const bool is_batched  = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
 
     const bool hmx_enabled = (n_hmx > 0) && (opt_mm_select >= 2);
-    if (hmx_enabled && htp_matmul_is_hmx_eligible(src0, act, nullptr, false, is_batched)) {
-        if (htp_kparams_solve_hmx_mm(sess, src0, act, nullptr, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, false, is_batched, 0, vtcm_budget, kparams)) {
+    if (hmx_enabled && htp_matmul_is_hmx_eligible(src0, act, dst, false, is_batched)) {
+        if (htp_kparams_solve_hmx_mm(sess, src0, act, nullptr, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, false, is_batched, vtcm_budget, kparams)) {
             kparams->n_weights = n_weights;
             goto finalize;
         }
     }
 
-    if (!is_tiled || act->type != GGML_TYPE_F32 || ne10 % 32 != 0) {
+    if (!is_tiled || (act->type != GGML_TYPE_F32 && act->type != GGML_TYPE_F16) || ne10 % 32 != 0) {
         kparams->kernel_type = HTP_MM_KERNEL_UNSUPPORTED;
         return false;
     }
 
     {
-        const int    act_nrows     = ne11 * ne12 * ne13;
-        const size_t act_row_size  = htp_mm_tiled_act_row_size(wtype, ne10);
-        const size_t src0_row_size = src0->nb[1];
+        const int     act_nrows     = ne11 * ne12 * ne13;
+        const int32_t hvx_ktype     = (act_nrows < (int) n_hvx)
+                                    ? HTP_MM_KERNEL_HVX_QUANT_BLOCK : HTP_MM_KERNEL_HVX_QUANT_ROW;
+        const size_t  act_row_size  = htp_mm_tiled_act_row_size(wtype, ne10);
+        const size_t  act_elem_size = ggml_type_size(act->type);
+        const size_t  src0_row_size = src0->nb[1];
+        const size_t  dst_row_size  = (size_t) src0->ne[1] * sizeof(float);
 
         const uint32_t max_prefetch = (act_nrows > HTP_MM_HMX_MIN_NROWS) ? 2 : 16;
         uint32_t best_n_prefetch = 2;
         for (uint32_t d = max_prefetch; d >= 2; d /= 2) {
             struct htp_mm_hvx_vtcm_layout L;
             htp_mm_hvx_vtcm_layout_build(
-                &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, act_nrows, n_hvx,
-                0, src0_row_size, act_row_size, 0, d, false, true
+                &L, hvx_ktype, wtype, ne10, act_nrows, n_hvx,
+                dst_row_size, src0_row_size, act_elem_size, 0, d, false, true
             );
             if (L.total_bytes <= vtcm_budget) {
                 best_n_prefetch = d;
@@ -1186,12 +1236,12 @@ bool htp_kparams_solve_mmnx(
 
         struct htp_mm_hvx_vtcm_layout L;
         htp_mm_hvx_vtcm_layout_build(
-            &L, HTP_MM_KERNEL_HVX_QUANT_ROW, wtype, ne10, act_nrows, n_hvx,
-            0, src0_row_size, act_row_size, 0, best_n_prefetch, false, true
+            &L, hvx_ktype, wtype, ne10, act_nrows, n_hvx,
+            dst_row_size, src0_row_size, act_elem_size, 0, best_n_prefetch, false, true
         );
 
         if (opt_mm_select >= 1 && L.total_bytes <= vtcm_budget) {
-            kparams->kernel_type       = HTP_MM_KERNEL_HVX_QUANT_ROW;
+            kparams->kernel_type       = hvx_ktype;
             kparams->tile_size         = htp_tensor_get_tile_size(wtype);
             kparams->aligned_tile_size = htp_tensor_get_tile_padded_size(wtype);
             kparams->act_row_size      = act_row_size;
@@ -1214,6 +1264,67 @@ finalize:
     return (size_t) kparams->vtcm_size <= vtcm_budget;
 }
 
+bool htp_kparams_solve_mmnx_glu(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * w_gate,
+    const struct ggml_tensor * w_up,
+    const struct ggml_tensor * act,
+    const struct ggml_tensor * dst,
+    uint8_t glu_op,
+    struct htp_mm_kernel_params * kparams
+) {
+    if (htp_session_n_hmx(sess) == 0 || opt_mm_select < 2) {
+        return false;
+    }
+    if (w_gate->type != w_up->type || w_gate->ne[0] != w_up->ne[0] || w_gate->ne[1] != w_up->ne[1] ||
+        !ggml_is_matrix(w_gate) || !ggml_is_matrix(w_up) ||
+        !ggml_is_contiguous(w_up) || w_gate->nb[1] != w_up->nb[1] ||
+        ggml_hexagon_tensor_will_tile(w_gate) != ggml_hexagon_tensor_will_tile(w_up)) {
+        return false;
+    }
+    if (!htp_matmul_check_types(w_gate, act, dst) || !htp_matmul_check_types(w_up, act, dst)) {
+        return false;
+    }
+
+    const size_t vtcm_budget = htp_session_vtcm_size(sess);
+    memset(kparams, 0, sizeof(*kparams));
+    kparams->n_hvx = htp_session_n_hvx(sess);
+
+    const int ne00 = w_gate->ne[0];
+    const int ne01 = w_gate->ne[1];
+    const int ne02 = w_gate->ne[2];
+    const int ne03 = w_gate->ne[3];
+    const int ne11 = act->ne[1];
+    const int ne12 = act->ne[2];
+    const int ne13 = act->ne[3];
+
+    const bool is_tiled    = ggml_hexagon_tensor_will_tile(w_gate);
+    const int  wtype       = (is_tiled && (w_gate->type == GGML_TYPE_F32 || w_gate->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : w_gate->type;
+    const int  tile_k      = htp_tensor_get_tile_k(wtype);
+    const int  ne00_padded = is_tiled ? hex_round_up(ne00, tile_k) : ne00;
+    const int  ne11_padded = hex_round_up(ne11, 32);
+    const int  ne01_tiled  = hex_round_up(ne01, 32);
+    const bool is_batched  = (ne02 * ne03 > 1 || ne12 * ne13 > 1);
+
+    const bool k_ok = is_tiled ? (tile_k > 0 && (ne00 % tile_k) == 0) : ((ne00 & 31) == 0);
+    if (is_batched || !k_ok ||
+        !htp_matmul_is_hmx_eligible(w_gate, act, dst, false, false)) {
+        return false;
+    }
+    if (!htp_kparams_solve_hmx_mm(sess, w_gate, act, nullptr, dst, wtype, ne00_padded, ne01_tiled, ne02, ne11, ne12, ne11_padded, false, false, vtcm_budget, kparams, /*is_glu=*/ true)) {
+        return false;
+    }
+
+    kparams->n_weights    = 2;
+    kparams->glu_op       = glu_op;
+    kparams->div_ne12_ne1 = init_fastdiv_values(ne12 * ne11);
+    kparams->div_ne1      = init_fastdiv_values(ne11);
+    kparams->div_r2       = init_fastdiv_values(ne02 > 0 ? ne12 / ne02 : 1);
+    kparams->div_r3       = init_fastdiv_values(ne03 > 0 ? ne13 / ne03 : 1);
+    kparams->div_ne12     = init_fastdiv_values(ne12);
+    return kparams->n_hmx == 1 && htp_mm_kernel_is_hmx_2d(kparams->kernel_type) && (size_t) kparams->vtcm_size <= vtcm_budget;
+}
+
 bool htp_kparams_solve_mmidnx(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
@@ -1222,7 +1333,7 @@ bool htp_kparams_solve_mmidnx(
     int32_t n_weights,
     struct htp_mm_kernel_params * kparams
 ) {
-    const bool ok = htp_kparams_solve_matmul_impl(sess, src0, act, dst, 0, 0, kparams);
+    const bool ok = htp_kparams_solve_matmul_impl(sess, src0, act, nullptr, dst, kparams);
     kparams->n_weights = n_weights;
     return ok;
 }
@@ -1240,12 +1351,15 @@ static bool htp_kparams_solve_binary(
     const struct ggml_tensor * src2 = (op == HTP_OP_ADD_ID) ? op_tensor->src[2] : nullptr;
     const struct ggml_tensor * dst  = op_tensor;
 
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+        (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+        return false;
+    }
+
     const bool is_add_id = (op == HTP_OP_ADD_ID);
     if (is_add_id) {
-        if (!src2) {
-            return false;
-        }
-        if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 || src2->type != GGML_TYPE_I32) {
+        if (src2->type != GGML_TYPE_I32) {
             return false;
         }
         if (!ggml_are_same_shape(src0, dst)) {
@@ -1257,24 +1371,24 @@ static bool htp_kparams_solve_binary(
         if (src2->ne[0] != src0->ne[1] || src2->ne[1] != src0->ne[2]) {
             return false;
         }
-        if (src0->nb[0] != sizeof(float) || src1->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float) || src2->nb[0] != sizeof(int32_t)) {
+        if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous_rows(src1) ||
+            !ggml_is_contiguous_rows(dst) || !ggml_is_contiguous_rows(src2)) {
             return false;
         }
         if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(src1) || !ggml_is_contiguous(dst)) {
             return false;
         }
-        if (src2->nb[1] < src2->ne[0] * sizeof(int32_t)) {
+        if (src2->nb[1] < ggml_row_size(src2->type, src2->ne[0])) {
             return false;
         }
     } else {
-        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
-            src1->type != src0->type || dst->type != src0->type) {
-            return false;
-        }
         if (ggml_is_permuted(src0) || ggml_is_permuted(dst) || !ggml_are_same_shape(src0, dst)) {
             return false;
         }
-        if (!ggml_can_repeat(src1, src0) || ggml_is_permuted(src1)) {
+        if (!ggml_can_repeat(src1, src0)) {
+            return false;
+        }
+        if (!ggml_is_contiguous_rows(src1) && !ggml_is_permuted(src1)) {
             return false;
         }
     }
@@ -1282,25 +1396,32 @@ static bool htp_kparams_solve_binary(
     const uint32_t max_hvx_sess     = htp_session_n_hvx(sess);
     const size_t   vtcm_size        = htp_session_vtcm_size(sess);
 
-    const size_t elem_size     = ggml_type_size(src0->type);
-    const size_t src0_row_size = src0->ne[0] * elem_size;
-    const size_t src1_row_size = src1->ne[0] * elem_size;
-    const size_t dst_row_size  = dst->ne[0]  * elem_size;
+    const size_t src0_elem_size = ggml_type_size(src0->type);
+    const size_t src1_elem_size = ggml_type_size(src1->type);
+    const size_t dst_elem_size  = ggml_type_size(dst->type);
+    const size_t src0_row_size  = src0->ne[0] * src0_elem_size;
+    const size_t src1_row_size  = src1->ne[0] * src1_elem_size;
+    const size_t dst_row_size   = dst->ne[0]  * dst_elem_size;
 
     const size_t src0_row_size_aligned = hex_round_up(src0_row_size, 128);
     const size_t src1_row_size_aligned = hex_round_up(src1_row_size, 128);
     const size_t dst_row_size_aligned  = hex_round_up(dst_row_size,  128);
 
-    if (!htp_binary_strides_safe(src0, src1, dst, elem_size)) {
+    if (!htp_binary_strides_safe(src0, src1, dst, src0_elem_size, src1_elem_size, dst_elem_size)) {
         return false;
     }
+
+    kparams->src0_elem_size = (uint8_t) src0_elem_size;
+    kparams->src1_elem_size = (uint8_t) src1_elem_size;
+    kparams->dst_elem_size  = (uint8_t) dst_elem_size;
 
     const bool is_scalar = !is_add_id && src1->ne[0] == 1;
     const bool is_row_bcast = !is_add_id && !is_scalar &&
         src1->ne[0] == src0->ne[0] &&
-        (src0->ne[1] > 1 || src0->ne[2] > 1 || src0->ne[3] > 1) &&
-        src1->ne[1] == 1 && src1->ne[2] == 1 && src1->ne[3] == 1;
+        ggml_nrows(src0) > 1 &&
+        ggml_is_vector(src1);
     const bool is_same_shape = !is_add_id && !is_scalar &&
+        src1->nb[0] == src1_elem_size &&
         src1->ne[0] == src0->ne[0] &&
         src1->ne[1] == src0->ne[1] &&
         (src1->ne[2] == src0->ne[2] || src1->ne[2] == 1) &&
@@ -1310,35 +1431,13 @@ static bool htp_kparams_solve_binary(
     const bool is_scalar_broadcast = !is_add_id && (ggml_nelements(src1) == 1);
 
     if (!is_add_id && is_contig && (ggml_are_same_shape(src0, src1) || is_scalar_broadcast)) {
-        const uint32_t total_elems        = (uint32_t) ggml_nelements(src0);
-        const uint32_t max_chunk_elems    = 32768 / elem_size;
-        const uint32_t min_chunk_elems    = 256;
-        const uint32_t target_chunk_elems = hex_round_up((total_elems + (2 * max_hvx_sess) - 1) / (2 * max_hvx_sess), 32);
-        const uint32_t chunk_size         = (std::min)(max_chunk_elems, (std::max)(target_chunk_elems, min_chunk_elems));
-        const uint32_t chunk_bytes        = hex_round_up(chunk_size * elem_size, 128);
-        const uint32_t total_chunks       = (total_elems + chunk_size - 1) / chunk_size;
-        const uint32_t n_hvx              = (total_chunks >= 2) ? (std::min)(max_hvx_sess, total_chunks) : 1;
-
-        kparams->kernel_type           = HTP_BINARY_KERNEL_CHUNKED;
-        kparams->n_hvx                 = n_hvx;
-        kparams->n_srcs                = 2;
-        kparams->rows_per_buffer       = 1;
         kparams->src0_row_size_aligned = src0_row_size_aligned;
-        kparams->src1_row_size_aligned = is_scalar_broadcast ? 0 : src1_row_size_aligned;
+        kparams->src1_row_size_aligned = src1_row_size_aligned;
         kparams->dst_row_size_aligned  = dst_row_size_aligned;
-        kparams->src1_size             = 0;
-        kparams->chunk_size            = chunk_size;
-        kparams->chunk_bytes           = chunk_bytes;
-        kparams->is_scalar             = is_scalar_broadcast ? 1 : 0;
-
         struct htp_binary_vtcm_layout L;
-        htp_binary_vtcm_layout_build(&L, kparams, vtcm_size);
-        if (L.total_bytes == 0 || L.total_bytes > vtcm_size) {
-            return false;
-        }
-
-        kparams->vtcm_size = L.total_bytes;
-        return true;
+        return htp_binary_solve_chunked(&L, kparams, (uint32_t) ggml_nelements(src0),
+                                        (uint32_t) src0_elem_size, (uint32_t) src1_elem_size, (uint32_t) dst_elem_size,
+                                        max_hvx_sess, 2, is_scalar_broadcast, vtcm_size);
     }
 
     enum htp_binary_kernel_type kernel_type;
@@ -1354,9 +1453,10 @@ static bool htp_kparams_solve_binary(
         }
     } else if (is_row_bcast) {
         kernel_type = HTP_BINARY_KERNEL_ROW_BCAST;
-        src1_size   = src1_row_size_aligned;
+        src1_size   = hex_round_up(src1->ne[0] * ((src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) ? sizeof(ggml_fp16_t) : sizeof(float)), 128);
+        kparams->src1_strided = src1->nb[0] != src1_elem_size ? 1 : 0;
     } else if (is_scalar) {
-        src1_size = hex_round_up(ggml_nelements(src1) * elem_size, 128);
+        src1_size = hex_round_up(ggml_nelements(src1) * ((src0->type == GGML_TYPE_F16 && src1->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16) ? sizeof(ggml_fp16_t) : sizeof(float)), 128);
         if (src1_size > vtcm_size) {
             return false;
         }
@@ -1365,14 +1465,14 @@ static bool htp_kparams_solve_binary(
     } else if (is_same_shape) {
         kernel_type = HTP_BINARY_KERNEL_SAME_SHAPE;
     } else if (is_complex) {
-        src1_size = hex_round_up(ggml_nelements(src1) * elem_size + 128, 128);
+        src1_size = hex_round_up(ggml_nelements(src1) * src1_elem_size + 128, 128);
         if (src1_size > vtcm_size) {
             return false;
         }
         kernel_type           = HTP_BINARY_KERNEL_COMPLEX;
         kparams->src1_strided = !ggml_is_contiguous(src1) ? 1 : 0;
     } else {
-        src1_size = hex_round_up(ggml_nelements(src1) * elem_size + 128, 128);
+        src1_size = hex_round_up(ggml_nelements(src1) * src1_elem_size + 128, 128);
         if (src1_size > vtcm_size) {
             return false;
         }
@@ -1380,7 +1480,7 @@ static bool htp_kparams_solve_binary(
         kparams->src1_strided = !ggml_is_contiguous(src1) ? 1 : 0;
     }
 
-    const uint32_t src0_nrows          = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t src0_nrows          = ggml_nrows(src0);
     const uint32_t min_rows_per_hvx    = (uint32_t) (std::max<size_t>(1, (128 + dst_row_size - 1) / dst_row_size));
     const uint32_t max_hvx             = (std::max)(1u, src0_nrows / min_rows_per_hvx);
 
@@ -1437,7 +1537,8 @@ static bool htp_kparams_solve_binary(
     if (L.rows_per_buffer == 0 || L.total_bytes > vtcm_size) {
         if (!is_add_id && is_contig && (ggml_are_same_shape(src0, src1) || is_scalar_broadcast)) {
             const uint32_t total_elems = (uint32_t) ggml_nelements(src0);
-            return htp_binary_solve_chunked(&L, kparams, total_elems, (uint32_t) elem_size,
+            return htp_binary_solve_chunked(&L, kparams, total_elems,
+                                            (uint32_t) src0_elem_size, (uint32_t) src1_elem_size, (uint32_t) dst_elem_size,
                                             max_hvx_sess, 2, is_scalar_broadcast, vtcm_size);
         }
         return false;
@@ -1449,106 +1550,106 @@ static bool htp_kparams_solve_binary(
     return true;
 }
 
-// collapse contiguous dims of elementwise ops so that rows fill at least one HVX vector
-static void htp_collapse_dims(struct ggml_tensor ** tensors, size_t n_tensors, size_t elem_size, uint32_t n_hvx) {
-    if (n_tensors == 0 || !tensors[0]) {
-        return;
-    }
-    for (size_t t = 0; t < n_tensors; t++) {
-        if (!tensors[t] || tensors[t]->nb[0] != elem_size) {
-            return;
-        }
-        if (t > 0 && !ggml_are_same_shape(tensors[0], tensors[t])) {
-            return;
-        }
+static bool htp_kparams_solve_binary_nx(
+    const struct ggml_hexagon_session * sess,
+    const htp_opnode & node,
+    struct htp_binary_kernel_params * kparams
+) {
+    const uint32_t n_srcs = (uint32_t) node.inputs.size();
+    if (n_srcs <= 2 || n_srcs > HTP_OP_MAX_INPUTS || node.outputs.size() != 1) {
+        return false;
     }
 
-    struct ggml_tensor * t0 = tensors[0];
+    const struct ggml_tensor * src0 = node.inputs[0];
+    const struct ggml_tensor * src1 = node.inputs[1];
+    const struct ggml_tensor * dst  = node.outputs[0];
 
-    while (t0->ne[1] > 1 || t0->ne[2] > 1 || t0->ne[3] > 1) {
-        const size_t row_size = (size_t) t0->ne[0] * elem_size;
-        bool rows_contig = true;
-        for (size_t t = 0; t < n_tensors; t++) {
-            if (tensors[t]->nb[1] != (size_t) tensors[t]->ne[0] * elem_size) {
-                rows_contig = false;
-                break;
-            }
-        }
-        bool all_ne1_one = true;
-        for (size_t t = 0; t < n_tensors; t++) {
-            if (tensors[t]->ne[1] != 1) {
-                all_ne1_one = false;
-                break;
-            }
-        }
-        const bool can_merge = all_ne1_one ||
-                               (rows_contig && (t0->ne[0] == 1 || (row_size < 128 && row_size * t0->ne[1] <= 2048)));
-        if (!can_merge) {
-            break;
-        }
-        for (size_t t = 0; t < n_tensors; t++) {
-            tensors[t]->ne[0] *= tensors[t]->ne[1];
-            tensors[t]->ne[1]  = tensors[t]->ne[2];
-            tensors[t]->ne[2]  = tensors[t]->ne[3];
-            tensors[t]->ne[3]  = 1;
-            tensors[t]->nb[1]  = tensors[t]->nb[2];
-            tensors[t]->nb[2]  = tensors[t]->nb[3];
-            tensors[t]->nb[3]  = tensors[t]->nb[2] * tensors[t]->ne[2];
-        }
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) {
+        return false;
+    }
+    if (dst->type != src0->type || ggml_is_permuted(dst) || !ggml_are_same_shape(src0, dst)) {
+        return false;
     }
 
-    // ne1 too big to merge in full: merge it in chunks of k rows (k divides ne1)
-    const size_t row_size = (size_t) t0->ne[0] * elem_size;
-    bool rows_contig = true;
-    for (size_t t = 0; t < n_tensors; t++) {
-        if (tensors[t]->nb[1] != row_size) {
-            rows_contig = false;
-            break;
+    const size_t elem_size = ggml_type_size(src0->type);
+    bool all_contig = ggml_is_contiguous(dst);
+    for (uint32_t s = 0; s < n_srcs; ++s) {
+        const struct ggml_tensor * in = node.inputs[s];
+        if (in->type != src0->type || ggml_is_permuted(in) || !ggml_are_same_shape(src0, in)) {
+            return false;
         }
+        if (!htp_binary_strides_safe(src0, in, dst, elem_size, elem_size, elem_size) ||
+            !htp_binary_strides_safe(in, src0, dst, elem_size, elem_size, elem_size)) {
+            return false;
+        }
+        all_contig = all_contig && ggml_is_contiguous(in);
     }
-    if (t0->ne[1] > 1 && row_size < 128 && rows_contig) {
-        int64_t k = 2048 / row_size;
-        while (k > 1 && t0->ne[1] % k != 0) {
-            k--;
-        }
-        if (k > 1) {
-            for (size_t t = 0; t < n_tensors; t++) {
-                tensors[t]->ne[0] *= k;
-                tensors[t]->ne[1] /= k;
-                tensors[t]->nb[1] *= k;
-                tensors[t]->nb[2]  = tensors[t]->nb[1] * tensors[t]->ne[1];
-                tensors[t]->nb[3]  = tensors[t]->nb[2] * tensors[t]->ne[2];
-            }
-        }
+    if (!all_contig && src0->ne[0] <= 1) {
+        return false;
     }
 
-    // nrows too small to saturate threads: split ne0 into k rows (k divides ne0)
-    const size_t   row_size_curr = (size_t) t0->ne[0] * elem_size;
-    const uint32_t nrows         = (uint32_t) (t0->ne[1] * t0->ne[2] * t0->ne[3]);
-    rows_contig = true;
-    for (size_t t = 0; t < n_tensors; t++) {
-        if (tensors[t]->ne[1] != 1 && tensors[t]->nb[1] != row_size_curr) {
-            rows_contig = false;
-            break;
+    memset(kparams, 0, sizeof(*kparams));
+
+    const uint32_t max_hvx_sess     = htp_session_n_hvx(sess);
+    const size_t   vtcm_size        = htp_session_vtcm_size(sess);
+    const size_t   row_size         = src0->ne[0] * elem_size;
+    const size_t   row_size_aligned = hex_round_up(row_size, 128);
+
+    kparams->src0_elem_size        = (uint8_t) elem_size;
+    kparams->src1_elem_size        = (uint8_t) elem_size;
+    kparams->dst_elem_size         = (uint8_t) elem_size;
+    kparams->src0_row_size_aligned = (uint32_t) row_size_aligned;
+    kparams->src1_row_size_aligned = (uint32_t) row_size_aligned;
+    kparams->dst_row_size_aligned  = (uint32_t) row_size_aligned;
+
+    if (all_contig) {
+        struct htp_binary_vtcm_layout L;
+        return htp_binary_solve_chunked(&L, kparams, (uint32_t) ggml_nelements(src0),
+                                        (uint32_t) elem_size, (uint32_t) elem_size, (uint32_t) elem_size,
+                                        max_hvx_sess, n_srcs, false, vtcm_size);
+    }
+
+    const uint32_t src0_nrows       = ggml_nrows(src0);
+    const uint32_t min_rows_per_hvx = (uint32_t) (std::max<size_t>(1, (128 + row_size - 1) / row_size));
+    const uint32_t max_hvx          = (std::max)(1u, src0_nrows / min_rows_per_hvx);
+
+    kparams->kernel_type = HTP_BINARY_KERNEL_SAME_SHAPE;
+    kparams->n_hvx       = (std::min)(max_hvx_sess, max_hvx);
+    kparams->n_srcs      = (uint8_t) n_srcs;
+
+    for (uint32_t s = 0; s < n_srcs; ++s) {
+        const struct ggml_tensor * in = node.inputs[s];
+        if (src0->ne[2] > 1 && in->nb[2] != in->ne[1] * in->nb[1]) {
+            kparams->split_at_ne01 = 1;
+        }
+        if (src0->ne[3] > 1 && in->nb[3] != in->ne[2] * in->nb[2]) {
+            kparams->split_at_ne02 = 1;
         }
     }
-    if (nrows < n_hvx && rows_contig && row_size_curr >= 4096) {
-        const size_t vec_elems = 128 / elem_size;
-        int64_t k = std::max<int64_t>(row_size_curr / 16384, (n_hvx * 4 + nrows - 1) / nrows);
-        k = std::min<int64_t>(k, row_size_curr / 2048);
-        while (k > 1 && t0->ne[0] % (k * vec_elems) != 0) {
-            k--;
-        }
-        if (k > 1) {
-            for (size_t t = 0; t < n_tensors; t++) {
-                tensors[t]->ne[0] /= k;
-                tensors[t]->ne[1] *= k;
-                tensors[t]->nb[1]  = tensors[t]->ne[0] * elem_size;
-                tensors[t]->nb[2]  = tensors[t]->nb[1] * tensors[t]->ne[1];
-                tensors[t]->nb[3]  = tensors[t]->nb[2] * tensors[t]->ne[2];
-            }
-        }
+    if (src0->ne[2] > 1 && dst->nb[2] != dst->ne[1] * dst->nb[1]) {
+        kparams->split_at_ne01 = 1;
     }
+    if (src0->ne[3] > 1 && dst->nb[3] != dst->ne[2] * dst->nb[2]) {
+        kparams->split_at_ne02 = 1;
+    }
+
+    kparams->div_ne01  = init_fastdiv_values((uint32_t) src0->ne[1]);
+    kparams->div_ne02  = init_fastdiv_values((uint32_t) src0->ne[2]);
+    kparams->div_ne012 = init_fastdiv_values((uint32_t) (src0->ne[1] * src0->ne[2]));
+    kparams->div_ne11  = init_fastdiv_values((uint32_t) src1->ne[1]);
+    kparams->div_ne12  = init_fastdiv_values((uint32_t) src1->ne[2]);
+    kparams->div_ne13  = init_fastdiv_values((uint32_t) src1->ne[3]);
+
+    struct htp_binary_vtcm_layout L;
+    htp_binary_vtcm_layout_build(&L, kparams, vtcm_size);
+    if (L.rows_per_buffer == 0 || L.total_bytes > vtcm_size) {
+        return false;
+    }
+
+    kparams->rows_per_buffer = L.rows_per_buffer;
+    kparams->vtcm_size       = (uint32_t) L.total_bytes;
+
+    return true;
 }
 
 static bool htp_kparams_solve_unary_impl(
@@ -1556,6 +1657,7 @@ static bool htp_kparams_solve_unary_impl(
     uint32_t op,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
+    const struct ggml_tensor * src2,
     const struct ggml_tensor * dst,
     struct htp_unary_kernel_params * kparams
 ) {
@@ -1565,14 +1667,33 @@ static bool htp_kparams_solve_unary_impl(
         return false;
     }
 
+    const bool is_rms_norm = (op == HTP_OP_RMS_NORM || op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+
     if (op == HTP_OP_HADAMARD) {
         const int64_t n = src0->ne[0];
         if (n < 32 || (n & (n - 1)) != 0) {
             return false;
         }
-        if (!dst->src[0] || dst->src[0]->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+        if (dst->src[0]->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
             (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16)) {
             return false;
+        }
+    } else if (is_rms_norm) {
+        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+            (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+            return false;
+        }
+        if (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD) {
+            if ((src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+                !ggml_is_contiguous_rows(src1) || src1->ne[0] != src0->ne[0]) {
+                return false;
+            }
+        }
+        if (op == HTP_OP_RMS_NORM_MUL_ADD) {
+            if ((src2->type != GGML_TYPE_F32 && src2->type != GGML_TYPE_F16) ||
+                !ggml_is_contiguous_rows(src2) || !ggml_are_same_shape(src0, src2)) {
+                return false;
+            }
         }
     } else {
         if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || dst->type != src0->type) {
@@ -1584,14 +1705,24 @@ static bool htp_kparams_solve_unary_impl(
         if (src0->type == GGML_TYPE_F16) {
             switch (op) {
                 case HTP_OP_NORM:
-                case HTP_OP_RMS_NORM:
                 case HTP_OP_L2_NORM:
                 case HTP_OP_SCALE:
                 case HTP_OP_CLAMP:
+                case HTP_OP_LEAKY_RELU:
                 case HTP_OP_SQR:
                 case HTP_OP_SQRT:
+                case HTP_OP_UNARY_NEG:
+                case HTP_OP_UNARY_EXP:
+                case HTP_OP_UNARY_SIGMOID:
+                case HTP_OP_UNARY_SILU:
+                case HTP_OP_UNARY_GELU:
+                case HTP_OP_UNARY_GELU_QUICK:
+                case HTP_OP_UNARY_GELU_ERF:
+                case HTP_OP_UNARY_SOFTPLUS:
+                case HTP_OP_UNARY_TANH:
                 case HTP_OP_UNARY_LOG:
                 case HTP_OP_UNARY_ABS:
+                case HTP_OP_UNARY_RELU:
                 case HTP_OP_UNARY_STEP:
                 case HTP_OP_UNARY_CEIL:
                 case HTP_OP_UNARY_SGN:
@@ -1606,11 +1737,12 @@ static bool htp_kparams_solve_unary_impl(
         return false;
     }
 
-    const size_t elem_size = ggml_type_size(src0->type);
+    const size_t src0_elem_size = ggml_type_size(src0->type);
+    const size_t dst_elem_size  = ggml_type_size(dst->type);
 
-    const size_t dst_data_row_size  = dst->ne[0]  * ggml_type_size(dst->type);
+    const size_t dst_data_row_size  = dst->ne[0] * dst_elem_size;
 
-    const uint32_t src0_nrows          = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t src0_nrows          = (uint32_t) ggml_nrows(src0);
     const uint32_t min_rows_per_hvx    = (uint32_t) (std::max<size_t>(1, (128 + dst_data_row_size - 1) / dst_data_row_size));
     const uint32_t max_hvx             = (std::max)(1u, src0_nrows / min_rows_per_hvx);
     const uint32_t n_hvx               = (std::min)(htp_session_n_hvx(sess), max_hvx);
@@ -1618,32 +1750,57 @@ static bool htp_kparams_solve_unary_impl(
 
     kparams->n_hvx = n_hvx;
 
-    const bool has_weight       = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
-    const bool broadcast_weight = has_weight && (src1->ne[1] * src1->ne[2] * src1->ne[3] == 1);
-    if (op == HTP_OP_RMS_NORM_MUL_ADD && !broadcast_weight) {
-        return false;
+    const bool has_src1_mul = (op == HTP_OP_RMS_NORM_MUL || op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool has_src2_add = (op == HTP_OP_RMS_NORM_MUL_ADD);
+    const bool is_row_bcast = has_src1_mul && ggml_is_vector(src1);
+    bool broadcast_src1     = false;
+    if (op == HTP_OP_RMS_NORM_MUL) {
+        const bool is_dim1_bcast = (src1->ne[1] == src0->ne[1] && ggml_is_matrix(src1) && !ggml_is_matrix(src0));
+        if (!is_row_bcast && !is_dim1_bcast && !ggml_are_same_shape(src0, src1)) {
+            return false;
+        }
+        broadcast_src1 = is_row_bcast || is_dim1_bcast;
+    } else if (op == HTP_OP_RMS_NORM_MUL_ADD) {
+        if (!is_row_bcast && !(src1->ne[1] == src0->ne[1] && ggml_is_matrix(src1))) {
+            return false;
+        }
+        broadcast_src1 = true;
     }
-    kparams->broadcast_weight   = broadcast_weight;
+    const uint32_t src1_nrows = broadcast_src1 ? (uint32_t) src1->ne[1] : 0;
+    kparams->broadcast_src1   = broadcast_src1;
 
-    const bool     src0_contig        = ggml_is_contiguous_1(src0);
-    const bool     src1_contig        = (has_weight && !broadcast_weight) ? ggml_is_contiguous_1(src1) : true;
+    const size_t   src0_data_row_size = (size_t) src0->ne[0] * src0_elem_size;
+    const uint32_t ne01               = (uint32_t) src0->ne[1];
+    const bool     src0_contig        = ggml_is_contiguous_1(src0) && (!has_src2_add || ggml_is_contiguous_1(src2));
+    const bool     src1_contig        = (has_src1_mul && !broadcast_src1) ? ggml_is_contiguous_1(src1) : true;
+    const bool     src0_slice_dma     = !src0_contig && !has_src2_add && (!has_src1_mul || broadcast_src1) &&
+                                        ne01 > 1 && src0->ne[2] > 1 && src0->ne[3] == 1 &&
+                                        src0->nb[1] == src0_data_row_size && (src0_data_row_size & 127) == 0;
     const uint32_t src0_nrows_per_hvx = (src0_nrows + n_hvx - 1) / n_hvx;
     const uint32_t min_block_rows     = (uint32_t) (std::max<size_t>(1, 2048 / dst_data_row_size));
-    uint32_t       max_block          = (src0_contig && src1_contig) ? src0_nrows : (uint32_t) src0->ne[1];
+    uint32_t       max_block          = ((src0_contig && src1_contig) || src0_slice_dma) ? src0_nrows : ne01;
     if (src0_nrows_per_hvx >= 2 * min_block_rows) {
         max_block = (std::min)(max_block, (std::max)(min_block_rows, src0_nrows_per_hvx / 4));
     }
+    if (src0_slice_dma && max_block > ne01) {
+        max_block = (max_block / ne01) * ne01;
+    }
 
-    kparams->src0_contig = src0_contig ? 1 : 0;
-    kparams->src1_contig = src1_contig ? 1 : 0;
+    kparams->src0_contig    = src0_contig ? 1 : 0;
+    kparams->src1_contig    = src1_contig ? 1 : 0;
+    kparams->src0_slice_dma = src0_slice_dma ? 1 : 0;
+
+    const size_t src1_elem_size = has_src1_mul ? ggml_type_size(src1->type) : sizeof(float);
+    const size_t src2_elem_size = has_src2_add ? ggml_type_size(src2->type) : sizeof(float);
 
     struct htp_unary_vtcm_layout L;
     uint32_t col_tile            = 0;
     uint32_t vtcm_row_per_hvx    = 0;
 
     htp_unary_solve_layout(&L, op, src0->ne[0], dst->ne[0],
-                           has_weight ? src1->ne[0] : 0,
-                           max_block, broadcast_weight, n_hvx, vtcm_size, elem_size,
+                           has_src1_mul ? src1->ne[0] : 0,
+                           max_block, broadcast_src1, src1_nrows, n_hvx, vtcm_size,
+                           src0_elem_size, dst_elem_size, src1_elem_size, src2_elem_size,
                            &col_tile, &vtcm_row_per_hvx);
 
     kparams->col_tile  = col_tile;
@@ -1660,17 +1817,6 @@ static bool htp_kparams_solve_unary_impl(
     return (col_tile > 0 || vtcm_row_per_hvx > 0) && L.total_bytes <= vtcm_size;
 }
 
-static bool htp_kparams_solve_unary(
-    const struct ggml_hexagon_session * sess,
-    const struct ggml_tensor * op,
-    struct htp_unary_kernel_params * kparams
-) {
-    const htp_op_code opcode = htp_op_remap(op);
-    const struct ggml_tensor * src0 = (opcode == HTP_OP_HADAMARD) ? op->src[1] : op->src[0];
-    const struct ggml_tensor * src1 = (opcode == HTP_OP_HADAMARD) ? nullptr    : op->src[1];
-    return htp_kparams_solve_unary_impl(sess, opcode, src0, src1, op, kparams);
-}
-
 bool htp_kparams_solve_rms_norm_mul(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
@@ -1678,17 +1824,18 @@ bool htp_kparams_solve_rms_norm_mul(
     const struct ggml_tensor * dst,
     struct htp_unary_kernel_params * kparams
 ) {
-    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL, src0, src1, dst, kparams);
+    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL, src0, src1, nullptr, dst, kparams);
 }
 
 bool htp_kparams_solve_rms_norm_mul_add(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * src0,
     const struct ggml_tensor * src1,
+    const struct ggml_tensor * src2,
     const struct ggml_tensor * dst,
     struct htp_unary_kernel_params * kparams
 ) {
-    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL_ADD, src0, src1, dst, kparams);
+    return htp_kparams_solve_unary_impl(sess, HTP_OP_RMS_NORM_MUL_ADD, src0, src1, src2, dst, kparams);
 }
 
 bool htp_kparams_solve_repeat_get_rows(
@@ -1714,13 +1861,13 @@ bool htp_kparams_solve_repeat_get_rows(
         return false;
     }
 
-    if (src0->type == dst->type) {
-        if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_I32 && src0->type != GGML_TYPE_F16) {
+    const bool tiled = ggml_hexagon_tensor_is_tiled(src0);
+
+    if (src0->type == GGML_TYPE_I32) {
+        if (dst->type != GGML_TYPE_I32 || tiled) {
             return false;
         }
-    } else if (src0->type == GGML_TYPE_I32) {
-        return false;
-    } else if (dst->type != GGML_TYPE_F32) {
+    } else if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
         return false;
     }
 
@@ -1733,8 +1880,7 @@ bool htp_kparams_solve_repeat_get_rows(
     const uint32_t ne12 = src1->ne[2];
     const uint32_t nr   = ne10 * ne11 * ne12;
 
-    const bool tiled = ggml_hexagon_tensor_is_tiled(src0);
-    const int  wtype = (tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
+    const int wtype = (tiled && (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16)) ? GGML_TYPE_F16 : src0->type;
 
     if (tiled) {
         kparams->kernel_type = HTP_GET_ROWS_KERNEL_TILED;
@@ -1753,7 +1899,7 @@ bool htp_kparams_solve_repeat_get_rows(
 
     struct htp_get_rows_vtcm_layout vtcm_layout = {};
     while (kparams->n_hvx > 0) {
-        htp_get_rows_vtcm_layout_build(&vtcm_layout, kparams->kernel_type, wtype, ne00, total_tasks, src1->type, kparams->n_hvx);
+        htp_get_rows_vtcm_layout_build(&vtcm_layout, kparams->kernel_type, wtype, dst->type, ne00, kparams->n_hvx);
         if (vtcm_layout.total_bytes <= vtcm_size) {
             break;
         }
@@ -1761,7 +1907,7 @@ bool htp_kparams_solve_repeat_get_rows(
     }
 
     if (kparams->n_hvx == 0 && total_tasks > 0) {
-        htp_get_rows_vtcm_layout_build(&vtcm_layout, kparams->kernel_type, wtype, ne00, total_tasks, src1->type, 1);
+        htp_get_rows_vtcm_layout_build(&vtcm_layout, kparams->kernel_type, wtype, dst->type, ne00, 1);
     }
 
     kparams->vtcm_size   = (total_tasks == 0) ? 0 : vtcm_layout.total_bytes;
@@ -1800,7 +1946,7 @@ static bool htp_kparams_solve_set_rows(
     if (dst->type == GGML_TYPE_Q8_0 && src0->ne[0] < 32) {
         return false;
     }
-    if (src0->type != GGML_TYPE_F32) {
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) {
         return false;
     }
     if (src1->type != GGML_TYPE_I32 && src1->type != GGML_TYPE_I64) {
@@ -1816,7 +1962,7 @@ static bool htp_kparams_solve_set_rows(
     kparams->total_tasks = nr;
 
     struct htp_set_rows_vtcm_layout vtcm_layout;
-    htp_set_rows_vtcm_layout_build(&vtcm_layout, dst->type, src0->ne[0], kparams->n_hvx);
+    htp_set_rows_vtcm_layout_build(&vtcm_layout, src0->type, dst->type, src0->ne[0], kparams->n_hvx);
     kparams->vtcm_size = vtcm_layout.total_bytes;
 
     return vtcm_layout.total_bytes <= htp_session_vtcm_size(sess);
@@ -1834,10 +1980,11 @@ static bool htp_kparams_solve_softmax(
     const struct ggml_tensor * src2 = op->src[2];
     const struct ggml_tensor * dst  = op;
 
-    if (src2) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
         return false;
     }
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 || src0->ne[2] > 512) {
+    if (src0->ne[2] > 512) {
         return false;
     }
     if (src1) {
@@ -1848,11 +1995,19 @@ static bool htp_kparams_solve_softmax(
             return false;
         }
     }
+    if (src2) {
+        if (src2->type != GGML_TYPE_F32 ||
+            src2->ne[0] != src0->ne[2] ||
+            src2->ne[1] != 1 || src2->ne[2] != 1 || src2->ne[3] != 1 ||
+            !ggml_is_contiguous(src2)) {
+            return false;
+        }
+    }
     if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
         return false;
     }
 
-    const uint32_t src0_nrows          = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t src0_nrows          = ggml_nrows(src0);
     const size_t   dst_data_row_size   = op->ne[0] * ggml_type_size(op->type);
     const uint32_t min_rows_per_hvx    = (uint32_t) (std::max<size_t>(1, (128 + dst_data_row_size - 1) / dst_data_row_size));
     const uint32_t max_hvx             = (std::max)(1u, src0_nrows / min_rows_per_hvx);
@@ -1879,14 +2034,26 @@ static bool htp_kparams_solve_softmax(
         kparams->m1 = 1.0f;
     }
 
+    kparams->src0_f16 = (src0->type == GGML_TYPE_F16) ? 1 : 0;
+    kparams->dst_f16  = (dst->type  == GGML_TYPE_F16) ? 1 : 0;
     kparams->use_src1 = (src1 != nullptr) ? 1 : 0;
     kparams->use_f16  = (src1 != nullptr && src1->type == GGML_TYPE_F16) ? 1 : 0;
+    kparams->use_src2 = (src2 != nullptr) ? 1 : 0;
 
     const uint32_t ne00 = src0->ne[0];
     const uint32_t ne10 = src1 ? src1->ne[0] : 1;
 
     struct htp_softmax_vtcm_layout layout;
-    htp_softmax_vtcm_layout_build(&layout, ne00, ne10, kparams->use_src1 != 0, kparams->use_f16 != 0, n_hvx);
+    htp_softmax_vtcm_layout_build(&layout,
+                                  ne00,
+                                  ne10,
+                                  n_head,
+                                  kparams->src0_f16 != 0,
+                                  kparams->dst_f16 != 0,
+                                  kparams->use_src1 != 0,
+                                  kparams->use_f16 != 0,
+                                  kparams->use_src2 != 0,
+                                  n_hvx);
     if (layout.total_bytes > htp_session_vtcm_size(sess)) {
         return false;
     }
@@ -1894,12 +2061,22 @@ static bool htp_kparams_solve_softmax(
     kparams->n_hvx     = n_hvx;
     kparams->vtcm_size = (uint32_t) layout.total_bytes;
 
-    if (!kparams->use_src1) {
-        kparams->kernel_type = HTP_SOFTMAX_KERNEL_NOMASK;
-    } else if (kparams->use_f16) {
-        kparams->kernel_type = HTP_SOFTMAX_KERNEL_MASK_F16;
+    if (kparams->src0_f16) {
+        if (!kparams->use_src1) {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_SRC16_NOMASK;
+        } else if (kparams->use_f16) {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_SRC16_MASK_F16;
+        } else {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_SRC16_MASK_F32;
+        }
     } else {
-        kparams->kernel_type = HTP_SOFTMAX_KERNEL_MASK_F32;
+        if (!kparams->use_src1) {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_NOMASK;
+        } else if (kparams->use_f16) {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_MASK_F16;
+        } else {
+            kparams->kernel_type = HTP_SOFTMAX_KERNEL_MASK_F32;
+        }
     }
 
     if (src0->ne[1] > 0) kparams->div_ne01 = init_fastdiv_values(src0->ne[1]);
@@ -1931,14 +2108,16 @@ static bool htp_kparams_solve_rope(
     if (!ggml_are_same_shape(src0, dst)) {
         return false;
     }
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_I32) {
+    const bool is_f32 = (src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32);
+    const bool is_f16 = (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16);
+    if ((!is_f32 && !is_f16) || src1->type != GGML_TYPE_I32) {
         return false;
     }
     if (src0->ne[0] <= 0) {
         return false;
     }
 
-    const uint32_t src0_nrows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t src0_nrows = ggml_nrows(src0);
     if (src0_nrows == 0) {
         return false;
     }
@@ -1992,8 +2171,9 @@ static bool htp_kparams_solve_rope(
         }
     }
 
-    if (src0->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float) ||
-        src0->nb[1] < src0->ne[0] * sizeof(float) || dst->nb[1] < dst->ne[0] * sizeof(float)) {
+    const size_t elem_size = is_f16 ? sizeof(ggml_fp16_t) : sizeof(float);
+    if (src0->nb[0] != elem_size || dst->nb[0] != elem_size ||
+        src0->nb[1] < src0->ne[0] * elem_size || dst->nb[1] < dst->ne[0] * elem_size) {
         return false;
     }
 
@@ -2001,15 +2181,29 @@ static bool htp_kparams_solve_rope(
     const uint32_t n_freq_factors = src2 ? (uint32_t) src2->ne[0] : 0;
 
     struct htp_rope_vtcm_layout layout;
-    htp_rope_vtcm_layout_build(&layout, src0->ne[0], n_hvx, n_freq_factors);
+    htp_rope_vtcm_layout_build(&layout, src0->ne[0], elem_size, n_hvx, n_freq_factors);
     if (layout.total_bytes > htp_session_vtcm_size(sess)) {
         return false;
     }
 
-    kparams->n_hvx        = n_hvx;
-    kparams->vtcm_size    = (uint32_t) layout.total_bytes;
-    kparams->div_ne2_ne1  = init_fastdiv_values(dst->ne[2] * dst->ne[1]);
-    kparams->div_ne1      = init_fastdiv_values(dst->ne[1]);
+    const int n_ctx_orig = op_params[4];
+    float beta_fast, beta_slow;
+    memcpy(&beta_fast, op_params + 9,  sizeof(float));
+    memcpy(&beta_slow, op_params + 10, sizeof(float));
+
+    kparams->n_hvx          = n_hvx;
+    kparams->vtcm_size      = (uint32_t) layout.total_bytes;
+    kparams->theta_scale    = (n_dims > 0) ? std::pow(freq_base, -2.0f / n_dims) : 0.0f;
+    kparams->theta_scale_32 = (n_dims > 0) ? std::pow(freq_base, -64.0f / n_dims) : 0.0f;
+    {
+        const float inv_2log_fb = 1.0f / (2.0f * std::log(freq_base));
+        const float start       = std::floor(n_dims * std::log(n_ctx_orig / (beta_fast * 2.0f * (float) M_PI)) * inv_2log_fb);
+        const float end         = std::ceil(n_dims * std::log(n_ctx_orig / (beta_slow * 2.0f * (float) M_PI)) * inv_2log_fb);
+        kparams->corr_dims[0]   = std::max(0.0f, start);
+        kparams->corr_dims[1]   = std::min((float) (n_dims - 1), end);
+    }
+    kparams->div_ne2_ne1 = init_fastdiv_values(dst->ne[2] * dst->ne[1]);
+    kparams->div_ne1     = init_fastdiv_values(dst->ne[1]);
 
     return true;
 }
@@ -2024,42 +2218,173 @@ static bool htp_kparams_solve_sum_rows(
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32) {
+    const uint32_t ne00         = src0->ne[0];
+    const uint32_t src0_nrows   = ggml_nrows(src0);
+    const uint32_t max_hvx_sess = htp_session_n_hvx(sess);
+
+    if (op->op == GGML_OP_SUM_ROWS) {
+        if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+            (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
+            return false;
+        }
+        if (dst->ne[0] != 1 ||
+            dst->ne[1] != src0->ne[1] ||
+            dst->ne[2] != src0->ne[2] ||
+            dst->ne[3] != src0->ne[3]) {
+            return false;
+        }
+        if (!ggml_is_contiguous_rows(src0) || !ggml_is_contiguous(dst)) {
+            return false;
+        }
+
+        const size_t src0_elem_size        = ggml_type_size(src0->type);
+        const size_t dst_elem_size         = ggml_type_size(dst->type);
+        const size_t src0_data_row_size    = (size_t) ne00 * src0_elem_size;
+        const size_t src0_row_size_aligned = hex_round_up(src0_data_row_size, 128);
+        const size_t vtcm_size             = htp_session_vtcm_size(sess);
+
+        const uint32_t min_rpt = (src0_data_row_size < 1024) ? 32 : 1;
+        const uint32_t max_hvx = (std::max)(1u, src0_nrows / min_rpt);
+        uint32_t       n_hvx   = (std::min)(max_hvx_sess, max_hvx);
+
+        while (n_hvx > 1 && 2 * (src0_row_size_aligned + 128) * n_hvx > vtcm_size) {
+            n_hvx--;
+        }
+        if (n_hvx == 0 || 2 * (src0_row_size_aligned + 128) * n_hvx > vtcm_size) {
+            return false;
+        }
+
+        const bool can_2d_dma  = (src0_nrows > 1) &&
+                                 (src0->nb[1] >= src0_data_row_size);
+        const bool src0_contig = can_2d_dma && ggml_is_contiguous_1(src0);
+
+        const uint32_t src0_nrows_per_hvx = (src0_nrows + n_hvx - 1) / n_hvx;
+        const uint32_t min_block_rows     = (uint32_t) (std::max<size_t>(1, 2048 / src0_data_row_size));
+        uint32_t       max_block          = !can_2d_dma ? 1u : (src0_contig ? src0_nrows : (uint32_t) src0->ne[1]);
+        if (max_block > 1 && src0_nrows_per_hvx >= 2 * min_block_rows) {
+            max_block = (std::min)(max_block, (std::max)(min_block_rows, src0_nrows_per_hvx / 4));
+        }
+        max_block = (std::min)(max_block, 512u);
+        max_block = (std::max)(max_block, 1u);
+
+        const size_t per_hvx_budget = vtcm_size / (2 * n_hvx);
+        uint32_t block = (per_hvx_budget > 128)
+            ? (uint32_t) ((per_hvx_budget - 128) / (src0_row_size_aligned + dst_elem_size))
+            : 1u;
+        block = (std::min)(block, max_block);
+        block = (std::max)(block, 1u);
+
+        struct htp_sum_rows_vtcm_layout L;
+        htp_sum_rows_vtcm_layout_build(&L, src0_data_row_size, dst_elem_size, block, n_hvx);
+        while (block > 1 && L.total_bytes > vtcm_size) {
+            block--;
+            htp_sum_rows_vtcm_layout_build(&L, src0_data_row_size, dst_elem_size, block, n_hvx);
+        }
+        if (L.total_bytes > vtcm_size) {
+            return false;
+        }
+
+        kparams->n_hvx       = n_hvx;
+        kparams->block       = block;
+        kparams->src0_contig = src0_contig ? 1 : 0;
+        kparams->vtcm_size   = (uint32_t) L.total_bytes;
+        kparams->div_ne01    = init_fastdiv_values((uint32_t) src0->ne[1]);
+        kparams->div_ne02    = init_fastdiv_values((uint32_t) src0->ne[2]);
+        kparams->div_ne012   = init_fastdiv_values((uint32_t) (src0->ne[1] * src0->ne[2]));
+
+        return true;
+    }
+
+    if (src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) {
         return false;
     }
     if (op->op == GGML_OP_ARGMAX) {
         if (dst->type != GGML_TYPE_I32) {
             return false;
         }
-    } else if (dst->type != GGML_TYPE_F32) {
+    } else if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16) {
         return false;
     }
     if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
         return false;
     }
 
-    const uint32_t ne00             = src0->ne[0];
-    const uint32_t src0_nrows       = src0->ne[1] * src0->ne[2] * src0->ne[3];
-    const uint32_t max_hvx_sess     = htp_session_n_hvx(sess);
+    const size_t   vtcm_size      = htp_session_vtcm_size(sess);
+    const size_t   src0_elem_size = ggml_type_size(src0->type);
+    const uint32_t elems_per_vec  = (uint32_t) (128 / src0_elem_size);
 
     if (op->op == GGML_OP_SUM) {
         const uint32_t total_elems = (uint32_t) ggml_nelements(src0);
-        const uint32_t n_hvx       = (total_elems >= 1024) ? max_hvx_sess : 1;
-        const uint32_t raw_chunk   = (total_elems + n_hvx - 1) / n_hvx;
+        uint32_t       n_hvx       = (total_elems >= 1024) ? max_hvx_sess : 1;
+        uint32_t       chunk_elems = (std::min)(4096u, (uint32_t) hex_round_up((std::max)(1u, total_elems), elems_per_vec));
+
+        struct htp_sum_vtcm_layout L;
+        htp_sum_vtcm_layout_build(&L, chunk_elems, src0_elem_size, n_hvx);
+        while (L.total_bytes > vtcm_size && chunk_elems > elems_per_vec) {
+            chunk_elems = (std::max)(elems_per_vec, (chunk_elems / 2) & ~(elems_per_vec - 1));
+            htp_sum_vtcm_layout_build(&L, chunk_elems, src0_elem_size, n_hvx);
+        }
+        while (L.total_bytes > vtcm_size && n_hvx > 1) {
+            n_hvx--;
+            htp_sum_vtcm_layout_build(&L, chunk_elems, src0_elem_size, n_hvx);
+        }
+        if (L.total_bytes > vtcm_size) {
+            return false;
+        }
+
+        const uint32_t raw_chunk = (total_elems + n_hvx - 1) / n_hvx;
 
         kparams->n_hvx         = n_hvx;
-        kparams->elems_per_hvx = hex_round_up(raw_chunk, 32);
+        kparams->elems_per_hvx = hex_round_up(raw_chunk, elems_per_vec);
+        kparams->chunk_elems   = chunk_elems;
+        kparams->vtcm_size     = (uint32_t) L.total_bytes;
     } else if (op->op == GGML_OP_ARGMAX && src0_nrows <= 1) {
-        const uint32_t n_hvx     = (ne00 >= 1024) ? max_hvx_sess : 1;
+        uint32_t n_hvx       = (ne00 >= 1024) ? max_hvx_sess : 1;
+        uint32_t chunk_elems = (std::min)(4096u, (uint32_t) hex_round_up((std::max)(1u, ne00), elems_per_vec));
+
+        struct htp_sum_vtcm_layout L;
+        htp_sum_vtcm_layout_build(&L, chunk_elems, src0_elem_size, n_hvx);
+        while (L.total_bytes > vtcm_size && chunk_elems > elems_per_vec) {
+            chunk_elems = (std::max)(elems_per_vec, (chunk_elems / 2) & ~(elems_per_vec - 1));
+            htp_sum_vtcm_layout_build(&L, chunk_elems, src0_elem_size, n_hvx);
+        }
+        while (L.total_bytes > vtcm_size && n_hvx > 1) {
+            n_hvx--;
+            htp_sum_vtcm_layout_build(&L, chunk_elems, src0_elem_size, n_hvx);
+        }
+        if (L.total_bytes > vtcm_size) {
+            return false;
+        }
+
         const uint32_t raw_chunk = (ne00 + n_hvx - 1) / n_hvx;
 
         kparams->n_hvx         = n_hvx;
-        kparams->elems_per_hvx = hex_round_up(raw_chunk, 32);
+        kparams->elems_per_hvx = hex_round_up(raw_chunk, elems_per_vec);
+        kparams->chunk_elems   = chunk_elems;
+        kparams->vtcm_size     = (uint32_t) L.total_bytes;
     } else {
-        const uint32_t min_rpt     = (src0->nb[1] < 1024) ? 32 : 1;
-        const uint32_t max_hvx     = (std::max)(1u, src0_nrows / min_rpt);
+        const uint32_t min_rpt = (src0->nb[1] < 1024) ? 32 : 1;
+        const uint32_t max_hvx = (std::max)(1u, src0_nrows / min_rpt);
+        uint32_t       n_hvx   = (std::min)(max_hvx_sess, max_hvx);
+        uint32_t       chunk_elems = (std::min)(4096u, (uint32_t) hex_round_up((std::max)(1u, ne00), elems_per_vec));
 
-        kparams->n_hvx = (std::min)(max_hvx_sess, max_hvx);
+        struct htp_sum_vtcm_layout L;
+        htp_sum_vtcm_layout_build(&L, chunk_elems, src0_elem_size, n_hvx);
+        while (L.total_bytes > vtcm_size && chunk_elems > elems_per_vec) {
+            chunk_elems = (std::max)(elems_per_vec, (chunk_elems / 2) & ~(elems_per_vec - 1));
+            htp_sum_vtcm_layout_build(&L, chunk_elems, src0_elem_size, n_hvx);
+        }
+        while (L.total_bytes > vtcm_size && n_hvx > 1) {
+            n_hvx--;
+            htp_sum_vtcm_layout_build(&L, chunk_elems, src0_elem_size, n_hvx);
+        }
+        if (L.total_bytes > vtcm_size) {
+            return false;
+        }
+
+        kparams->n_hvx       = n_hvx;
+        kparams->chunk_elems = chunk_elems;
+        kparams->vtcm_size   = (uint32_t) L.total_bytes;
     }
 
     return true;
@@ -2099,7 +2424,7 @@ bool htp_kparams_solve_unary_mul_glu(
     }
 
     const size_t   dst_row_size        = dst->ne[0] * elem_size;
-    const uint32_t src0_nrows          = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t src0_nrows          = ggml_nrows(src0);
     const uint32_t min_rows_per_hvx    = (uint32_t) (std::max<size_t>(1, (128 + dst_row_size - 1) / dst_row_size));
     const uint32_t max_hvx             = (std::max)(1u, src0_nrows / min_rows_per_hvx);
     const uint32_t n_hvx               = (std::min)(htp_session_n_hvx(sess), max_hvx);
@@ -2127,14 +2452,6 @@ bool htp_kparams_solve_unary_mul_glu(
     return true;
 }
 
-static bool htp_kparams_solve_glu(
-    const struct ggml_hexagon_session * sess,
-    const struct ggml_tensor * op,
-    struct htp_glu_kernel_params * kparams
-) {
-    return htp_kparams_solve_unary_mul_glu(sess, htp_op_remap(op), op->src[0], op->src[1], op, kparams);
-}
-
 static bool htp_kparams_solve_repeat(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * op,
@@ -2145,24 +2462,97 @@ static bool htp_kparams_solve_repeat(
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || src0->type != dst->type) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        (dst->type != src0->type && !(src0->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F16))) {
         return false;
     }
+    const size_t src_elem_size = ggml_type_size(src0->type);
+    const size_t dst_elem_size = ggml_type_size(dst->type);
+
     if (!ggml_can_repeat(src0, dst) || ggml_is_transposed(src0) || ggml_is_transposed(dst)) {
         return false;
     }
+    if (src0->nb[0] != src_elem_size || dst->nb[0] != dst_elem_size) {
+        return false;
+    }
 
-    const uint32_t total_dst_rows      = dst->ne[1] * dst->ne[2] * dst->ne[3];
-    const size_t   dst_row_size        = dst->ne[0] * ggml_type_size(dst->type);
+    const uint32_t ne00                = (uint32_t) src0->ne[0];
+    const uint32_t nr0                 = (uint32_t) (dst->ne[0] / src0->ne[0]);
+    const uint32_t total_dst_rows      = (uint32_t) ggml_nrows(dst);
+    const size_t   src_row_size        = (size_t) ne00 * src_elem_size;
+    const size_t   dst_row_size        = (size_t) dst->ne[0] * dst_elem_size;
     const uint32_t min_rows_per_hvx    = (uint32_t) (std::max<size_t>(1, (128 + dst_row_size - 1) / dst_row_size));
     const uint32_t max_hvx             = (std::max)(1u, total_dst_rows / min_rows_per_hvx);
-    const uint32_t n_hvx               = (std::min)(htp_session_n_hvx(sess), max_hvx);
+    const uint32_t orig_n_hvx          = (std::min)(htp_session_n_hvx(sess), max_hvx);
+    const size_t   vtcm_size           = htp_session_vtcm_size(sess);
 
-    kparams->n_hvx     = n_hvx;
-    kparams->nr0       = dst->ne[0] / src0->ne[0];
-    kparams->nr1       = dst->ne[1] / src0->ne[1];
-    kparams->nr2       = dst->ne[2] / src0->ne[2];
-    kparams->nr3       = dst->ne[3] / src0->ne[3];
+    uint32_t n_hvx      = orig_n_hvx;
+    uint32_t tile_elems = ne00;
+    uint32_t dst_reps   = nr0;
+    uint32_t pipelined  = 1;
+
+    struct htp_repeat_vtcm_layout L;
+    htp_repeat_vtcm_layout_build(&L, src_row_size, dst_row_size, 2, n_hvx);
+    while (L.total_bytes > vtcm_size && n_hvx > 1) {
+        n_hvx--;
+        htp_repeat_vtcm_layout_build(&L, src_row_size, dst_row_size, 2, n_hvx);
+    }
+
+    if (L.total_bytes > vtcm_size) {
+        // Fallback to single-buffered row or column-tiled DMA
+        pipelined = 0;
+        n_hvx     = orig_n_hvx;
+        const size_t dst_unit_bytes = (size_t) ne00 * dst_elem_size;
+
+        htp_repeat_vtcm_layout_build(&L, src_row_size, dst_unit_bytes, 1, n_hvx);
+        while (L.total_bytes > vtcm_size && n_hvx > 1) {
+            n_hvx--;
+            htp_repeat_vtcm_layout_build(&L, src_row_size, dst_unit_bytes, 1, n_hvx);
+        }
+
+        if (L.total_bytes <= vtcm_size) {
+            tile_elems = ne00;
+            const size_t per_hvx_budget = vtcm_size / n_hvx;
+            const size_t dst_budget     = per_hvx_budget > L.src_buf_bytes ? (per_hvx_budget - L.src_buf_bytes) : dst_unit_bytes;
+            dst_reps = (uint32_t) (std::min<size_t>(nr0, (std::max<size_t>(1, dst_budget / dst_unit_bytes))));
+            htp_repeat_vtcm_layout_build(&L, src_row_size, (size_t) dst_reps * dst_unit_bytes, 1, n_hvx);
+            while (L.total_bytes > vtcm_size && dst_reps > 1) {
+                dst_reps = (std::max)(1u, dst_reps / 2);
+                htp_repeat_vtcm_layout_build(&L, src_row_size, (size_t) dst_reps * dst_unit_bytes, 1, n_hvx);
+            }
+        } else {
+            // Single src row exceeds VTCM: column-tile along dim0
+            dst_reps   = 1;
+            n_hvx      = orig_n_hvx;
+            tile_elems = (std::min)(ne00, 4096u);
+            if (tile_elems > 64) {
+                tile_elems = (tile_elems / 64) * 64;
+            }
+            htp_repeat_vtcm_layout_build(&L, (size_t) tile_elems * src_elem_size, (size_t) tile_elems * dst_elem_size, 1, n_hvx);
+            while (L.total_bytes > vtcm_size && tile_elems > 64) {
+                tile_elems = (std::max)(64u, ((tile_elems / 2) / 64) * 64);
+                htp_repeat_vtcm_layout_build(&L, (size_t) tile_elems * src_elem_size, (size_t) tile_elems * dst_elem_size, 1, n_hvx);
+            }
+            while (L.total_bytes > vtcm_size && n_hvx > 1) {
+                n_hvx--;
+                htp_repeat_vtcm_layout_build(&L, (size_t) tile_elems * src_elem_size, (size_t) tile_elems * dst_elem_size, 1, n_hvx);
+            }
+        }
+    }
+
+    if (L.total_bytes > vtcm_size) {
+        return false;
+    }
+
+    kparams->n_hvx      = n_hvx;
+    kparams->nr0        = nr0;
+    kparams->nr1        = dst->ne[1] / src0->ne[1];
+    kparams->nr2        = dst->ne[2] / src0->ne[2];
+    kparams->nr3        = dst->ne[3] / src0->ne[3];
+    kparams->tile_elems = tile_elems;
+    kparams->dst_reps   = dst_reps;
+    kparams->pipelined  = pipelined;
+    kparams->vtcm_size  = (uint32_t) L.total_bytes;
 
     kparams->div_ne1  = init_fastdiv_values(dst->ne[1]);
     kparams->div_ne12 = init_fastdiv_values(dst->ne[1] * dst->ne[2]);
@@ -2175,16 +2565,17 @@ static bool htp_kparams_solve_repeat(
 
 static bool htp_kparams_solve_ssm_conv(
     const struct ggml_hexagon_session * sess,
-    const struct ggml_tensor * op,
+    const struct ggml_tensor * src0,
+    const struct ggml_tensor * src1,
+    const struct ggml_tensor * dst,
     struct htp_ssm_conv_kernel_params * kparams
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    const struct ggml_tensor * src0 = op->src[0];
-    const struct ggml_tensor * src1 = op->src[1];
-    const struct ggml_tensor * dst  = op;
-
-    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    const auto is_valid_type = [](ggml_type t) {
+        return t == GGML_TYPE_F32 || t == GGML_TYPE_F16;
+    };
+    if (!is_valid_type(src0->type) || !is_valid_type(src1->type) || !is_valid_type(dst->type)) {
         return false;
     }
     if (src0->ne[3] != 1 || src1->ne[2] != 1 || src1->ne[3] != 1 || dst->ne[3] != 1) {
@@ -2208,10 +2599,23 @@ static bool htp_kparams_solve_ssm_conv(
     if (dst->ne[0] != d_inner_64 || dst->ne[1] != n_t_64 || dst->ne[2] != n_s_64) {
         return false;
     }
-    if (src0->nb[0] != sizeof(float) || src1->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
+
+    const size_t src0_elem_size = ggml_type_size(src0->type);
+    const size_t src1_elem_size = ggml_type_size(src1->type);
+    const size_t dst_elem_size  = ggml_type_size(dst->type);
+
+    if (src0->nb[0] != src0_elem_size || src1->nb[0] != src1_elem_size || dst->nb[0] != dst_elem_size) {
         return false;
     }
-    if (src0->nb[1] != src0->ne[0] * sizeof(float) || src1->nb[1] != src1->ne[0] * sizeof(float)) {
+    if (src1->nb[1] != (size_t) src1->ne[0] * src1_elem_size) {
+        return false;
+    }
+    if ((d_inner_64 > 1 && src0->nb[1] < (size_t) src0->ne[0] * src0_elem_size) ||
+        (n_s_64 > 1 && src0->nb[2] < (size_t) d_inner_64 * src0->nb[1])) {
+        return false;
+    }
+    if ((n_t_64 > 1 && dst->nb[1] < (size_t) d_inner_64 * dst_elem_size) ||
+        (n_s_64 > 1 && dst->nb[2] < (size_t) n_t_64 * dst->nb[1])) {
         return false;
     }
 
@@ -2240,7 +2644,7 @@ static bool htp_kparams_solve_ssm_conv(
         const uint32_t src1_T_bytes      = hex_round_up(d_conv * d_inner_per_hvx * sizeof(float), 128);
         const uint32_t vtcm_src1_per_hvx = src1_raw_bytes + src1_T_bytes;
 
-        const size_t   vtcm_budget     = (vtcm_size > 0 ? vtcm_size / n_hvx : (1024 * 1024));
+        const size_t   vtcm_budget     = vtcm_size / n_hvx;
         const uint32_t src0_block_T    = hex_round_up(ncs * 32 * sizeof(float), 128);
         const size_t   fixed_bytes     = vtcm_src1_per_hvx + src0_block_T;
         const size_t   avail_for_tiles = vtcm_budget > fixed_bytes ? vtcm_budget - fixed_bytes : (128 * 1024);
@@ -2249,7 +2653,7 @@ static bool htp_kparams_solve_ssm_conv(
         target_max_tile          = (std::max)(target_max_tile, 32u);
         target_max_tile          = (std::min)(target_max_tile, 128u);
 
-        const size_t raw_stride_bytes = ncs * sizeof(float) + sizeof(float);
+        const size_t raw_stride_bytes = htp_ssm_conv_raw_stride_bytes(ncs, src0_elem_size);
         uint32_t d_inner_tile = (uint32_t) (avail_for_tiles / (2 * (raw_stride_bytes + n_t * sizeof(float))));
         d_inner_tile          = (d_inner_tile / 32) * 32;
         if (d_inner_tile == 0) {
@@ -2265,12 +2669,137 @@ static bool htp_kparams_solve_ssm_conv(
     }
 
     struct htp_ssm_conv_vtcm_layout L;
-    htp_ssm_conv_vtcm_layout_build(&L, d_inner_per_hvx, d_conv, n_t, kparams->d_inner_tile, n_hvx);
+    htp_ssm_conv_vtcm_layout_build(&L, d_inner_per_hvx, d_conv, n_t, kparams->d_inner_tile, n_hvx, src0_elem_size);
 
     kparams->vtcm_size        = (uint32_t) L.total_bytes;
     kparams->div_d_inner_tile = init_fastdiv_values(kparams->d_inner_tile);
 
     return L.total_bytes <= vtcm_size;
+}
+
+static bool htp_kparams_solve_ssm_conv_token_major(
+    const struct ggml_hexagon_session * sess,
+    const struct ggml_tensor * state,
+    const struct ggml_tensor * weight,
+    const struct ggml_tensor * x,
+    const struct ggml_tensor * dst,
+    const struct ggml_tensor * dst_state,
+    struct htp_ssm_conv_kernel_params * kparams
+) {
+    memset(kparams, 0, sizeof(*kparams));
+
+    const auto is_valid_type = [](ggml_type t) {
+        return t == GGML_TYPE_F32 || t == GGML_TYPE_F16;
+    };
+    if (!is_valid_type(state->type) || !is_valid_type(weight->type) ||
+        !is_valid_type(x->type) || !is_valid_type(dst->type)) {
+        return false;
+    }
+    if (dst_state && !is_valid_type(dst_state->type)) {
+        return false;
+    }
+    if (state->ne[3] != 1 || weight->ne[2] != 1 || weight->ne[3] != 1 ||
+        x->ne[3] != 1 || dst->ne[3] != 1) {
+        return false;
+    }
+
+    const int64_t d_conv_64  = weight->ne[0];
+    const int64_t d_inner_64 = weight->ne[1];
+    const int64_t n_t_64     = dst->ne[1];
+    const int64_t n_s_64     = dst->ne[2];
+    const int64_t S_64       = d_conv_64 - 1;
+
+    if (d_conv_64 < 2 || d_conv_64 > 32 || d_inner_64 <= 0 || n_t_64 <= 0 || n_s_64 <= 0) {
+        return false;
+    }
+    if (state->ne[0] != S_64 || state->ne[1] != d_inner_64 || state->ne[2] != n_s_64) {
+        return false;
+    }
+    if (x->ne[0] != d_inner_64 || x->ne[1] != n_t_64 || x->ne[2] != n_s_64) {
+        return false;
+    }
+    if (dst->ne[0] != d_inner_64) {
+        return false;
+    }
+
+    const size_t state_elem_size  = ggml_type_size(state->type);
+    const size_t weight_elem_size = ggml_type_size(weight->type);
+    const size_t x_elem_size      = ggml_type_size(x->type);
+    const size_t dst_elem_size    = ggml_type_size(dst->type);
+
+    if (state->nb[0] != state_elem_size || weight->nb[0] != weight_elem_size ||
+        x->nb[0] != x_elem_size || dst->nb[0] != dst_elem_size) {
+        return false;
+    }
+    if (weight->nb[1] != (size_t) d_conv_64 * weight_elem_size) {
+        return false;
+    }
+    if ((d_inner_64 > 1 && state->nb[1] != (size_t) S_64 * state_elem_size) ||
+        (n_s_64 > 1 && state->nb[2] < (size_t) d_inner_64 * state->nb[1])) {
+        return false;
+    }
+    if ((n_t_64 > 1 && x->nb[1] < (size_t) d_inner_64 * x_elem_size) ||
+        (n_s_64 > 1 && x->nb[2] < (size_t) n_t_64 * x->nb[1])) {
+        return false;
+    }
+    if ((n_t_64 > 1 && dst->nb[1] < (size_t) d_inner_64 * dst_elem_size) ||
+        (n_s_64 > 1 && dst->nb[2] < (size_t) n_t_64 * dst->nb[1])) {
+        return false;
+    }
+
+    if (dst_state) {
+        const size_t dst_state_elem_size = ggml_type_size(dst_state->type);
+        if (dst_state->ne[0] != S_64 * d_inner_64 || dst_state->ne[1] != n_s_64 ||
+            dst_state->ne[2] != 1 || dst_state->ne[3] != 1 ||
+            dst_state->nb[0] != dst_state_elem_size ||
+            (n_s_64 > 1 && dst_state->nb[1] < (size_t) S_64 * d_inner_64 * dst_state_elem_size)) {
+            return false;
+        }
+    }
+
+    const uint32_t d_conv  = (uint32_t) d_conv_64;
+    const uint32_t d_inner = (uint32_t) d_inner_64;
+    const uint32_t n_t     = (uint32_t) n_t_64;
+    const uint32_t n_s     = (uint32_t) n_s_64;
+
+    const uint32_t n_hvx     = (std::min)(htp_session_n_hvx(sess), (d_inner + 31) / 32);
+    const size_t   vtcm_size = htp_session_vtcm_size(sess);
+
+    const uint32_t raw_rpt         = (d_inner + n_hvx - 1) / n_hvx;
+    const uint32_t d_inner_per_hvx = hex_round_up(raw_rpt, 32);
+
+    uint32_t d_inner_tile = hex_round_up(d_inner_per_hvx, 64);
+    uint32_t n_t_tile     = (std::min)(n_t, 64u);
+
+    struct htp_ssm_conv_vtcm_layout L;
+    while (true) {
+        htp_ssm_conv_token_vtcm_layout_build(&L, d_inner_per_hvx, d_conv, n_t_tile, d_inner_tile, n_hvx, x_elem_size, dst_elem_size);
+        if (L.total_bytes <= vtcm_size) {
+            break;
+        }
+        if (n_t_tile > 8) {
+            n_t_tile /= 2;
+        } else if (d_inner_tile > 64) {
+            d_inner_tile = hex_round_up(d_inner_tile / 2, 64);
+        } else if (n_t_tile > 1) {
+            n_t_tile /= 2;
+        } else {
+            return false;
+        }
+    }
+
+    kparams->n_hvx            = n_hvx;
+    kparams->d_conv           = d_conv;
+    kparams->d_inner          = d_inner;
+    kparams->n_t              = n_t;
+    kparams->n_s              = n_s;
+    kparams->d_inner_tile     = d_inner_tile;
+    kparams->vtcm_size        = (uint32_t) L.total_bytes;
+    kparams->token_major      = 1;
+    kparams->n_t_tile         = n_t_tile;
+    kparams->n_t_blocks       = (n_t + n_t_tile - 1) / n_t_tile;
+
+    return true;
 }
 
 static bool htp_kparams_solve_ssm_scan(
@@ -2430,15 +2959,15 @@ static bool htp_kparams_solve_sort(
     const struct ggml_tensor * dst  = op;
     const bool is_top_k             = (op->op == GGML_OP_TOP_K);
 
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_I32) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || dst->type != GGML_TYPE_I32) {
         return false;
     }
 
-    const uint32_t total_rows    = src0->ne[1] * src0->ne[2] * src0->ne[3];
+    const uint32_t total_rows    = ggml_nrows(src0);
     const uint32_t ne00          = src0->ne[0];
     const uint32_t k             = dst->ne[0];
-    const uint32_t n_hvx_max     = htp_session_n_hvx(sess) > 0 ? htp_session_n_hvx(sess) : 4;
-    const size_t   vtcm_budget   = htp_session_vtcm_size(sess) > 0 ? htp_session_vtcm_size(sess) : (8 * 1024 * 1024);
+    const uint32_t n_hvx_max     = htp_session_n_hvx(sess);
+    const size_t   vtcm_budget   = htp_session_vtcm_size(sess);
 
     int32_t order = GGML_SORT_ORDER_DESC;
     if (!is_top_k) {
@@ -2524,12 +3053,10 @@ static bool htp_kparams_solve_pool_2d(
     const uint32_t src_y            = is_pool_1d ? 1 : (uint32_t) src0->ne[1];
     const uint32_t dst_x            = (uint32_t) dst->ne[0];
     const uint32_t dst_y            = is_pool_1d ? 1 : (uint32_t) dst->ne[1];
-    const uint32_t dst_plane_bytes  = dst_x * dst_y * sizeof(float);
     const uint32_t planes           = (uint32_t) (is_pool_1d
         ? (uint64_t) src0->ne[1] * (uint64_t) src0->ne[2] * (uint64_t) src0->ne[3]
         : (uint64_t) src0->ne[2] * (uint64_t) src0->ne[3]);
     const uint32_t n_hvx            = (std::min)(htp_session_n_hvx(sess), planes > 0 ? planes : 1);
-    const uint32_t planes_per_chunk = (dst_plane_bytes > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(dst_plane_bytes, HEX_L2_LINE_SIZE)) : 1;
 
     struct htp_pool_vtcm_layout layout;
     if (!htp_pool_solve_layout(&layout, src_x, src_y, dst_x, dst_y, n_hvx, htp_session_vtcm_size(sess))) {
@@ -2548,7 +3075,6 @@ static bool htp_kparams_solve_pool_2d(
     kparams->pad_y            = pad_y;
     kparams->n_hvx            = n_hvx;
     kparams->planes           = planes;
-    kparams->planes_per_chunk = planes_per_chunk;
     kparams->pool_op          = (uint32_t) params[0];
 
     const bool exact_tiling = (kparams->pad_x == 0 && kparams->pad_y == 0 &&
@@ -2613,8 +3139,7 @@ bool htp_kparams_solve_upscale(
     const bool is_src_contig_row = (src0->nb[0] == sizeof(float));
     const bool is_src_strided_2d = (src0->nb[0] > sizeof(float)) &&
                                    (src0->nb[0] % sizeof(float) == 0) &&
-                                   (src0->nb[1] == (size_t) src_x * src0->nb[0]) &&
-                                   ((size_t) src_x * src_y <= 0xFFFFu);
+                                   (src0->nb[1] == (size_t) src_x * src0->nb[0]);
 
     if ((!is_src_contig_row && !is_src_strided_2d) || dst->nb[0] != sizeof(float)) {
         return false;
@@ -2693,24 +3218,6 @@ bool htp_kparams_solve_upscale(
     n_hvx = (std::min)(n_hvx, total_chunks > 0 ? total_chunks : 1);
     htp_upscale_vtcm_layout_build(&layout, src_x, src_y, dst_x, dst_y, dst_nrows_per_chunk, inv_sf1, filter_radius1, n_hvx);
 
-    const uint32_t slice_dst_bytes = dst_x * dst_y * sizeof(float);
-    const uint32_t chunk_dst_bytes = dst_x * dst_nrows_per_chunk * sizeof(float);
-    const bool     dst_contig      = (dst->nb[1] == (size_t) dst_x * sizeof(float)) &&
-                                     (dst_z <= 1 || dst->nb[2] == (size_t) dst_y * dst->nb[1]) &&
-                                     (dst_w <= 1 || dst->nb[3] == (size_t) dst_z * dst->nb[2]);
-
-    uint32_t chunks_per_group = 0;
-    if (dst_contig) {
-        const uint32_t slices_per_group = (slice_dst_bytes > 0)
-            ? (HEX_L2_LINE_SIZE / hex_gcd_u32(slice_dst_bytes, HEX_L2_LINE_SIZE))
-            : 1;
-        if (slices_per_group == 1 && (chunk_dst_bytes % HEX_L2_LINE_SIZE == 0)) {
-            chunks_per_group = 1;
-        } else {
-            chunks_per_group = slices_per_group * chunks_per_slice;
-        }
-    }
-
     uint8_t kernel_type = HTP_UPSCALE_KERNEL_BILINEAR;
     if (mode_raw == HTP_UPSCALE_MODE_NEAREST) {
         if (dst_x == 2 * src_x && dst_y == 2 * src_y && !align_corners) {
@@ -2747,7 +3254,6 @@ bool htp_kparams_solve_upscale(
     kparams->invscale1            = invscale1;
 
     kparams->n_hvx                = n_hvx;
-    kparams->chunks_per_group     = chunks_per_group;
 
     kparams->dst_nrows_per_chunk  = dst_nrows_per_chunk;
     kparams->chunks_per_slice     = chunks_per_slice;
@@ -2772,24 +3278,26 @@ static bool htp_kparams_solve_concat(
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (!src0 || !src1 || !dst) {
-        return false;
-    }
-
     int dim = ((const int32_t *) op->op_params)[0];
     if (dim < 0 || dim >= GGML_MAX_DIMS) {
         return false;
     }
     kparams->dim = dim;
 
-    if (dst->type != GGML_TYPE_F32 && dst->type != GGML_TYPE_F16 && dst->type != GGML_TYPE_I32) {
-        return false;
-    }
-    if (src0->type != dst->type || src1->type != dst->type) {
+    const bool all_same = (src0->type == dst->type && src1->type == dst->type);
+    if (dst->type == GGML_TYPE_I32) {
+        if (!all_same) {
+            return false;
+        }
+    } else if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+               (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+               (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
         return false;
     }
 
-    const uint32_t type_size  = ggml_type_size(dst->type);
+    const uint32_t src0_es    = ggml_type_size(src0->type);
+    const uint32_t src1_es    = ggml_type_size(src1->type);
+    const uint32_t dst_es     = ggml_type_size(dst->type);
     const uint32_t n_hvx      = htp_session_n_hvx(sess);
     const uint32_t mdev_count = htp_session_mdev_count(sess);
     const size_t   vtcm_size  = htp_session_vtcm_size(sess);
@@ -2801,30 +3309,30 @@ static bool htp_kparams_solve_concat(
         }
     }
 
-    const uint32_t max_gather_ne0 = 128 / type_size;
-    const uint32_t total_rows     = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
-    const bool     b_dense        = (src1->nb[0] == type_size);
+    const uint32_t max_gather_ne0 = 128 / dst_es;
+    const uint32_t total_rows     = (uint32_t) ggml_nrows(dst);
+    const bool     b_dense        = (src1->nb[0] == src1_es);
     const bool     gather_strides_ok =
-        src0->nb[1] >= (size_t) src0->ne[0] * type_size &&
-        (b_dense ? src1->nb[1] >= (size_t) src1->ne[0] * type_size
-                 : src1->nb[0] >= (size_t) src1->ne[1] * type_size);
+        src0->nb[1] >= (size_t) src0->ne[0] * src0_es &&
+        (b_dense ? src1->nb[1] >= (size_t) src1->ne[0] * src1_es
+                 : src1->nb[0] >= (size_t) src1->ne[1] * src1_es);
 
     if (dim == 0 &&
         (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16) &&
         dst->ne[0] <= max_gather_ne0 &&
-        dst->nb[0] == type_size && dst->nb[1] == (size_t) dst->ne[0] * type_size &&
-        src0->nb[0] == type_size &&
-        (src1->nb[0] == type_size || src1->nb[1] == type_size) &&
+        dst->nb[0] == dst_es && dst->nb[1] == (size_t) dst->ne[0] * dst_es &&
+        src0->nb[0] == src0_es &&
+        (src1->nb[0] == src1_es || src1->nb[1] == src1_es) &&
         gather_strides_ok &&
         htp_gather_rows_tensor_outer_contiguous(dst) &&
         htp_gather_rows_tensor_outer_contiguous(src0) &&
         htp_gather_rows_tensor_outer_contiguous(src1)) {
 
-        if (htp_gather_rows_solve_layout(&kparams->u.gather,
-                                         (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
-                                         (uint32_t) src1->ne[0], (uint32_t) src1->nb[1], b_dense,
-                                         type_size, total_rows,
-                                         n_hvx, mdev_count, vtcm_size)) {
+        if (htp_concat_gather_rows_solve_layout(&kparams->u.gather,
+                                                (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
+                                                (uint32_t) src1->ne[0], (uint32_t) src1->nb[1], b_dense,
+                                                src0_es, src1_es, dst_es, total_rows,
+                                                n_hvx, mdev_count, vtcm_size)) {
             kparams->kernel_type = HTP_CONCAT_KERNEL_GATHER_ROWS;
             kparams->n_hvx       = (uint8_t) n_hvx;
             kparams->vtcm_size   = kparams->u.gather.slice * n_hvx;
@@ -2832,31 +3340,67 @@ static bool htp_kparams_solve_concat(
         }
     }
 
-    const bool dma_strides_ok = (src0->nb[0] == type_size && src1->nb[0] == type_size && dst->nb[0] == type_size);
+    const bool dma_strides_ok = (src0->nb[0] == src0_es && src1->nb[0] == src1_es && dst->nb[0] == dst_es);
     if (dma_strides_ok) {
         kparams->kernel_type = HTP_CONCAT_KERNEL_REGULAR;
-        kparams->n_hvx       = 1;
+        if (all_same) {
+            kparams->n_hvx     = 1;
+            kparams->vtcm_size = 0;
+        } else {
+            const uint32_t req_vt = n_hvx * 4 * HTP_CONCAT_REG_BLK_BYTES;
+            if (req_vt > vtcm_size) {
+                return false;
+            }
+            kparams->n_hvx                   = (uint8_t) n_hvx;
+            kparams->vtcm_size               = req_vt;
+            kparams->u.regular.div_ne01      = init_fastdiv_values((uint32_t) src0->ne[1]);
+            kparams->u.regular.div_ne02_ne01 = init_fastdiv_values((uint32_t) (src0->ne[1] * src0->ne[2]));
+            kparams->u.regular.div_ne11      = init_fastdiv_values((uint32_t) src1->ne[1]);
+            kparams->u.regular.div_ne12_ne11 = init_fastdiv_values((uint32_t) (src1->ne[1] * src1->ne[2]));
+        }
         return true;
     }
 
-    const bool is_src1_transposed = (src1->nb[0] > src1->nb[1]);
-    const bool is_src0_transposed = (src0->nb[0] > src0->nb[1]);
-    const bool transposed_rows_ok = (src0->nb[0] == type_size && src1->nb[1] == type_size && dst->nb[0] == type_size);
+    const bool is_src1_transposed = ggml_is_transposed(src1);
+    const bool is_src0_transposed = ggml_is_transposed(src0);
+    const bool src0_trans_ok = is_src0_transposed ? (src0->nb[1] == src0_es) : (src0->nb[0] == src0_es);
+    const bool src1_trans_ok = is_src1_transposed ? (src1->nb[1] == src1_es) : (src1->nb[0] == src1_es);
 
-    if (dim == 0 && is_src1_transposed && !is_src0_transposed && transposed_rows_ok &&
+    if (dim == 0 && (is_src0_transposed || is_src1_transposed) &&
+        src0_trans_ok && src1_trans_ok && dst->nb[0] == dst_es &&
         (dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16)) {
 
-        const uint32_t nth = n_hvx > 0 ? n_hvx : 8;
-        struct htp_concat_transposed_vtcm_layout layout;
-        htp_concat_transposed_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], (uint32_t) src1->ne[0], type_size, nth);
+        uint32_t req_vtcm = 0;
 
-        if (vtcm_size > 0 && layout.total_bytes > vtcm_size) {
+        if (!is_src0_transposed && is_src1_transposed) {
+            struct htp_concat_transposed_vtcm_layout layout;
+            htp_concat_transposed_vtcm_layout_build(&layout, (uint32_t) src0->ne[0], (uint32_t) src1->ne[0], src0_es, src1_es, dst_es, n_hvx);
+            req_vtcm = layout.total_bytes;
+        } else {
+            struct htp_concat_transposed_vtcm_layout layout0;
+            htp_concat_transposed_vtcm_layout_build(&layout0, 0, (uint32_t) src0->ne[0], dst_es, src0_es, dst_es, n_hvx);
+            req_vtcm = layout0.total_bytes;
+            if (is_src1_transposed) {
+                struct htp_concat_transposed_vtcm_layout layout1;
+                htp_concat_transposed_vtcm_layout_build(&layout1, 0, (uint32_t) src1->ne[0], dst_es, src1_es, dst_es, n_hvx);
+                if (layout1.total_bytes > req_vtcm) {
+                    req_vtcm = layout1.total_bytes;
+                }
+            } else if (src1_es != dst_es) {
+                const uint32_t reg_vtcm = n_hvx * 4 * HTP_CONCAT_REG_BLK_BYTES;
+                if (reg_vtcm > req_vtcm) {
+                    req_vtcm = reg_vtcm;
+                }
+            }
+        }
+
+        if (req_vtcm > vtcm_size) {
             return false;
         }
 
         kparams->kernel_type          = HTP_CONCAT_KERNEL_TRANSPOSED;
-        kparams->n_hvx                = nth;
-        kparams->vtcm_size            = layout.total_bytes;
+        kparams->n_hvx                = (uint8_t) n_hvx;
+        kparams->vtcm_size            = req_vtcm;
         kparams->u.transposed.div_ne2 = init_fastdiv_values((uint32_t) dst->ne[2]);
         return true;
     }
@@ -3045,9 +3589,9 @@ static bool htp_kparams_solve_cpy(
     const bool sametype = (src0->type == dst->type);
     const bool same_extents = ggml_are_same_shape(src0, dst);
 
-    const bool transposed = (src0->nb[0] > src0->nb[1])    || (dst->nb[0] > dst->nb[1]) ||
+    const bool transposed = ggml_is_transposed(src0) || ggml_is_transposed(dst) ||
                             (src0->nb[0] != src_type_size) || (dst->nb[0] != dst_type_size) ||
-                            (src0->nb[1] < (size_t) src0->ne[0] * src_type_size) || (dst->nb[1] < (size_t) dst->ne[0] * dst_type_size);
+                            (src0->nb[1] < ggml_row_size(src0->type, src0->ne[0])) || (dst->nb[1] < ggml_row_size(dst->type, dst->ne[0]));
     const bool sameshape  = same_extents && !transposed;
 
     const bool src_is_contiguous = ggml_is_contiguous(src0);
@@ -3057,45 +3601,46 @@ static bool htp_kparams_solve_cpy(
     const uint32_t mdev_count = htp_session_mdev_count(sess);
     const size_t   vtcm_size  = htp_session_vtcm_size(sess);
 
-    if (sametype) {
-        if (src_is_contiguous && dst_is_contiguous) {
-            kparams->kernel_type = HTP_COPY_KERNEL_1D_CONTIG;
+    if (sametype && src_is_contiguous && dst_is_contiguous) {
+        kparams->kernel_type = HTP_COPY_KERNEL_1D_CONTIG;
+        return true;
+    }
+
+    const uint32_t max_gather_ne0 = 128 / src_type_size;
+    const uint32_t total_rows     = (uint32_t) ggml_nrows(src0);
+    if ((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
+        (dst->type  == GGML_TYPE_F32 || dst->type  == GGML_TYPE_F16) &&
+        dst_is_contiguous && !src_is_contiguous &&
+        src0->nb[0] == src_type_size && src0->ne[0] <= max_gather_ne0 &&
+        src0->nb[1] >= (size_t) src0->ne[0] * src_type_size &&
+        total_rows > 1 &&
+        htp_gather_rows_tensor_outer_contiguous(src0)) {
+
+        if (htp_gather_rows_solve_layout(&kparams->u.gather,
+                                         (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
+                                         0, 0, false,
+                                         src_type_size, dst_type_size, total_rows,
+                                         n_hvx, mdev_count, vtcm_size)) {
+            kparams->kernel_type = HTP_COPY_KERNEL_GATHER_ROWS;
+            kparams->n_hvx       = (uint8_t) n_hvx;
+            kparams->vtcm_size   = kparams->u.gather.slice * n_hvx;
             return true;
         }
+    }
 
-        const uint32_t max_gather_ne0 = 128 / src_type_size;
-        const uint32_t total_rows     = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
-        if ((src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) &&
-            dst_is_contiguous && !src_is_contiguous &&
-            src0->nb[0] == src_type_size && src0->ne[0] <= max_gather_ne0 &&
-            src0->nb[1] >= (size_t) src0->ne[0] * src_type_size &&
-            total_rows > 1 &&
-            htp_gather_rows_tensor_outer_contiguous(src0)) {
-
-            if (htp_gather_rows_solve_layout(&kparams->u.gather,
-                                             (uint32_t) src0->ne[0], (uint32_t) src0->nb[1],
-                                             0, 0, false,
-                                             src_type_size, total_rows,
-                                             n_hvx, mdev_count, vtcm_size)) {
-                kparams->kernel_type = HTP_COPY_KERNEL_GATHER_ROWS;
-                kparams->n_hvx       = (uint8_t) n_hvx;
-                kparams->vtcm_size   = kparams->u.gather.slice * n_hvx;
-                return true;
-            }
-        }
-
+    if (sametype) {
         if (htp_kparams_solve_cpy_transpose(sess, src0, dst, src_type_size, kparams)) {
             return true;
         }
 
         if (sameshape) {
             kparams->kernel_type = HTP_COPY_KERNEL_SAMESHAPE_SAMETYPE;
-            kparams->total_rows  = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
+            kparams->total_rows  = (uint32_t) ggml_nrows(src0);
             return true;
         }
 
         kparams->kernel_type = HTP_COPY_KERNEL_RESHAPE;
-        kparams->n_hvx       = n_hvx > 0 ? (uint8_t) n_hvx : 4;
+        kparams->n_hvx       = (uint8_t) n_hvx;
         kparams->u.reshape.div_ne0            = init_fastdiv_values((uint32_t) dst->ne[0]);
         kparams->u.reshape.div_ne1_ne0        = init_fastdiv_values((uint32_t) (dst->ne[1] * dst->ne[0]));
         kparams->u.reshape.div_ne2_ne1_ne0    = init_fastdiv_values((uint32_t) (dst->ne[2] * dst->ne[1] * dst->ne[0]));
@@ -3117,17 +3662,16 @@ static bool htp_kparams_solve_cpy(
         return false;
     }
 
-    const uint32_t nth = n_hvx > 0 ? n_hvx : 4;
     struct htp_copy_convert_vtcm_layout layout;
-    htp_copy_convert_solve_layout(&layout, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1], src_type_size, dst_type_size, nth);
+    htp_copy_convert_solve_layout(&layout, (uint32_t) src0->ne[0], (uint32_t) src0->ne[1], src_type_size, dst_type_size, n_hvx);
 
-    if (vtcm_size > 0 && layout.total_bytes > vtcm_size) {
+    if (layout.total_bytes > vtcm_size) {
         return false;
     }
 
     kparams->kernel_type             = HTP_COPY_KERNEL_SAMESHAPE_CONVERT;
-    kparams->total_rows              = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
-    kparams->n_hvx                   = (uint8_t) nth;
+    kparams->total_rows              = (uint32_t) ggml_nrows(src0);
+    kparams->n_hvx                   = (uint8_t) n_hvx;
     kparams->vtcm_size               = (uint32_t) layout.total_bytes;
     kparams->u.convert.blk_rows      = layout.blk_rows;
     kparams->u.convert.div_ne01      = init_fastdiv_values((uint32_t) src0->ne[1]);
@@ -3227,11 +3771,9 @@ static bool htp_kparams_solve_im2col(
         is_patchembed = is_patchembed && (s1 == (int32_t) KH && p1 == 0 && d1 == 1);
     }
 
-    const uint32_t max_hvx        = (sess && htp_session_n_hvx(sess) > 0) ? htp_session_n_hvx(sess) : 8;
+    const uint32_t max_hvx        = htp_session_n_hvx(sess);
     const uint32_t n_hvx          = (total_rows < max_hvx) ? total_rows : max_hvx;
-    const uint32_t vtcm_size      = (sess && htp_session_vtcm_size(sess) > 0) ? (uint32_t) htp_session_vtcm_size(sess) : 0;
-    const uint32_t row_size       = (uint32_t) dst->nb[2];
-    const uint32_t rows_per_chunk = (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(row_size, HEX_L2_LINE_SIZE)) : 1;
+    const size_t   vtcm_size      = htp_session_vtcm_size(sess);
 
     if (is_patchembed) {
         const uint64_t src_row_bytes_raw = (uint64_t) IC * KH * IW * sizeof(float);
@@ -3244,7 +3786,7 @@ static bool htp_kparams_solve_im2col(
             htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_hvx,
                                          htp_im2col_scratch_bytes(HTP_IM2COL_KERNEL_PATCHEMBED_DMA, KH, patch_stride));
 
-            if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+            if (layout.total_bytes <= vtcm_size) {
                 kparams->kernel_type          = HTP_IM2COL_KERNEL_PATCHEMBED_DMA;
                 kparams->n_hvx                = (uint8_t) n_hvx;
                 kparams->vtcm_size            = (uint32_t) layout.total_bytes;
@@ -3266,7 +3808,6 @@ static bool htp_kparams_solve_im2col(
                 kparams->OW                   = OW;
                 kparams->patch_stride         = patch_stride;
                 kparams->total_rows           = total_rows;
-                kparams->rows_per_chunk       = rows_per_chunk;
                 kparams->div_OH               = init_fastdiv_values(OH);
                 kparams->div_OD               = init_fastdiv_values(1);
                 return true;
@@ -3300,7 +3841,7 @@ static bool htp_kparams_solve_im2col(
         htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, blk_threads,
                                      htp_im2col_scratch_bytes(HTP_IM2COL_KERNEL_BLOCKED_DMA, KH, patch_stride));
 
-        if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+        if (layout.total_bytes <= vtcm_size) {
             kparams->kernel_type          = HTP_IM2COL_KERNEL_BLOCKED_DMA;
             kparams->n_hvx                = (uint8_t) blk_threads;
             kparams->vtcm_size            = (uint32_t) layout.total_bytes;
@@ -3322,7 +3863,6 @@ static bool htp_kparams_solve_im2col(
             kparams->OW                   = OW;
             kparams->patch_stride         = patch_stride;
             kparams->total_rows           = total_rows;
-            kparams->rows_per_chunk       = rows_per_chunk;
             kparams->div_OH               = init_fastdiv_values(OH);
             kparams->div_OD               = init_fastdiv_values(1);
             kparams->div_nbpr             = init_fastdiv_values(nbpr);
@@ -3413,11 +3953,9 @@ static bool htp_kparams_solve_im2col_3d(
                                 p0 == 0 && p1 == 0 && p2 == 0 &&
                                 d0 == 1 && d1 == 1 && d2 == 1);
 
-    const uint32_t max_hvx        = (sess && htp_session_n_hvx(sess) > 0) ? htp_session_n_hvx(sess) : 8;
+    const uint32_t max_hvx        = htp_session_n_hvx(sess);
     const uint32_t n_hvx          = (total_rows < max_hvx) ? total_rows : max_hvx;
-    const uint32_t vtcm_size      = (sess && htp_session_vtcm_size(sess) > 0) ? (uint32_t) htp_session_vtcm_size(sess) : 0;
-    const uint32_t row_size       = (uint32_t) dst->nb[2];
-    const uint32_t rows_per_chunk = (row_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(row_size, HEX_L2_LINE_SIZE)) : 1;
+    const size_t   vtcm_size      = htp_session_vtcm_size(sess);
 
     if (is_patchembed) {
         const uint64_t src_row_bytes_raw = (uint64_t) IC * KD * KH * IW * sizeof(float);
@@ -3429,7 +3967,7 @@ static bool htp_kparams_solve_im2col_3d(
             struct htp_im2col_vtcm_layout layout;
             htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_hvx, 256);
 
-            if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+            if (layout.total_bytes <= vtcm_size) {
                 kparams->kernel_type          = HTP_IM2COL_KERNEL_PATCHEMBED_DMA;
                 kparams->n_hvx                = (uint8_t) n_hvx;
                 kparams->vtcm_size            = (uint32_t) layout.total_bytes;
@@ -3451,7 +3989,6 @@ static bool htp_kparams_solve_im2col_3d(
                 kparams->OW                   = OW;
                 kparams->patch_stride         = patch_stride;
                 kparams->total_rows           = total_rows;
-                kparams->rows_per_chunk       = rows_per_chunk;
                 kparams->div_OH               = init_fastdiv_values(OH);
                 kparams->div_OD               = init_fastdiv_values(OD);
                 return true;
@@ -3479,7 +4016,7 @@ static bool htp_kparams_solve_im2col_3d(
         struct htp_im2col_vtcm_layout layout;
         htp_im2col_vtcm_layout_build(&layout, src_row_bytes, dst_row_bytes, n_hvx, 256);
 
-        if (vtcm_size == 0 || layout.total_bytes <= vtcm_size) {
+        if (layout.total_bytes <= vtcm_size) {
             kparams->kernel_type          = HTP_IM2COL_KERNEL_BLOCKED_DMA;
             kparams->n_hvx                = (uint8_t) n_hvx;
             kparams->vtcm_size            = (uint32_t) layout.total_bytes;
@@ -3501,7 +4038,6 @@ static bool htp_kparams_solve_im2col_3d(
             kparams->OW                   = OW;
             kparams->patch_stride         = patch_stride;
             kparams->total_rows           = total_rows;
-            kparams->rows_per_chunk       = rows_per_chunk;
             kparams->div_OH               = init_fastdiv_values(OH);
             kparams->div_OD               = init_fastdiv_values(OD);
             return true;
@@ -3522,7 +4058,7 @@ static bool htp_kparams_solve_pad(
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || dst->type != src0->type) {
         return false;
     }
 
@@ -3535,31 +4071,40 @@ static bool htp_kparams_solve_pad(
     }
 
     const uint32_t type_size      = (uint32_t) ggml_type_size(src0->type);
-    const uint32_t total_dst_rows = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
-    const uint32_t max_hvx        = (std::max)(1u, total_dst_rows);
-    const uint32_t n_hvx          = (std::min)(htp_session_n_hvx(sess), max_hvx);
-
-    struct htp_pad_vtcm_layout layout;
-    htp_pad_vtcm_layout_build(&layout, (uint32_t) src0->ne[0] * type_size, (uint32_t) dst->ne[0] * type_size, n_hvx);
-
-    const bool use_dma = (src0->nb[0] == type_size) && (src0->ne[0] >= 512) &&
-                         (htp_session_vtcm_size(sess) >= layout.total_bytes);
-
-    kparams->n_hvx      = n_hvx;
-    kparams->total_rows = total_dst_rows;
-    kparams->use_dma    = use_dma ? 1 : 0;
-    kparams->elem_size  = type_size;
-    kparams->vtcm_size  = use_dma ? (uint32_t) layout.total_bytes : 0;
-
-    if (circular && use_dma) {
-        kparams->kernel_type = HTP_PAD_KERNEL_HVX_CIRCULAR_DMA;
-    } else if (circular) {
-        kparams->kernel_type = HTP_PAD_KERNEL_HVX_CIRCULAR;
-    } else if (use_dma) {
-        kparams->kernel_type = HTP_PAD_KERNEL_HVX_DMA;
-    } else {
-        kparams->kernel_type = HTP_PAD_KERNEL_HVX;
+    if (src0->nb[0] != type_size || dst->nb[0] != type_size) {
+        return false;
     }
+
+    const uint32_t total_dst_rows    = (uint32_t) ggml_nrows(dst);
+    const uint32_t max_hvx           = (std::max)(1u, total_dst_rows);
+    uint32_t       n_hvx             = (std::min)(htp_session_n_hvx(sess), max_hvx);
+    const size_t   vtcm_size         = htp_session_vtcm_size(sess);
+    const uint32_t elems_per_vec     = 128u / type_size;
+    const uint32_t row_elems_aligned = (uint32_t) hex_round_up((std::max)(1u, (uint32_t) dst->ne[0]), elems_per_vec);
+
+    uint32_t chunk_elems = row_elems_aligned;
+    struct htp_pad_vtcm_layout layout;
+    while (true) {
+        const size_t max_chunk_bytes = (vtcm_size / (4 * n_hvx)) & ~(size_t) 127;
+        if (max_chunk_bytes >= 128) {
+            chunk_elems = (std::min)(row_elems_aligned, (uint32_t) (max_chunk_bytes / type_size));
+            htp_pad_vtcm_layout_build(&layout, (size_t) chunk_elems * type_size, n_hvx);
+            if (layout.total_bytes <= vtcm_size) {
+                break;
+            }
+        }
+        if (n_hvx == 1) {
+            return false;
+        }
+        n_hvx--;
+    }
+
+    kparams->n_hvx       = n_hvx;
+    kparams->total_rows  = total_dst_rows;
+    kparams->chunk_elems = chunk_elems;
+    kparams->elem_size   = type_size;
+    kparams->vtcm_size   = (uint32_t) layout.total_bytes;
+    kparams->kernel_type = circular ? HTP_PAD_KERNEL_HVX_CIRCULAR : HTP_PAD_KERNEL_HVX;
 
     kparams->div_ne1     = init_fastdiv_values((uint32_t) dst->ne[1]);
     kparams->div_ne1_ne2 = init_fastdiv_values((uint32_t) (dst->ne[1] * dst->ne[2]));
@@ -3580,26 +4125,44 @@ static bool htp_kparams_solve_cumsum(
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
         return false;
     }
     if (!ggml_is_contiguous(src0) || !ggml_is_contiguous(dst)) {
         return false;
     }
 
-    const uint32_t total_rows  = (uint32_t) (src0->ne[1] * src0->ne[2] * src0->ne[3]);
-    const uint32_t max_hvx     = (std::max)(1u, total_rows);
-    const uint32_t n_hvx       = (std::min)(htp_session_n_hvx(sess), max_hvx);
+    const size_t   src_elem_size     = ggml_type_size(src0->type);
+    const size_t   dst_elem_size     = ggml_type_size(dst->type);
+    const uint32_t align_elems       = (src0->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F16) ? 64u : 32u;
+    const uint32_t total_rows        = (uint32_t) ggml_nrows(src0);
+    const uint32_t max_hvx           = (std::max)(1u, total_rows);
+    uint32_t       n_hvx             = (std::min)(htp_session_n_hvx(sess), max_hvx);
+    const size_t   vtcm_size         = htp_session_vtcm_size(sess);
+    const uint32_t row_elems_aligned = (uint32_t) hex_round_up((std::max)(1u, (uint32_t) src0->ne[0]), align_elems);
 
+    uint32_t chunk_elems = row_elems_aligned;
     struct htp_cumsum_vtcm_layout layout;
-    htp_cumsum_vtcm_layout_build(&layout, (uint32_t) src0->nb[1], (uint32_t) dst->nb[1], n_hvx);
+    while (true) {
+        const size_t max_elems = (vtcm_size / (2 * n_hvx * (src_elem_size + dst_elem_size))) & ~(size_t) (align_elems - 1);
+        if (max_elems >= align_elems) {
+            chunk_elems = (std::min)(row_elems_aligned, (uint32_t) max_elems);
+            htp_cumsum_vtcm_layout_build(&layout, (size_t) chunk_elems * src_elem_size, (size_t) chunk_elems * dst_elem_size, n_hvx);
+            if (layout.total_bytes <= vtcm_size) {
+                break;
+            }
+        }
+        if (n_hvx == 1) {
+            return false;
+        }
+        n_hvx--;
+    }
 
-    const bool use_dma = (htp_session_vtcm_size(sess) >= layout.total_bytes);
-
-    kparams->n_hvx      = n_hvx;
-    kparams->total_rows = total_rows;
-    kparams->use_dma    = use_dma ? 1 : 0;
-    kparams->vtcm_size  = use_dma ? (uint32_t) layout.total_bytes : 0;
+    kparams->n_hvx       = n_hvx;
+    kparams->total_rows  = total_rows;
+    kparams->chunk_elems = chunk_elems;
+    kparams->vtcm_size   = (uint32_t) layout.total_bytes;
 
     return true;
 }
@@ -3811,19 +4374,37 @@ static bool htp_kparams_solve_fill(
     const uint32_t ne1 = (uint32_t) dst->ne[1];
     const uint32_t ne2 = (uint32_t) dst->ne[2];
     const uint32_t ne3 = (uint32_t) dst->ne[3];
-    const uint32_t nb1 = (uint32_t) dst->nb[1];
 
     const uint32_t total_rows     = ne1 * ne2 * ne3;
     const uint32_t max_hvx        = (std::max)(1u, total_rows);
-    const uint32_t n_hvx          = (std::min)(htp_session_n_hvx(sess), max_hvx);
+    uint32_t       n_hvx          = (std::min)(htp_session_n_hvx(sess), max_hvx);
     const uint32_t elem_size      = (uint32_t) ggml_type_size(dst->type);
-    const uint32_t rows_per_chunk = (nb1 > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(nb1, HEX_L2_LINE_SIZE)) : 1;
+    const size_t   vtcm_size      = htp_session_vtcm_size(sess);
+    const bool     is_contig      = ggml_is_contiguous(dst);
+    const size_t   row_bytes      = (size_t) dst->ne[0] * elem_size;
+    const size_t   max_bytes      = is_contig ? ((size_t) ((total_rows + n_hvx - 1) / n_hvx) * row_bytes) : row_bytes;
+    size_t         tile_bytes     = (std::min<size_t>)(16384u, hex_round_up((std::max<size_t>)(128u, max_bytes), 128));
+
+    struct htp_fill_vtcm_layout L;
+    htp_fill_vtcm_layout_build(&L, tile_bytes, n_hvx);
+    while (L.total_bytes > vtcm_size && tile_bytes > 128) {
+        tile_bytes = (std::max<size_t>)(128u, (tile_bytes / 2) & ~(size_t) 127);
+        htp_fill_vtcm_layout_build(&L, tile_bytes, n_hvx);
+    }
+    while (L.total_bytes > vtcm_size && n_hvx > 1) {
+        n_hvx--;
+        htp_fill_vtcm_layout_build(&L, tile_bytes, n_hvx);
+    }
+    if (L.total_bytes > vtcm_size) {
+        return false;
+    }
 
     kparams->n_hvx          = n_hvx;
     kparams->total_rows     = total_rows;
     kparams->elem_size      = elem_size;
-    kparams->kernel_type    = ggml_is_contiguous(dst) ? HTP_FILL_KERNEL_CONTIGUOUS : HTP_FILL_KERNEL_STRIDED;
-    kparams->rows_per_chunk = rows_per_chunk;
+    kparams->kernel_type    = is_contig ? HTP_FILL_KERNEL_CONTIGUOUS : HTP_FILL_KERNEL_STRIDED;
+    kparams->tile_bytes     = (uint32_t) L.tile_bytes;
+    kparams->vtcm_size      = (uint32_t) L.total_bytes;
     kparams->div_ne1        = init_fastdiv_values(ne1);
     kparams->div_ne1_ne2    = init_fastdiv_values(ne1 * ne2);
 
@@ -3928,7 +4509,7 @@ static bool htp_kparams_solve_roll(
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || dst->type != src0->type) {
         return false;
     }
     if (!ggml_are_same_shape(src0, dst)) {
@@ -3938,6 +4519,7 @@ static bool htp_kparams_solve_roll(
         return false;
     }
 
+    const uint32_t elem_size = (uint32_t) ggml_type_size(src0->type);
     const uint32_t ne0 = (uint32_t) dst->ne[0];
     const uint32_t ne1 = (uint32_t) dst->ne[1];
     const uint32_t ne2 = (uint32_t) dst->ne[2];
@@ -3955,12 +4537,13 @@ static bool htp_kparams_solve_roll(
 
     const uint32_t total_rows  = ne1 * ne2 * ne3;
     const uint32_t max_hvx     = (std::max)(1u, total_rows);
-    const uint32_t n_hvx       = (std::min)(htp_session_n_hvx(sess), max_hvx);
+    uint32_t       n_hvx       = (std::min)(htp_session_n_hvx(sess), max_hvx);
+    const size_t   vtcm_size   = htp_session_vtcm_size(sess);
 
-    kparams->n_hvx      = n_hvx;
     kparams->total_rows = total_rows;
     kparams->i0_src0    = i0_src0;
     kparams->n0         = ne0 - i0_src0;
+    kparams->elem_size  = elem_size;
 
     if (htp_session_mdev_count(sess) <= 1) {
         if (ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
@@ -3968,9 +4551,19 @@ static bool htp_kparams_solve_roll(
         } else {
             kparams->kernel_type = HTP_ROLL_KERNEL_DMA_STRIDED;
         }
+        kparams->vtcm_size = 0;
     } else {
         kparams->kernel_type = HTP_ROLL_KERNEL_HVX;
+        struct htp_roll_vtcm_layout L;
+        htp_roll_vtcm_layout_build(&L, (size_t) ne0 * elem_size, n_hvx);
+        while (L.total_bytes > vtcm_size && n_hvx > 1) {
+            n_hvx--;
+            htp_roll_vtcm_layout_build(&L, (size_t) ne0 * elem_size, n_hvx);
+        }
+        kparams->vtcm_size = (L.total_bytes <= vtcm_size) ? (uint32_t) L.total_bytes : 0;
     }
+
+    kparams->n_hvx       = n_hvx;
 
     kparams->div_ne1     = init_fastdiv_values(ne1);
     kparams->div_ne2_ne1 = init_fastdiv_values(ne2 * ne1);
@@ -3988,7 +4581,7 @@ static bool htp_kparams_solve_diag(
     const struct ggml_tensor * src0 = op->src[0];
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) || dst->type != src0->type) {
         return false;
     }
     if (src0->ne[1] != 1 || dst->ne[0] != dst->ne[1] || dst->ne[0] != src0->ne[0]) {
@@ -3999,39 +4592,37 @@ static bool htp_kparams_solve_diag(
         return false;
     }
 
+    const uint32_t elem_size      = (uint32_t) ggml_type_size(src0->type);
+    const uint32_t elems_per_vec  = 128u / elem_size;
     const uint32_t total_batches  = (uint32_t) (src0->ne[2] * src0->ne[3]);
     const uint32_t max_hvx        = (std::max)(1u, total_batches);
     const uint32_t n_hvx          = (std::min)(htp_session_n_hvx(sess), max_hvx);
-    const uint32_t dst_batch_size = (uint32_t) (dst->ne[1] * dst->nb[1]);
+    const size_t   vtcm_size         = htp_session_vtcm_size(sess);
+    const uint32_t row_elems_aligned = (uint32_t) hex_round_up((std::max)(1u, (uint32_t) dst->ne[0]), elems_per_vec);
 
-    bool can_split = (dst->ne[0] == 1 || dst->nb[0] == sizeof(float)) && !ggml_is_permuted(dst);
-    uint32_t batches_per_chunk = 1;
-    if (can_split) {
-        if (dst->ne[2] > 1 && (dst->nb[2] & (HEX_L2_LINE_SIZE - 1)) == 0 &&
-            (dst->ne[3] <= 1 || (dst->nb[3] & (HEX_L2_LINE_SIZE - 1)) == 0)) {
-            batches_per_chunk = 1;
-        } else if (dst->nb[2] == dst_batch_size &&
-                   (dst->ne[3] <= 1 || dst->nb[3] == dst->nb[2] * dst->ne[2])) {
-            batches_per_chunk = (dst_batch_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(dst_batch_size, HEX_L2_LINE_SIZE)) : 1;
-        } else {
-            can_split = false;
+    uint32_t diag_n_hvx  = n_hvx;
+    uint32_t chunk_elems = row_elems_aligned;
+    struct htp_diag_vtcm_layout layout;
+    while (true) {
+        const size_t per_hvx = vtcm_size / diag_n_hvx;
+        if (per_hvx >= 512) {
+            const size_t max_chunk_bytes = ((per_hvx - 256) / 2) & ~(size_t) 127;
+            chunk_elems = (std::min)(row_elems_aligned, (uint32_t) (max_chunk_bytes / elem_size));
+            htp_diag_vtcm_layout_build(&layout, (size_t) chunk_elems * elem_size, diag_n_hvx);
+            if (layout.total_bytes <= vtcm_size) {
+                break;
+            }
         }
+        if (diag_n_hvx == 1) {
+            return false;
+        }
+        diag_n_hvx--;
     }
 
-    const uint32_t src_batch_size = (uint32_t) (src0->ne[0] * sizeof(float));
-    const uint32_t dst_row_size   = (uint32_t) (dst->ne[0] * sizeof(float));
-
-    struct htp_diag_vtcm_layout layout;
-    htp_diag_vtcm_layout_build(&layout, src_batch_size, dst_row_size, n_hvx);
-
-    const bool use_dma = (htp_session_vtcm_size(sess) >= layout.total_bytes);
-
-    kparams->n_hvx             = n_hvx;
+    kparams->n_hvx             = diag_n_hvx;
     kparams->total_batches     = total_batches;
-    kparams->use_dma           = use_dma ? 1 : 0;
-    kparams->can_split         = can_split ? 1 : 0;
-    kparams->batches_per_chunk = batches_per_chunk;
-    kparams->vtcm_size         = use_dma ? (uint32_t) layout.total_bytes : 0;
+    kparams->chunk_elems       = chunk_elems;
+    kparams->vtcm_size         = (uint32_t) layout.total_bytes;
     kparams->div_ne02          = init_fastdiv_values((uint32_t) src0->ne[2]);
 
     return true;
@@ -4048,7 +4639,9 @@ static bool htp_kparams_solve_solve_tri(
     const struct ggml_tensor * src1 = op->src[1];
     const struct ggml_tensor * dst  = op;
 
-    if (src0->type != GGML_TYPE_F32 || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    if ((src0->type != GGML_TYPE_F32 && src0->type != GGML_TYPE_F16) ||
+        (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_F16) ||
+        (dst->type  != GGML_TYPE_F32 && dst->type  != GGML_TYPE_F16)) {
         return false;
     }
     if (src0->ne[0] != src0->ne[1] || src0->ne[1] != src1->ne[1] ||
@@ -4056,8 +4649,14 @@ static bool htp_kparams_solve_solve_tri(
         !ggml_are_same_shape(src1, dst)) {
         return false;
     }
+    if (src0->nb[0] != ggml_type_size(src0->type) ||
+        src1->nb[0] != ggml_type_size(src1->type) ||
+        dst->nb[0]  != ggml_type_size(dst->type)) {
+        return false;
+    }
 
     const uint32_t max_hvx_sess      = htp_session_n_hvx(sess);
+    const uint32_t n                 = (uint32_t) src0->ne[0];
     const uint32_t k                 = (uint32_t) src1->ne[0];
     const uint32_t col_block         = 32;
     const uint32_t k_chunks          = (k + col_block - 1) / col_block;
@@ -4065,9 +4664,23 @@ static bool htp_kparams_solve_solve_tri(
     const bool     batched           = total_batches >= max_hvx_sess;
     const uint32_t total_jobs        = batched ? total_batches : (total_batches * k_chunks);
     const uint32_t max_hvx           = (std::max)(1u, total_jobs);
-    const uint32_t n_hvx             = (std::min)(max_hvx_sess, max_hvx);
-    const uint32_t batch_size        = (uint32_t) dst->nb[2];
-    const uint32_t batches_per_chunk = (batch_size > 0) ? (HEX_L2_LINE_SIZE / hex_gcd_u32(batch_size, HEX_L2_LINE_SIZE)) : 1;
+    uint32_t       n_hvx             = (std::min)(max_hvx_sess, max_hvx);
+    const size_t   vtcm_size         = htp_session_vtcm_size(sess);
+
+    uint32_t a_full = 1;
+    struct htp_solve_tri_vtcm_layout L;
+    htp_solve_tri_vtcm_layout_build(&L, n, a_full, n_hvx);
+    if (L.total_bytes > vtcm_size) {
+        a_full = 0;
+        htp_solve_tri_vtcm_layout_build(&L, n, a_full, n_hvx);
+        while (L.total_bytes > vtcm_size && n_hvx > 1) {
+            n_hvx--;
+            htp_solve_tri_vtcm_layout_build(&L, n, a_full, n_hvx);
+        }
+    }
+    if (L.total_bytes > vtcm_size) {
+        return false;
+    }
 
     kparams->n_hvx             = n_hvx;
     kparams->total_batches     = total_batches;
@@ -4075,7 +4688,8 @@ static bool htp_kparams_solve_solve_tri(
     kparams->k_chunks          = k_chunks;
     kparams->col_block         = col_block;
     kparams->batched           = batched ? 1 : 0;
-    kparams->batches_per_chunk = batches_per_chunk;
+    kparams->a_full            = a_full;
+    kparams->vtcm_size         = (uint32_t) L.total_bytes;
     kparams->div_ne02          = init_fastdiv_values((uint32_t) src0->ne[2]);
     kparams->div_k_chunks      = init_fastdiv_values(k_chunks > 0 ? k_chunks : 1);
 
@@ -4570,7 +5184,7 @@ static bool htp_kparams_solve_conv2d_unchecked(
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    const uint32_t total_rows = (uint32_t) (dst->ne[1] * dst->ne[2] * dst->ne[3]);
+    const uint32_t total_rows = (uint32_t) ggml_nrows(dst);
     kparams->total_rows = total_rows;
     kparams->n_hvx      = total_rows == 0 ? 1 : (std::min)((uint32_t) htp_session_n_hvx(sess), total_rows);
 
@@ -4710,10 +5324,7 @@ static bool htp_kparams_solve_conv2d_dw(
     const uint32_t pad_rows       = fast_k3x3 ? 4 : 0;
     const uint32_t pad_top_stride = fast_k3x3 ? w : 0;
 
-    const size_t vtcm_budget = (sess && htp_session_vtcm_size(sess) > 0) ? htp_session_vtcm_size(sess) : 0;
-    if (vtcm_budget == 0) {
-        return false;
-    }
+    const size_t vtcm_budget = htp_session_vtcm_size(sess);
 
     const uint32_t w_size = (uint32_t) (kw * kh * c * ggml_type_size(src0->type));
 
@@ -4823,14 +5434,11 @@ static bool htp_kparams_solve_conv3d(
         }
     }
 
-    const size_t es     = ggml_type_size(src0->type);
-    const bool   w_rows = src0->nb[0] == es && src0->nb[1] == src0->ne[0] * es && src0->nb[2] == src0->ne[1] * src0->nb[1] &&
-                          ((int64_t) IC * OC == 1 || src0->nb[3] == src0->ne[2] * src0->nb[2]);
-    if (!w_rows || src1->nb[0] != sizeof(float) || dst->nb[2] != dst->ne[1] * dst->nb[1]) {
+    if (!ggml_is_contiguous(src0) || !ggml_is_contiguous_rows(src1) || dst->nb[2] != dst->ne[1] * dst->nb[1]) {
         return false;
     }
 
-    const int64_t total_rows = dst->ne[1] * dst->ne[2] * dst->ne[3];
+    const int64_t total_rows = ggml_nrows(dst);
     if (total_rows > UINT32_MAX) {
         return false;
     }
@@ -4838,90 +5446,6 @@ static bool htp_kparams_solve_conv3d(
     kparams->n_hvx      = total_rows == 0 ? 1 : (std::min)((uint32_t) htp_session_n_hvx(sess), (uint32_t) total_rows);
 
     return htp_kparams_conv2d_tiled(sess, op, kparams);
-}
-
-static bool htp_dsv4_hc_pre_can_collapse(
-    const struct ggml_tensor * x,
-    const struct ggml_tensor * weights,
-    const struct ggml_tensor * dst
-) {
-    if (!x || !weights || !dst) {
-        return false;
-    }
-    if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
-        return false;
-    }
-    if (x->nb[0] != sizeof(float) || weights->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
-        return false;
-    }
-    if (x->ne[1] != 4 || dst->ne[0] != x->ne[0]) {
-        return false;
-    }
-
-    const bool gated = ggml_get_op_params_i32(dst, 1) != 0;
-    const int64_t x_tokens = x->ne[2] * x->ne[3];
-    const int64_t d_tokens = dst->ne[1] * dst->ne[2] * dst->ne[3];
-    const int64_t w_tokens = gated ? (weights->ne[2] * weights->ne[3]) : (weights->ne[1] * weights->ne[2] * weights->ne[3]);
-
-    if (x_tokens != d_tokens || x_tokens != w_tokens) {
-        return false;
-    }
-
-    if (x->ne[3] == 1 && dst->ne[2] == 1 && dst->ne[3] == 1 &&
-        (gated ? (weights->ne[3] == 1) : (weights->ne[2] == 1 && weights->ne[3] == 1))) {
-        return false;
-    }
-
-    if (x->ne[3] > 1 && x->nb[3] != x->ne[2] * x->nb[2]) return false;
-
-    if (dst->ne[2] > 1 && dst->nb[2] != dst->ne[1] * dst->nb[1]) return false;
-    if (dst->ne[3] > 1 && dst->nb[3] != dst->ne[2] * dst->nb[2]) return false;
-
-    if (gated) {
-        if (weights->ne[3] > 1 && weights->nb[3] != weights->ne[2] * weights->nb[2]) return false;
-    } else {
-        if (weights->ne[2] > 1 && weights->nb[2] != weights->ne[1] * weights->nb[1]) return false;
-        if (weights->ne[3] > 1 && weights->nb[3] != weights->ne[2] * weights->nb[2]) return false;
-    }
-
-    return true;
-}
-
-static void htp_dsv4_hc_pre_collapse_tensors(
-    const struct ggml_tensor * x,
-    const struct ggml_tensor * weights,
-    const struct ggml_tensor * dst,
-    struct ggml_tensor * x_c,
-    struct ggml_tensor * w_c,
-    struct ggml_tensor * d_c
-) {
-    const int64_t n_tokens = x->ne[2] * x->ne[3];
-    const bool gated = ggml_get_op_params_i32(dst, 1) != 0;
-
-    *x_c = *x;
-    x_c->ne[2] = n_tokens;
-    x_c->ne[3] = 1;
-    x_c->nb[3] = x_c->ne[2] * x_c->nb[2];
-
-    *d_c = *dst;
-    d_c->ne[1] = n_tokens;
-    d_c->ne[2] = 1;
-    d_c->ne[3] = 1;
-    d_c->nb[2] = d_c->ne[1] * d_c->nb[1];
-    d_c->nb[3] = d_c->nb[2];
-
-    *w_c = *weights;
-    if (gated) {
-        w_c->ne[2] = n_tokens;
-        w_c->ne[3] = 1;
-        w_c->nb[3] = w_c->ne[2] * w_c->nb[2];
-    } else {
-        w_c->ne[1] = n_tokens;
-        w_c->ne[2] = 1;
-        w_c->ne[3] = 1;
-        w_c->nb[2] = w_c->ne[1] * w_c->nb[1];
-        w_c->nb[3] = w_c->nb[2];
-    }
 }
 
 static bool htp_kparams_solve_dsv4_hc_pre_impl(
@@ -4933,7 +5457,10 @@ static bool htp_kparams_solve_dsv4_hc_pre_impl(
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    if (x->type != GGML_TYPE_F32 || weights->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    const auto is_valid_type = [](const ggml_tensor * t) {
+        return (t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_F16) && t->nb[0] == ggml_type_size(t->type);
+    };
+    if (!is_valid_type(x) || !is_valid_type(weights) || !is_valid_type(dst)) {
         return false;
     }
     if (x->ne[1] != 4 || x->ne[3] != 1) {
@@ -4943,9 +5470,6 @@ static bool htp_kparams_solve_dsv4_hc_pre_impl(
         return false;
     }
     if (dst->ne[0] != x->ne[0] || dst->ne[1] != x->ne[2] || dst->ne[2] != 1 || dst->ne[3] != 1) {
-        return false;
-    }
-    if (x->nb[0] != sizeof(float) || weights->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
         return false;
     }
     if (ggml_is_permuted(x) || ggml_is_permuted(weights) || ggml_is_permuted(dst)) {
@@ -4974,11 +5498,16 @@ static bool htp_kparams_solve_dsv4_hc_pre_impl(
     kparams->n_hvx        = (std::min)(htp_session_n_hvx(sess), kparams->total_jobs);
     kparams->jobs_per_hvx = (kparams->total_jobs + kparams->n_hvx - 1) / kparams->n_hvx;
 
+    const uint32_t x_es   = (uint32_t) ggml_type_size(x->type);
+    const uint32_t w_es   = (uint32_t) ggml_type_size(weights->type);
+    const uint32_t dst_es = (uint32_t) ggml_type_size(dst->type);
+    const uint32_t max_es = gated ? std::max({ x_es, w_es, dst_es }) : std::max(x_es, dst_es);
+
     const size_t vtcm_budget = htp_session_vtcm_size(sess);
     const uint32_t n_rows    = gated ? HTP_DSV4_HC_PRE_GATED_ROWS : HTP_DSV4_HC_PRE_PLAIN_ROWS;
     uint32_t block_chunks    = (std::min)((uint32_t) HTP_DSV4_HC_MAX_CHUNKS, kparams->n_chunks);
     while (block_chunks > 16) {
-        const uint32_t stride = block_chunks * 128;
+        const uint32_t stride = std::max<uint32_t>(128, GGML_PAD(block_chunks * HTP_DSV4_HC_CHUNK_ELEMS * max_es, 128));
         const uint32_t buf_sz = n_rows * stride;
         if (2 * buf_sz * kparams->n_hvx <= vtcm_budget) {
             break;
@@ -4987,7 +5516,7 @@ static bool htp_kparams_solve_dsv4_hc_pre_impl(
     }
 
     kparams->dma_block_chunks = block_chunks;
-    kparams->dma_row_stride   = block_chunks * 128;
+    kparams->dma_row_stride   = std::max<uint32_t>(128, GGML_PAD(block_chunks * HTP_DSV4_HC_CHUNK_ELEMS * max_es, 128));
     kparams->dma_buffer_size  = n_rows * kparams->dma_row_stride;
     kparams->vtcm_size        = 2 * kparams->dma_buffer_size * kparams->n_hvx;
     if (kparams->vtcm_size > vtcm_budget) {
@@ -5013,114 +5542,6 @@ static inline bool htp_kparams_solve_dsv4_hc_pre(
     return htp_kparams_solve_dsv4_hc_pre_impl(sess, op->src[0], op->src[1], op, kparams);
 }
 
-static bool htp_dsv4_hc_post_can_collapse(
-    const struct ggml_tensor * x,
-    const struct ggml_tensor * residual,
-    const struct ggml_tensor * post,
-    const struct ggml_tensor * comb,
-    const struct ggml_tensor * dst
-) {
-    if (!x || !residual || !post || !dst) {
-        return false;
-    }
-    if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || post->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
-        return false;
-    }
-    if (comb && comb->type != GGML_TYPE_F32) {
-        return false;
-    }
-    if (x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || post->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
-        return false;
-    }
-    if (comb && comb->nb[0] != sizeof(float)) {
-        return false;
-    }
-    if (residual->ne[0] != x->ne[0] || residual->ne[1] != 4 || dst->ne[0] != x->ne[0] || dst->ne[1] != 4 || post->ne[0] != 4) {
-        return false;
-    }
-    if (comb && (comb->ne[0] != 4 || comb->ne[1] != 4)) {
-        return false;
-    }
-
-    const int64_t x_tokens = x->ne[1] * x->ne[2] * x->ne[3];
-    const int64_t r_tokens = residual->ne[2] * residual->ne[3];
-    const int64_t p_tokens = post->ne[1] * post->ne[2] * post->ne[3];
-    const int64_t d_tokens = dst->ne[2] * dst->ne[3];
-    if (x_tokens != r_tokens || x_tokens != p_tokens || x_tokens != d_tokens) {
-        return false;
-    }
-    if (comb && (comb->ne[2] * comb->ne[3] != x_tokens)) {
-        return false;
-    }
-
-    if (x->ne[2] == 1 && x->ne[3] == 1 &&
-        residual->ne[3] == 1 &&
-        post->ne[2] == 1 && post->ne[3] == 1 &&
-        dst->ne[3] == 1 &&
-        (!comb || comb->ne[3] == 1)) {
-        return false;
-    }
-
-    if (x->ne[2] > 1 && x->nb[2] != x->ne[1] * x->nb[1]) return false;
-    if (x->ne[3] > 1 && x->nb[3] != x->ne[2] * x->nb[2]) return false;
-
-    if (residual->ne[3] > 1 && residual->nb[3] != residual->ne[2] * residual->nb[2]) return false;
-    if (dst->ne[3] > 1 && dst->nb[3] != dst->ne[2] * dst->nb[2]) return false;
-
-    if (post->ne[2] > 1 && post->nb[2] != post->ne[1] * post->nb[1]) return false;
-    if (post->ne[3] > 1 && post->nb[3] != post->ne[2] * post->nb[2]) return false;
-
-    if (comb && comb->ne[3] > 1 && comb->nb[3] != comb->ne[2] * comb->nb[2]) return false;
-
-    return true;
-}
-
-static void htp_dsv4_hc_post_collapse_tensors(
-    const struct ggml_tensor * x,
-    const struct ggml_tensor * residual,
-    const struct ggml_tensor * post,
-    const struct ggml_tensor * comb,
-    const struct ggml_tensor * dst,
-    struct ggml_tensor * x_c,
-    struct ggml_tensor * r_c,
-    struct ggml_tensor * p_c,
-    struct ggml_tensor * c_c,
-    struct ggml_tensor * d_c
-) {
-    const int64_t n_tokens = x->ne[1] * x->ne[2] * x->ne[3];
-
-    *x_c = *x;
-    x_c->ne[1] = n_tokens;
-    x_c->ne[2] = 1;
-    x_c->ne[3] = 1;
-    x_c->nb[2] = x_c->ne[1] * x_c->nb[1];
-    x_c->nb[3] = x_c->nb[2];
-
-    *r_c = *residual;
-    r_c->ne[2] = n_tokens;
-    r_c->ne[3] = 1;
-    r_c->nb[3] = r_c->ne[2] * r_c->nb[2];
-
-    *d_c = *dst;
-    d_c->ne[2] = n_tokens;
-    d_c->ne[3] = 1;
-    d_c->nb[3] = d_c->ne[2] * d_c->nb[2];
-
-    *p_c = *post;
-    p_c->ne[1] = n_tokens;
-    p_c->ne[2] = 1;
-    p_c->ne[3] = 1;
-    p_c->nb[2] = p_c->ne[1] * p_c->nb[1];
-    p_c->nb[3] = p_c->nb[2];
-
-    if (comb && c_c) {
-        *c_c = *comb;
-        c_c->ne[2] = n_tokens;
-        c_c->ne[3] = 1;
-        c_c->nb[3] = c_c->ne[2] * c_c->nb[2];
-    }
-}
-
 static bool htp_kparams_solve_dsv4_hc_post_impl(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * x,
@@ -5132,10 +5553,13 @@ static bool htp_kparams_solve_dsv4_hc_post_impl(
 ) {
     memset(kparams, 0, sizeof(*kparams));
 
-    if (x->type != GGML_TYPE_F32 || residual->type != GGML_TYPE_F32 || post->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32) {
+    const auto is_valid_type = [](const ggml_tensor * t) {
+        return (t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_F16) && t->nb[0] == ggml_type_size(t->type);
+    };
+    if (!is_valid_type(x) || !is_valid_type(residual) || !is_valid_type(post) || !is_valid_type(dst)) {
         return false;
     }
-    if (comb && comb->type != GGML_TYPE_F32) {
+    if (comb && !is_valid_type(comb)) {
         return false;
     }
     if (x->ne[2] != 1 || x->ne[3] != 1) {
@@ -5156,12 +5580,6 @@ static bool htp_kparams_solve_dsv4_hc_post_impl(
     if (dst->ne[0] != x->ne[0] || dst->ne[1] != 4 || dst->ne[2] != x->ne[1] || dst->ne[3] != 1) {
         return false;
     }
-    if (x->nb[0] != sizeof(float) || residual->nb[0] != sizeof(float) || post->nb[0] != sizeof(float) || dst->nb[0] != sizeof(float)) {
-        return false;
-    }
-    if (comb && comb->nb[0] != sizeof(float)) {
-        return false;
-    }
     if (ggml_is_permuted(x) || ggml_is_permuted(residual) || ggml_is_permuted(post) || ggml_is_permuted(dst) || (comb && ggml_is_permuted(comb))) {
         return false;
     }
@@ -5178,10 +5596,15 @@ static bool htp_kparams_solve_dsv4_hc_post_impl(
     kparams->n_hvx        = (std::min)(htp_session_n_hvx(sess), kparams->total_jobs);
     kparams->jobs_per_hvx = (kparams->total_jobs + kparams->n_hvx - 1) / kparams->n_hvx;
 
+    const uint32_t x_es   = (uint32_t) ggml_type_size(x->type);
+    const uint32_t r_es   = (uint32_t) ggml_type_size(residual->type);
+    const uint32_t dst_es = (uint32_t) ggml_type_size(dst->type);
+    const uint32_t max_es = std::max({ x_es, r_es, dst_es });
+
     const size_t vtcm_budget = htp_session_vtcm_size(sess);
     uint32_t block_chunks    = (std::min)((uint32_t) HTP_DSV4_HC_MAX_CHUNKS, kparams->n_chunks);
     while (block_chunks > 16) {
-        const uint32_t stride = block_chunks * 128;
+        const uint32_t stride = std::max<uint32_t>(256, GGML_PAD(block_chunks * HTP_DSV4_HC_CHUNK_ELEMS * max_es, 128));
         const uint32_t buf_sz = HTP_DSV4_HC_POST_ROWS * stride;
         if (2 * buf_sz * kparams->n_hvx <= vtcm_budget) {
             break;
@@ -5190,7 +5613,7 @@ static bool htp_kparams_solve_dsv4_hc_post_impl(
     }
 
     kparams->dma_block_chunks = block_chunks;
-    kparams->dma_row_stride   = block_chunks * 128;
+    kparams->dma_row_stride   = std::max<uint32_t>(256, GGML_PAD(block_chunks * HTP_DSV4_HC_CHUNK_ELEMS * max_es, 128));
     kparams->dma_buffer_size  = HTP_DSV4_HC_POST_ROWS * kparams->dma_row_stride;
     kparams->vtcm_size        = 2 * kparams->dma_buffer_size * kparams->n_hvx;
     if (kparams->vtcm_size > vtcm_budget) {
@@ -5216,92 +5639,6 @@ static inline bool htp_kparams_solve_dsv4_hc_post(
     return htp_kparams_solve_dsv4_hc_post_impl(sess, op->src[0], op->src[1], op->src[2], op->src[3], op, kparams);
 }
 
-static bool htp_lightning_indexer_can_collapse(
-    const struct ggml_tensor * q,
-    const struct ggml_tensor * k,
-    const struct ggml_tensor * w,
-    const struct ggml_tensor * m,
-    const struct ggml_tensor * dst
-) {
-    if (!q || !k || !w || !m || !dst) {
-        return false;
-    }
-
-    // 2D K normalization: ne[1] is n_kv, ne[2] is 1
-    const bool can_collapse_k = (k->ne[1] > 1 && k->ne[2] == 1);
-
-    // Stream-to-token collapse across q, w, dst (and m)
-    bool can_collapse_stream = false;
-    if (q->ne[3] > 1 && k->ne[3] == 1) {
-        const bool q_ok = (q->nb[3] == (size_t) q->ne[2] * q->nb[2]);
-        const bool dst_ok = (dst->ne[3] == q->ne[3] && dst->ne[2] == 1 && dst->ne[1] == q->ne[2] &&
-                             dst->nb[3] == (size_t) dst->ne[1] * dst->nb[1]);
-        const bool w_ok = (w->ne[3] == q->ne[3] && w->ne[2] == 1 && w->ne[1] == q->ne[2] &&
-                           w->nb[3] == (size_t) w->ne[1] * w->nb[1]) ||
-                          (w->ne[3] == 1 && w->ne[1] == q->ne[2] * q->ne[3]);
-        const bool m_ok = (m->ne[3] == q->ne[3] && m->ne[2] == 1 && m->ne[1] == q->ne[2] &&
-                           m->nb[3] == (size_t) m->ne[1] * m->nb[1]) ||
-                          (m->ne[3] == 1 && m->ne[1] == q->ne[2] * q->ne[3]);
-        can_collapse_stream = q_ok && dst_ok && w_ok && m_ok;
-    }
-
-    return can_collapse_k || can_collapse_stream;
-}
-
-static void htp_lightning_indexer_collapse_tensors(
-    const struct ggml_tensor * q,
-    const struct ggml_tensor * k,
-    const struct ggml_tensor * w,
-    const struct ggml_tensor * m,
-    const struct ggml_tensor * dst,
-    struct ggml_tensor * q_c,
-    struct ggml_tensor * k_c,
-    struct ggml_tensor * w_c,
-    struct ggml_tensor * m_c,
-    struct ggml_tensor * dst_c
-) {
-    *q_c   = *q;
-    *k_c   = *k;
-    *w_c   = *w;
-    *m_c   = *m;
-    *dst_c = *dst;
-
-    if (k->ne[1] > 1 && k->ne[2] == 1) {
-        k_c->ne[2] = k->ne[1];
-        k_c->ne[1] = 1;
-        k_c->nb[1] = k->nb[1];
-        k_c->nb[2] = k->nb[1];
-        k_c->nb[3] = k->nb[2];
-    }
-
-    if (q->ne[3] > 1 && k->ne[3] == 1) {
-        const int64_t n_tokens_collapsed = (int64_t) q->ne[2] * q->ne[3];
-
-        q_c->ne[2] = n_tokens_collapsed;
-        q_c->ne[3] = 1;
-        q_c->nb[3] = (size_t) q_c->ne[2] * q_c->nb[2];
-
-        if (w->ne[3] == q->ne[3]) {
-            w_c->ne[1] = n_tokens_collapsed;
-            w_c->ne[3] = 1;
-            w_c->nb[2] = (size_t) w_c->ne[1] * w_c->nb[1];
-            w_c->nb[3] = w_c->nb[2];
-        }
-
-        dst_c->ne[1] = n_tokens_collapsed;
-        dst_c->ne[3] = 1;
-        dst_c->nb[2] = (size_t) dst_c->ne[1] * dst_c->nb[1];
-        dst_c->nb[3] = dst_c->nb[2];
-
-        if (m->ne[3] == q->ne[3] && m->ne[1] == q->ne[2]) {
-            m_c->ne[1] = n_tokens_collapsed;
-            m_c->ne[3] = 1;
-            m_c->nb[2] = (size_t) m_c->ne[1] * m_c->nb[1];
-            m_c->nb[3] = m_c->nb[2];
-        }
-    }
-}
-
 static bool htp_kparams_solve_lightning_indexer_impl(
     const struct ggml_hexagon_session * sess,
     const struct ggml_tensor * q,
@@ -5315,7 +5652,11 @@ static bool htp_kparams_solve_lightning_indexer_impl(
         return false;
     }
 
-    if (k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0 && k->type != GGML_TYPE_Q4_0) {
+    if ((q->type != GGML_TYPE_F32 && q->type != GGML_TYPE_F16) ||
+        (k->type != GGML_TYPE_F32 && k->type != GGML_TYPE_F16 && k->type != GGML_TYPE_Q8_0 && k->type != GGML_TYPE_Q4_0) ||
+        (w->type != GGML_TYPE_F32 && w->type != GGML_TYPE_F16) ||
+        m->type != GGML_TYPE_F16 ||
+        op->type != GGML_TYPE_F32) {
         return false;
     }
 
@@ -5365,7 +5706,7 @@ static bool htp_kparams_solve_lightning_indexer_impl(
             while (nt2 > 32 && vtcm_usage(nt2, 64, 2) > htp_session_vtcm_size(sess)) {
                 nt2 /= 2;
             }
-            const size_t q_bytes = (size_t) nt2 * n_head * D * sizeof(float);
+            const size_t q_bytes = (size_t) nt2 * n_head * ggml_row_size(q->type, D);
             const size_t k_bytes = (size_t) k->ne[2] * ggml_row_size(k->type, D);
             if (vtcm_usage(nt2, 64, 2) <= htp_session_vtcm_size(sess) && q_bytes >= k_bytes) {
                 n_tok  = nt2;
@@ -5454,217 +5795,207 @@ static inline bool htp_kparams_invoke(
     return SolveFn(sess, op, kparams ? (KParams *) kparams : &tmp);
 }
 
-void htp_opnode_collapse(const struct ggml_hexagon_session * sess, htp_opnode & node) {
-    const uint32_t n_hvx = htp_session_n_hvx(sess);
-
-    if (htp_op_is_unary(node.opcode) && htp_unary_is_elementwise(node.opcode)) {
-        if (node.inputs.empty() || !node.inputs[0] || node.outputs.empty() || !node.outputs[0]) {
-            return;
-        }
-        if (!ggml_are_same_shape(node.inputs[0], node.outputs[0])) {
-            return;
-        }
-        const size_t elem_size = ggml_type_size(node.inputs[0]->type);
-        struct ggml_tensor src0_c = *node.inputs[0];
-        struct ggml_tensor dst_c  = *node.outputs[0];
-        struct ggml_tensor * tensors[2] = { &src0_c, &dst_c };
-        htp_collapse_dims(tensors, 2, elem_size, n_hvx);
-        if (src0_c.ne[0] != node.inputs[0]->ne[0] || src0_c.ne[1] != node.inputs[0]->ne[1]) {
-            node.inputs[0]  = node.add_dummy(src0_c);
-            node.outputs[0] = node.add_dummy(dst_c);
-        }
-        return;
-    }
-
-    if (htp_op_is_glu(node.opcode)) {
-        if (node.inputs.size() < 2 || !node.inputs[0] || !node.inputs[1] || node.outputs.empty() || !node.outputs[0]) {
-            return;
-        }
-        if (!ggml_are_same_shape(node.inputs[0], node.outputs[0]) ||
-            !ggml_are_same_shape(node.inputs[1], node.outputs[0])) {
-            return;
-        }
-        const size_t elem_size = ggml_type_size(node.inputs[0]->type);
-        struct ggml_tensor src0_c = *node.inputs[0];
-        struct ggml_tensor src1_c = *node.inputs[1];
-        struct ggml_tensor dst_c  = *node.outputs[0];
-        struct ggml_tensor * tensors[3] = { &src0_c, &src1_c, &dst_c };
-        htp_collapse_dims(tensors, 3, elem_size, n_hvx);
-        if (src0_c.ne[0] != node.inputs[0]->ne[0] || src0_c.ne[1] != node.inputs[0]->ne[1]) {
-            node.inputs[0]  = node.add_dummy(src0_c);
-            node.inputs[1]  = node.add_dummy(src1_c);
-            node.outputs[0] = node.add_dummy(dst_c);
-        }
-        return;
-    }
-
-    if (node.opcode == HTP_OP_MUL_MAT) {
-        if (node.inputs.size() < 2 || !node.inputs[0] || !node.inputs[1] || node.outputs.empty() || !node.outputs[0]) {
-            return;
-        }
-        const struct ggml_tensor * src0 = node.inputs[0];
-        const struct ggml_tensor * src1 = node.inputs[1];
-        const struct ggml_tensor * dst  = node.outputs[0];
-        if (htp_matmul_can_collapse(src0, src1, dst)) {
-            node.inputs[1]  = node.add_dummy(htp_tensor_collapse_rows(src1));
-            node.outputs[0] = node.add_dummy(htp_tensor_collapse_rows(dst));
-        }
-        return;
-    }
-
-    if (node.opcode == HTP_OP_MUL_MAT_ADD) {
-        if (node.inputs.size() < 2 || !node.inputs[0] || !node.inputs[1] || node.outputs.empty() || !node.outputs[0]) {
-            return;
-        }
-        const struct ggml_tensor * src0 = node.inputs[0];
-        const struct ggml_tensor * src1 = node.inputs[1];
-        const struct ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
-        const struct ggml_tensor * dst  = node.outputs[0];
-        if (htp_matmul_add_can_collapse(src0, src1, src2, dst)) {
-            node.inputs[1]  = node.add_dummy(htp_tensor_collapse_rows(src1));
-            node.outputs[0] = node.add_dummy(htp_tensor_collapse_rows(dst));
-            if (src2 && (src2->ne[1] * src2->ne[2] * src2->ne[3] > 1)) {
-                node.inputs[2] = node.add_dummy(htp_tensor_collapse_rows(src2));
-            }
-        }
-        return;
-    }
-
-    if (node.opcode == HTP_OP_UPSCALE) {
-        if (node.inputs.empty() || !node.inputs[0] || node.outputs.empty() || !node.outputs[0]) {
-            return;
-        }
-        const struct ggml_tensor * src0 = node.inputs[0];
-        const struct ggml_tensor * dst  = node.outputs[0];
-
-        if ((src0->ne[3] > 1 || dst->ne[3] > 1) &&
-            src0->ne[2] == dst->ne[2] && src0->ne[3] == dst->ne[3] &&
-            src0->nb[3] == (size_t) src0->ne[2] * src0->nb[2] &&
-            dst->nb[3]  == (size_t) dst->ne[2]  * dst->nb[2]) {
-            struct ggml_tensor src0_c = *src0;
-            struct ggml_tensor dst_c  = *dst;
-            src0_c.ne[2] *= src0_c.ne[3];
-            src0_c.ne[3] = 1;
-            src0_c.nb[3] = (size_t) src0_c.ne[2] * src0_c.nb[2];
-            dst_c.ne[2]  *= dst_c.ne[3];
-            dst_c.ne[3]  = 1;
-            dst_c.nb[3]  = (size_t) dst_c.ne[2] * dst_c.nb[2];
-            node.inputs[0]  = node.add_dummy(src0_c);
-            node.outputs[0] = node.add_dummy(dst_c);
-        }
-        return;
-    }
-
-    if (node.opcode == HTP_OP_DSV4_HC_PRE) {
-        if (node.inputs.size() < 2 || !node.inputs[0] || !node.inputs[1] || node.outputs.empty() || !node.outputs[0]) {
-            return;
-        }
-        const struct ggml_tensor * x       = node.inputs[0];
-        const struct ggml_tensor * weights = node.inputs[1];
-        const struct ggml_tensor * dst     = node.outputs[0];
-
-        if (htp_dsv4_hc_pre_can_collapse(x, weights, dst)) {
-            struct ggml_tensor x_c, w_c, d_c;
-            htp_dsv4_hc_pre_collapse_tensors(x, weights, dst, &x_c, &w_c, &d_c);
-            node.inputs[0]  = node.add_dummy(x_c);
-            node.inputs[1]  = node.add_dummy(w_c);
-            node.outputs[0] = node.add_dummy(d_c);
-        }
-        return;
-    }
-
-    if (node.opcode == HTP_OP_DSV4_HC_POST) {
-        if (node.inputs.size() < 3 || !node.inputs[0] || !node.inputs[1] || !node.inputs[2] || node.outputs.empty() || !node.outputs[0]) {
-            return;
-        }
-        const struct ggml_tensor * x        = node.inputs[0];
-        const struct ggml_tensor * residual = node.inputs[1];
-        const struct ggml_tensor * post     = node.inputs[2];
-        const struct ggml_tensor * comb     = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
-        const struct ggml_tensor * dst      = node.outputs[0];
-
-        if (htp_dsv4_hc_post_can_collapse(x, residual, post, comb, dst)) {
-            struct ggml_tensor x_c, r_c, p_c, c_c, d_c;
-            htp_dsv4_hc_post_collapse_tensors(x, residual, post, comb, dst, &x_c, &r_c, &p_c, comb ? &c_c : nullptr, &d_c);
-            node.inputs[0]  = node.add_dummy(x_c);
-            node.inputs[1]  = node.add_dummy(r_c);
-            node.inputs[2]  = node.add_dummy(p_c);
-            if (comb) {
-                node.inputs[3] = node.add_dummy(c_c);
-            }
-            node.outputs[0] = node.add_dummy(d_c);
-        }
-        return;
-    }
-
-    if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
-        if (node.inputs.size() < 4 || !node.inputs[0] || !node.inputs[1] || !node.inputs[2] || !node.inputs[3] || node.outputs.empty() || !node.outputs[0]) {
-            return;
-        }
-        const struct ggml_tensor * q   = node.inputs[0];
-        const struct ggml_tensor * k   = node.inputs[1];
-        const struct ggml_tensor * w   = node.inputs[2];
-        const struct ggml_tensor * m   = node.inputs[3];
-        const struct ggml_tensor * dst = node.outputs[0];
-
-        if (htp_lightning_indexer_can_collapse(q, k, w, m, dst)) {
-            struct ggml_tensor q_c, k_c, w_c, m_c, d_c;
-            htp_lightning_indexer_collapse_tensors(q, k, w, m, dst, &q_c, &k_c, &w_c, &m_c, &d_c);
-            node.inputs[0]  = node.add_dummy(q_c);
-            node.inputs[1]  = node.add_dummy(k_c);
-            node.inputs[2]  = node.add_dummy(w_c);
-            node.inputs[3]  = node.add_dummy(m_c);
-            node.outputs[0] = node.add_dummy(d_c);
-        }
-        return;
-    }
-}
-
 bool htp_kparams_solve(
     const struct ggml_hexagon_session * sess,
     htp_opnode & node
 ) {
-    htp_opnode_collapse(sess, node);
+    ggml_tensor scratch[HTP_OP_MAX_INPUTS + HTP_OP_MAX_OUTPUTS];
+    htp_opnode tmp = node;
+    htp_lower_opnode(sess, tmp, scratch);
 
-    const ggml_tensor * src0 = node.inputs.empty() ? nullptr : node.inputs[0];
-    const ggml_tensor * src1 = node.inputs.size() > 1 ? node.inputs[1] : nullptr;
-    const ggml_tensor * dst  = node.dst();
+    const ggml_tensor * src0 = tmp.inputs.empty() ? nullptr : tmp.inputs[0];
+    const ggml_tensor * src1 = tmp.inputs.size() > 1 ? tmp.inputs[1] : nullptr;
+    const ggml_tensor * dst  = tmp.dst();
 
-    if (htp_op_is_unary(node.opcode)) {
-        return htp_kparams_solve_unary_impl(sess, node.opcode, src0, src1, dst, node.kparams<htp_unary_kernel_params>());
+    auto commit = [&](bool ok) {
+        if (ok) {
+            memcpy(node.kernel_params, tmp.kernel_params, sizeof(node.kernel_params));
+        }
+        return ok;
+    };
+
+    if (htp_op_is_unary(tmp.opcode)) {
+        auto * kp = tmp.kparams<htp_unary_kernel_params>();
+        const uint32_t has_scale_bias = kp->has_scale_bias;
+        const float    in_scale       = kp->in_scale;
+        const float    in_bias        = kp->in_bias;
+        const float    out_scale      = kp->out_scale;
+        const float    out_bias       = kp->out_bias;
+        const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
+        const bool ok = htp_kparams_solve_unary_impl(sess, tmp.opcode, src0, src1, src2, dst, kp);
+        if (has_scale_bias) {
+            kp->has_scale_bias = has_scale_bias;
+            kp->in_scale       = in_scale;
+            kp->in_bias        = in_bias;
+            kp->out_scale      = out_scale;
+            kp->out_bias       = out_bias;
+        }
+        return commit(ok);
     }
-    if (htp_op_is_glu(node.opcode)) {
-        return htp_kparams_solve_unary_mul_glu(sess, node.opcode, src0, src1, dst, node.kparams<htp_glu_kernel_params>());
+    if (htp_op_is_glu(tmp.opcode)) {
+        return commit(htp_kparams_solve_unary_mul_glu(sess, tmp.opcode, src0, src1, dst, tmp.kparams<htp_glu_kernel_params>()));
     }
-    if (node.opcode == HTP_OP_MUL_MAT) {
+    if (tmp.opcode == HTP_OP_MUL_MAT || tmp.opcode == HTP_OP_MUL_MAT_ID) {
         if (!htp_matmul_check_types(src0, src1, dst)) {
             return false;
         }
-        return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, 0, 0, node.kparams<htp_mm_kernel_params>());
+        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, nullptr, dst, tmp.kparams<htp_mm_kernel_params>()));
     }
-    if (node.opcode == HTP_OP_MUL_MAT_ADD) {
-        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
-        const size_t src2_size = src2 ? hex_round_up(ggml_nbytes(src2), 128) : 0;
-        return htp_kparams_solve_matmul_impl(sess, src0, src1, dst, src2 ? src2->nb[1] : 0, src2_size, node.kparams<htp_mm_kernel_params>());
+    if (tmp.opcode == HTP_OP_MUL_MAT_ADD) {
+        if (tmp.inputs.size() != 3) {
+            return false;
+        }
+        const ggml_tensor * bias = tmp.inputs[2];
+        if ((bias->type != GGML_TYPE_F32 && bias->type != GGML_TYPE_F16) ||
+            bias->nb[0] != ggml_type_size(bias->type) ||
+            !htp_matmul_check_types(src0, src1, dst)) {
+            return false;
+        }
+        return commit(htp_kparams_solve_matmul_impl(sess, src0, src1, bias, dst, tmp.kparams<htp_mm_kernel_params>()));
     }
-    if (node.opcode == HTP_OP_UPSCALE) {
-        return htp_kparams_solve_upscale(sess, src0, dst, node.kparams<htp_upscale_kernel_params>());
+    if (tmp.opcode == HTP_OP_MUL_MAT_NX) {
+        const size_t n_w = tmp.outputs.size();
+        if (n_w == 0 || tmp.inputs.size() != n_w + 1) {
+            return false;
+        }
+        const ggml_tensor * act = tmp.inputs[n_w];
+        const ggml_tensor * w_for_solve   = tmp.inputs[0];
+        const ggml_tensor * dst_for_solve = tmp.outputs[0];
+        ggml_type           max_dst_type  = tmp.outputs[0]->type;
+        for (size_t i = 0; i < n_w; ++i) {
+            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i])) {
+                return false;
+            }
+            if (tmp.inputs[i]->ne[1] > w_for_solve->ne[1]) {
+                w_for_solve = tmp.inputs[i];
+            }
+            if (ggml_type_size(tmp.outputs[i]->type) > ggml_type_size(max_dst_type)) {
+                max_dst_type = tmp.outputs[i]->type;
+            }
+        }
+        ggml_tensor d_for_solve = *dst_for_solve;
+        d_for_solve.type = max_dst_type;
+        if (!htp_kparams_solve_mmnx(sess, w_for_solve, act, &d_for_solve, (int32_t) n_w, tmp.kparams<htp_mm_kernel_params>())) {
+            return false;
+        }
+        const auto * kp = tmp.kparams<htp_mm_kernel_params>();
+        const bool ok = kp->n_hmx ? htp_mm_kernel_is_hmx_2d(kp->kernel_type)
+                                  : (ggml_hexagon_tensor_is_tiled(tmp.inputs[0]) &&
+                                     (kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK));
+        return commit(ok);
     }
-    if (node.opcode == HTP_OP_DSV4_HC_PRE) {
-        return htp_kparams_solve_dsv4_hc_pre_impl(sess, src0, src1, dst, node.kparams<htp_dsv4_hc_pre_kernel_params>());
+    if (tmp.opcode == HTP_OP_MUL_MAT_NX_GLU) {
+        if (tmp.inputs.size() != 3 || tmp.outputs.size() != 1) {
+            return false;
+        }
+        const uint8_t glu_op = tmp.kparams<htp_mm_kernel_params>()->glu_op;
+        return commit(htp_kparams_solve_mmnx_glu(sess, tmp.inputs[0], tmp.inputs[1], tmp.inputs[2], tmp.outputs[0], glu_op, tmp.kparams<htp_mm_kernel_params>()));
     }
-    if (node.opcode == HTP_OP_DSV4_HC_POST) {
-        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
-        const ggml_tensor * src3 = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
-        return htp_kparams_solve_dsv4_hc_post_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_dsv4_hc_post_kernel_params>());
+    if (tmp.opcode == HTP_OP_MUL_MAT_ID_NX) {
+        const size_t n_w = tmp.outputs.size();
+        if (n_w == 0 || tmp.inputs.size() != n_w + 2) {
+            return false;
+        }
+        const ggml_tensor * act = tmp.inputs[n_w];
+        const ggml_tensor * w_for_solve   = tmp.inputs[0];
+        const ggml_tensor * dst_for_solve = tmp.outputs[0];
+        ggml_type           max_dst_type  = tmp.outputs[0]->type;
+        for (size_t i = 0; i < n_w; ++i) {
+            if (!htp_matmul_check_types(tmp.inputs[i], act, tmp.outputs[i])) {
+                return false;
+            }
+            if (tmp.inputs[i]->ne[1] > w_for_solve->ne[1]) {
+                w_for_solve = tmp.inputs[i];
+            }
+            if (ggml_type_size(tmp.outputs[i]->type) > ggml_type_size(max_dst_type)) {
+                max_dst_type = tmp.outputs[i]->type;
+            }
+        }
+        ggml_tensor d_for_solve = *dst_for_solve;
+        d_for_solve.type = max_dst_type;
+        if (!htp_kparams_solve_mmidnx(sess, w_for_solve, act, &d_for_solve, (int32_t) n_w, tmp.kparams<htp_mm_kernel_params>())) {
+            return false;
+        }
+        const auto * kp = tmp.kparams<htp_mm_kernel_params>();
+        const bool ok = kp->n_hmx ? htp_mm_kernel_is_hmx_2d(kp->kernel_type)
+                                  : (ggml_hexagon_tensor_is_tiled(tmp.inputs[0]) &&
+                                     (kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_ROW || kp->kernel_type == HTP_MM_KERNEL_HVX_QUANT_BLOCK));
+        return commit(ok);
     }
-    if (node.opcode == HTP_OP_LIGHTNING_INDEXER) {
-        const ggml_tensor * src2 = node.inputs.size() > 2 ? node.inputs[2] : nullptr;
-        const ggml_tensor * src3 = node.inputs.size() > 3 ? node.inputs[3] : nullptr;
-        return htp_kparams_solve_lightning_indexer_impl(sess, src0, src1, src2, src3, dst, node.kparams<htp_lid_kernel_params>());
+    if (tmp.opcode == HTP_OP_UPSCALE) {
+        return commit(htp_kparams_solve_upscale(sess, src0, dst, tmp.kparams<htp_upscale_kernel_params>()));
+    }
+    if (tmp.opcode == HTP_OP_DSV4_HC_PRE) {
+        return commit(htp_kparams_solve_dsv4_hc_pre_impl(sess, src0, src1, dst, tmp.kparams<htp_dsv4_hc_pre_kernel_params>()));
+    }
+    if (tmp.opcode == HTP_OP_DSV4_HC_POST) {
+        const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
+        const ggml_tensor * src3 = tmp.inputs.size() > 3 ? tmp.inputs[3] : nullptr;
+        return commit(htp_kparams_solve_dsv4_hc_post_impl(sess, src0, src1, src2, src3, dst, tmp.kparams<htp_dsv4_hc_post_kernel_params>()));
+    }
+    if (tmp.opcode == HTP_OP_LIGHTNING_INDEXER) {
+        const ggml_tensor * src2 = tmp.inputs.size() > 2 ? tmp.inputs[2] : nullptr;
+        const ggml_tensor * src3 = tmp.inputs.size() > 3 ? tmp.inputs[3] : nullptr;
+        return commit(htp_kparams_solve_lightning_indexer_impl(sess, src0, src1, src2, src3, dst, tmp.kparams<htp_lid_kernel_params>()));
+    }
+    if (tmp.opcode == HTP_OP_GET_ROWS) {
+        return commit(htp_kparams_solve_repeat_get_rows(sess, src0, src1, dst, tmp.kparams<htp_get_rows_kernel_params>()));
+    }
+    if (tmp.opcode == HTP_OP_SSM_CONV) {
+        auto * kp = tmp.kparams<htp_ssm_conv_kernel_params>();
+        const uint32_t silu = kp->silu;
+        bool ok = false;
+        if (tmp.inputs.size() == 3 && !tmp.outputs.empty() && tmp.outputs.size() <= 2) {
+            const ggml_tensor * dst_state = (tmp.outputs.size() == 2) ? tmp.outputs[1] : nullptr;
+            ok = htp_kparams_solve_ssm_conv_token_major(sess, src0, src1, tmp.inputs[2], tmp.outputs[0], dst_state, kp);
+        } else if (tmp.inputs.size() == 2 && tmp.outputs.size() == 1) {
+            ok = htp_kparams_solve_ssm_conv(sess, src0, src1, dst, kp);
+        }
+        kp->silu = silu;
+        return commit(ok);
+    }
+    if (tmp.opcode == HTP_OP_GATED_DELTA_NET) {
+        if ((tmp.inputs.size() != 6 && tmp.inputs.size() != 7 && tmp.inputs.size() != 10) ||
+            tmp.outputs.empty() || tmp.outputs.size() > 2) {
+            return false;
+        }
+        ggml_tensor op_view = *tmp.outputs[0];
+        op_view.op = tmp.node->op;
+        op_view.flags = tmp.node->flags;
+        memcpy(op_view.op_params, tmp.params, sizeof(op_view.op_params));
+        for (size_t i = 6; i < GGML_MAX_SRC; ++i) {
+            op_view.src[i] = nullptr;
+        }
+        for (size_t i = 0; i < tmp.inputs.size(); ++i) {
+            op_view.src[i] = const_cast<ggml_tensor *>(tmp.inputs[i]);
+        }
+        const ggml_tensor * dst_cache = (tmp.outputs.size() == 2) ? tmp.outputs[1] : nullptr;
+        return commit(htp_kparams_solve_gated_delta_net(sess, &op_view, dst_cache, tmp.kparams<htp_gdn_kernel_params>()));
     }
 
-    return htp_kparams_solve(sess, node.node, node.kernel_params);
+    if (!tmp.fused.empty() &&
+        (tmp.opcode == HTP_OP_ADD || tmp.opcode == HTP_OP_SUB ||
+         tmp.opcode == HTP_OP_MUL || tmp.opcode == HTP_OP_DIV)) {
+        auto * kp = tmp.kparams<htp_binary_kernel_params>();
+        if (kp->kernel_type != HTP_BINARY_KERNEL_SCALAR && kp->n_srcs > 2 &&
+            tmp.inputs.size() == kp->n_srcs && tmp.outputs.size() == 1) {
+            return commit(htp_kparams_solve_binary_nx(sess, tmp, kp));
+        }
+    }
+
+    if (!tmp.fused.empty()) {
+        return false;
+    }
+
+    ggml_tensor op_view = *tmp.dst();
+    op_view.op = tmp.node->op;
+    op_view.flags = tmp.node->flags;
+    memcpy(op_view.op_params, tmp.params, sizeof(op_view.op_params));
+    for (size_t i = 0; i < tmp.inputs.size(); ++i) {
+        op_view.src[i] = const_cast<ggml_tensor *>(tmp.inputs[i]);
+    }
+
+    return commit(htp_kparams_solve(sess, &op_view, tmp.kernel_params));
 }
 
 bool htp_kparams_solve(
@@ -5709,7 +6040,11 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_rope>(sess, op, kparams);
 
         case HTP_OP_SSM_CONV:
-            return htp_kparams_invoke<htp_kparams_solve_ssm_conv>(sess, op, kparams);
+        {
+            struct htp_ssm_conv_kernel_params tmp;
+            return htp_kparams_solve_ssm_conv(sess, op->src[0], op->src[1], op,
+                                              kparams ? (struct htp_ssm_conv_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_SSM_SCAN:
             return htp_kparams_invoke<htp_kparams_solve_ssm_scan>(sess, op, kparams);
@@ -5718,7 +6053,11 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_softmax>(sess, op, kparams);
 
         case HTP_OP_GATED_DELTA_NET:
-            return htp_kparams_invoke<htp_kparams_solve_gated_delta_net>(sess, op, kparams);
+        {
+            struct htp_gdn_kernel_params tmp;
+            return htp_kparams_solve_gated_delta_net(sess, op, nullptr,
+                                                     kparams ? (struct htp_gdn_kernel_params *) kparams : &tmp);
+        }
 
         case HTP_OP_ARGSORT:
         case HTP_OP_TOP_K:
@@ -5792,12 +6131,6 @@ bool htp_kparams_solve(
             return htp_kparams_invoke<htp_kparams_solve_dsv4_hc_post>(sess, op, kparams);
 
         default:
-            if (htp_op_is_unary(opcode)) {
-                return htp_kparams_invoke<htp_kparams_solve_unary>(sess, op, kparams);
-            }
-            if (htp_op_is_glu(opcode)) {
-                return htp_kparams_invoke<htp_kparams_solve_glu>(sess, op, kparams);
-            }
             return false;
     }
 }

@@ -20,6 +20,12 @@ void ggml_zdnn_load_tensor_q(ggml_backend_zdnn_buffer * buffer, const ggml_tenso
 
 void ggml_zdnn_load_weights(ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor);
 
+bool ggml_zdnn_ztensor_in_alloc(const ggml_tensor * tensor);
+
+void ggml_zdnn_init_tensor_desc(zdnn_tensor_desc & pre_tfm_desc,
+                                zdnn_tensor_desc & tfm_desc,
+                          const ggml_tensor      * tensor);
+
 void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor);
 
 #endif  // GGML_ZDNN_UTILITIES_HPP

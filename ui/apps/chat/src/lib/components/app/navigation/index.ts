@@ -173,8 +173,6 @@ export { default as SidebarNavigationSelectionBar } from './SidebarNavigation/Si
  *   {conversations}
  *   {currentChatId}
  *   onSelect={...}
- *   onEdit={...}
- *   onDelete={...}
  *   onStop={...}
  * />
  * ```
@@ -182,8 +180,29 @@ export { default as SidebarNavigationSelectionBar } from './SidebarNavigation/Si
 export { default as SidebarNavigationConversationList } from './SidebarNavigation/SidebarNavigationConversationList.svelte';
 export { default as SidebarNavigationActions } from './SidebarNavigation/SidebarNavigationActions.svelte';
 
-/** The sidebar's footer: Models, MCP and Settings in a group inset in the sidebar. */
+/** The sidebar's footer: Models and Settings in a group inset in the sidebar. */
 export { default as SidebarNavigationFooter } from './SidebarNavigation/SidebarNavigationFooter.svelte';
+
+/**
+ * **ConversationActions** - The actions a conversation's menus offer
+ *
+ * Owns which actions a conversation has and what they do: open in a new tab,
+ * pin, rename, move to a group, export, share to Hugging Face, select and
+ * delete. It draws no menu itself: it hands the actions to its `children`,
+ * so the sidebar row's dropdown and right-click menu and a tab's right-click
+ * menu all show the same list. Rename, delete and share open the dialogs the
+ * sidebar hosts through `uiStore`.
+ *
+ * @example
+ * ```svelte
+ * <ConversationActions {conversation} isActive showOpenInNewTab={false}>
+ *   {#snippet children(actions)}
+ *     <ContextMenuActions {actions}>...</ContextMenuActions>
+ *   {/snippet}
+ * </ConversationActions>
+ * ```
+ */
+export { default as ConversationActions } from './ConversationActions.svelte';
 
 /**
  * **SidebarNavigationSearchResults** - Filtered conversation list for search.
@@ -203,8 +222,6 @@ export { default as SidebarNavigationFooter } from './SidebarNavigation/SidebarN
  *   {filteredConversations}
  *   {currentChatId}
  *   onSelect={...}
- *   onEdit={...}
- *   onDelete={...}
  *   onStop={...}
  * />
  * ```

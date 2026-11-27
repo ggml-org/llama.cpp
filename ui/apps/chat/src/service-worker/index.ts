@@ -4,13 +4,14 @@ import { assets, immutable } from '$app/manifest';
 import { self } from '$app/service-worker';
 
 const CACHE = `llama-ui-${version}`;
-// sw.js is the legacy worker path; it must always come from the network
+// sw.js is the legacy worker path; it must always come from the network, as must config.json,
+// which a host may change between two loads of the same build
 const PRECACHE = [
 	'./',
 	'manifest.webmanifest',
 	'_app/version.json',
 	...immutable.map(({ path }) => path),
-	...assets.map(({ path }) => path).filter((path) => path !== 'sw.js')
+	...assets.map(({ path }) => path).filter((path) => path !== 'sw.js' && path !== 'config.json')
 ].map((path) => new URL(withBase(path), self.location.href).href);
 const PRECACHE_PATHS = new Set(PRECACHE.map((href) => new URL(href).pathname));
 

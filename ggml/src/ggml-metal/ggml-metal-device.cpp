@@ -97,6 +97,17 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_cpy(ggml_metal_l
     return res;
 }
 
+ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mat_scale(ggml_metal_library_t lib) {
+    const char * name = "kernel_mul_mat_scale";
+
+    ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
+    if (!res.pipeline) {
+        res = ggml_metal_library_compile_pipeline(lib, name, name, nullptr);
+    }
+
+    return res;
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_pool_1d(ggml_metal_library_t lib, const ggml_tensor * op, ggml_op_pool op_pool) {
     GGML_ASSERT(ggml_is_contiguous(op->src[0]));
     GGML_ASSERT(op->src[0]->type == GGML_TYPE_F32 && op->src[0]->type == op->type);
@@ -1067,8 +1078,8 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_mul_mv(ggml_meta
             {
                 if (ne00 < 32) {
                     nsg = 1;
-                    nr0 = 32;
-                    nr1 = 1;
+                    nr0 = std::min(ne01, 32);
+                    nr1 = 32/nr0;
                     suffix = "_short";
                 } else {
                     nsg = std::min(4, (ne00 + 127) / 128);

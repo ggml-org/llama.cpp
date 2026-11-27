@@ -3495,6 +3495,14 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_AGENT"));
     add_opt(common_arg(
+        {"--ui-agent"},
+        "enable agent mode in Llama Chat with nothing enabled on the server: the tools that run in the browser and MCP servers the browser reaches itself, no server tools and no MCP proxy (default: disabled)\n"
+        "note: not needed with --agent, --tools or --ui-mcp-proxy, they enable agent mode in Llama Chat too",
+        [](common_params & params) {
+            params.ui_agent = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_AGENT"));
+    add_opt(common_arg(
         {"--ui", "--webui"},
         {"--no-ui", "--no-webui"},
         string_format("whether to enable Llama Chat, the built-in chat app (default: %s)", params.ui ? "enabled" : "disabled"),

@@ -133,6 +133,7 @@ static void ggml_backend_meta_device_get_props(ggml_backend_dev_t dev, ggml_back
         /* .buffer_from_host_ptr  = */ false, // Not implemented.
         /* .events                = */ false, // Not implemented.
         /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
     for (ggml_backend_dev_t simple_dev : meta_dev_ctx->simple_devs) {
         ggml_backend_dev_props tmp_props;
@@ -703,11 +704,9 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
     };
 
     auto handle_view = [&](const std::vector<ggml_backend_meta_split_state> & src_ss) -> ggml_backend_meta_split_state {
-        if (ggml_is_contiguous(tensor) && ggml_is_contiguous(tensor->src[0])) {
-            return handle_reshape(src_ss);
-        }
         const int axis = src_ss[0].axis;
         {
+            // Keep the split axis when strides match; reshape is ambiguous across singleton dimensions.
             bool all_strides_the_same = true;
             for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
                 if (tensor->ne[dim] == 1 && tensor->src[0]->ne[dim] == 1) {
@@ -721,6 +720,9 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             if (all_strides_the_same) {
                 return src_ss[0];
             }
+        }
+        if (ggml_is_contiguous(tensor) && ggml_is_contiguous(tensor->src[0])) {
+            return handle_reshape(src_ss);
         }
         if (!ggml_is_permuted(tensor) && !ggml_is_permuted(tensor->src[0]) && axis >= 0 && axis < GGML_MAX_DIMS-1) {
             for (int dim = 0; dim < GGML_MAX_DIMS-1; dim++) {

@@ -54,6 +54,12 @@ class Qwen4ExpTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
                 self._ple_scale = float(scale[0])
         super().dequant_model()
 
+    def _has_fp8_source_scale(self, name: str) -> bool:
+        if ".ngram_embedding.shard_" in name:
+            prefix = name.split(".ngram_embedding.shard_")[0]
+            return prefix + ".ngram_embedding.weight_scale" in self.model_tensors or self._ple_scale is not None
+        return super()._has_fp8_source_scale(name)
+
     @classmethod
     def filter_tensors(cls, item):
         name, gen = item

@@ -21,6 +21,7 @@ on:
       'ui/lib/ui/**.*',
       'ui/lib/voice/**.*',
       'ui/lib/harness/**.*',
+      'ui/lib/huggingface/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
@@ -32,6 +33,7 @@ on:
       'ui/lib/ui/**.*',
       'ui/lib/voice/**.*',
       'ui/lib/harness/**.*',
+      'ui/lib/huggingface/**.*',
       'tools/server/tests/**.*'
     ]
 
@@ -127,6 +129,9 @@ jobs:
         if: ${{ always() && steps.setup.conclusion == 'success' }}
         run: npm run build-storybook
         working-directory: ui/apps/chat
+        env:
+          # its stories show the Hugging Face lib
+          VITE_PUBLIC_HUGGING_FACE: "true"
 
       - name: Run UI tests
         if: ${{ always() && steps.setup.conclusion == 'success' }}

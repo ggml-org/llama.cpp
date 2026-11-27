@@ -868,6 +868,10 @@ static bool et_ggml_is_row_contiguous(const ggml_tensor * t) {
 static bool ggml_backend_et_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
     GGML_UNUSED(dev);
 
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     bool supported = false;
     switch (op->op) {
         case GGML_OP_CUMSUM:
@@ -1659,6 +1663,7 @@ static void ggml_backend_et_device_get_props(ggml_backend_dev_t dev, struct ggml
         /* .buffer_from_host_ptr  = */ false,
         /* .events                = */ false,
         /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 

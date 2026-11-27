@@ -216,7 +216,7 @@ class SidebarDragStore {
 		window.removeEventListener('pointermove', this.#handleMove);
 		window.removeEventListener('pointerup', this.#handleUp);
 		window.removeEventListener('pointercancel', this.#handleCancel);
-		window.removeEventListener('keydown', this.#handleKeydown);
+		window.removeEventListener('keydown', this.#handleKeydown, { capture: true });
 
 		if (!gesture?.active) return;
 
@@ -257,7 +257,8 @@ class SidebarDragStore {
 		window.addEventListener('pointermove', this.#handleMove);
 		window.addEventListener('pointerup', this.#handleUp);
 		window.addEventListener('pointercancel', this.#handleCancel);
-		window.addEventListener('keydown', this.#handleKeydown);
+		// capture: a drag takes Escape before the listeners that would act on it too
+		window.addEventListener('keydown', this.#handleKeydown, { capture: true });
 	}
 
 	#scrollDelta(gesture: Gesture): number {

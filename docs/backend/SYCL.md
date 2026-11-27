@@ -44,7 +44,7 @@ The following releases are verified and recommended:
 
 ### Ubuntu 24.04
 
-The release packages for Ubuntu 24.04 x64 (FP32/FP16) only include the binary files of the llama.cpp SYCL backend. They require the target machine to have pre-installed Intel GPU drivers and oneAPI packages that are the same version as the build package. To get the version and installation info, refer to [.github/workflows/release.yml#L713](../../.github/workflows/release.yml#L713): ubuntu-24-sycl -> Download & Install oneAPI.
+The release packages for Ubuntu 24.04 x64 (FP32/FP16) only include the binary files of the llama.cpp SYCL backend. They require the target machine to have pre-installed Intel GPU drivers and oneAPI packages that are the same version as the build package. To get the version and installation info, refer to [.github/workflows/release.yml#1447](../../.github/workflows/release.yml#L1447): `ubuntu-24-sycl` -> `Download & Install oneAPI`.
 
 It is recommended to use them with [Intel Docker](https://hub.docker.com/r/intel/deep-learning-essentials).
 
@@ -818,10 +818,12 @@ User can use the device management in [docs/multi-gpu.md](https://github.com/ggm
 | GGML_SYCL_ENABLE_VMM | 0 or 1 (default) | Enable the virtual-memory device pool. |
 | GGML_SYCL_ENABLE_MKL_FA | 1 (default) or 0 | Enable oneMKL GEMM flash attention for XMX-accelerated prompt processing with quantized KV cache. Automatically activates during prefill (prompt processing) when all conditions are met: (1) flash-attn enabled (`-fa` or `--flash-attn on`), (2) KV cache quantized (`--cache-type-k q8_0 --cache-type-v q8_0` or other `*_0/*_1` types), (3) batch size ≥ 1024 (`--batch-size 1024`), (4) prompt length ≥ 1024 tokens. Set to 0 to force the TILE kernel for A/B testing. Example minimum command: `llama-cli -m model.gguf -fa -ngl 99 --cache-type-k q8_0 --cache-type-v q8_0 --batch-size 1024 -p "your prompt"` |
 | GGML_SYCL_MKL_FA_DEBUG | 0 (default) or 1 | Enable per-call diagnostic logging for MKL flash attention: GEMM/softmax timings, interleaved-head detection, and buffer memory usage. |
+| GGML_SYCL_FA_TILE_DEBUG | 0 (default) or 1 | Enable per-call diagnostic logging for the flash-attention TILE kernel dispatcher: head dims (DKQ/DV), GQA ratio, query rows, KV length, and whether the GQA-optimized variant is selected. |
 | GGML_SYCL_MEMTRACE | 0 (default), 1, 2 | Enable record and output memory allocation diagnostics. Requires `-lv 4`. <br>0 -  Disable<br>1 - Basic memory info, including current and peak allocations, as well allocations from other sources, and the device free memory before each model buffer allocation, around 50 lines per model load.<br>2 - More verbose, logging around 900 specific allocations and deallocations. |
 | GGML_SYCL_MEMTRACE_STEP | 64 (default) or positive integer | With GGML_SYCL_MEMTRACE=1, the minimum growth in memory usage to trigger another log record. |
 | GGML_SYCL_MKL_FA_DIAG | 0 (default) or 1 | Enable output fingerprinting for MKL flash attention. Dumps the first 64 float output values for the first 6 FA calls with n_kv ≥ 1024, labeled with kernel type (MKL/TILE/VEC) for cross-kernel comparison. |
 | GGML_SYCL_ENABLE_FUSION | 0 or 1 (default) | Enable fused-kernel dispatch in graph compute. Unsupported types and layouts fall back to the standalone op kernels. See `ggml_sycl_can_fuse()`. |
+| GGML_SYCL_FUSE_CONV_WINDOW | 0 or 1 (default) | Fuse four-tap recurrent convolution windows, rollback cache updates and SiLU into one kernel. Other shapes use the existing kernels. |
 | GGML_SYCL_ENABLE_ESIMD | 0 or 1 (default)| Enable ESIMD kernels when available. |
 | GGML_SYCL_ENABLE_XMX_ESIMD | 0 or 1 (default) | Use the XMX (DPAS) multi-column mat-vec kernels for reordered Q2_K to Q6_K and Q8_0 weights on Xe2 GPUs. Speeds up speculative decoding and short prompt batches. |
 | GGML_SYCL_XMX_MAX_COLS | non-negative integer, 80 (default) | Most activation columns (batch size) the `GGML_SYCL_ENABLE_XMX_ESIMD` kernels take; wider batches use the other mat-mul kernels. A larger value keeps XMX for bigger batches (as repeated launches), `0` never uses it. |

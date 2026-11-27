@@ -30,6 +30,7 @@ export const SETTINGS_KEYS = {
 	DYNATEMP_RANGE: 'dynatemp_range',
 	ENABLE_CONTINUE_GENERATION: 'enableContinueGeneration',
 	ENABLE_DISCOVER_MODELS: 'enableDiscoverModels',
+	ENABLE_MCP: 'enableMcp',
 	EXCLUDE_REASONING_FROM_CONTEXT: 'excludeReasoningFromContext',
 	FREQUENCY_PENALTY: 'frequency_penalty',
 	FULL_HEIGHT_CODE_BLOCKS: 'fullHeightCodeBlocks',
@@ -45,6 +46,7 @@ export const SETTINGS_KEYS = {
 	// Display
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	PDF_AS_IMAGE: 'pdfAsImage',
+	PDF_DPI: 'pdfDpi',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
 	PRESENCE_PENALTY: 'presence_penalty',
@@ -58,7 +60,6 @@ export const SETTINGS_KEYS = {
 	SHOW_AGENTIC_TURN_STATS: 'showAgenticTurnStats',
 	SHOW_BUILD_VERSION: 'showBuildVersion',
 	SHOW_FULL_PATH_IN_MENTIONS: 'showFullPathInMentions',
-	SHOW_MCP: 'showMcp',
 	// Display
 	SHOW_MESSAGE_STATS: 'showMessageStats',
 	SHOW_MODEL_CAPABILITIES_IN_SELECTOR: 'showModelCapabilitiesInSelector',
