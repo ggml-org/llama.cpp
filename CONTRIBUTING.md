@@ -12,9 +12,7 @@ The project differentiates between 3 levels of contributors:
 >
 > AI-generated code is allowed. You are 100% responsible for every line, however it was produced.
 >
-> Undisclosed AI usage may result in your account being permanently banned from contributing to the project.
->
-> Detailed information regarding permissible and restricted uses of AI can be found in the [AGENTS.md](AGENTS.md) file.
+> Fully automated submissions (an agent committing, pushing, opening PRs or posting comments without human review) are not allowed and may result in a ban.
 
 ### Requirements
 
@@ -24,7 +22,7 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 2. Check for an existing PR addressing the same change; if one exists, comment there to work with its author instead of opening a duplicate.
 3. Perform a comprehensive manual review prior to submitting the pull request. A proper code review usually takes something like one hour per 200-400 LOC and you should be spending **at least that much time on code review alone**.
 4. Be prepared to explain every line of code you submit when asked about it by a maintainer.
-5. It is strictly prohibited to use AI to write your posts for you (bug reports, feature requests, pull request descriptions, Github discussions, responding to humans, ...).
+5. If AI wrote a post for you (bug report, feature request, PR description, discussion, reply to a reviewer, ...), it must end with a footer naming the tool. You must read and agree with every word before posting it. Verbose, AI-sounding posts will not be well-received.
 
 ### Checklist
 
@@ -36,7 +34,7 @@ If AI is used to generate any portion of the code, contributors must adhere to t
 > 2. **Search for related discussions, PRs and issues** to get the broader context before writing any code.
 > 3. **Run a local review pass before pushing anything**, using the [`code-review`](skills/code-review/SKILL.md) skill, once the change is implemented. Fix what it finds.
 
-For more info, please refer to the [AGENTS.md](AGENTS.md) file.
+Instructions for AI agents are in [AGENTS.md](AGENTS.md). Forks are exempt. Personal instructions (e.g. stating that you work on a fork) go in `AGENTS.local.md` at the repository root, which is git-ignored.
 
 # Pull requests (for contributors & collaborators)
 
@@ -46,6 +44,7 @@ For more info, please refer to the [AGENTS.md](AGENTS.md) file.
 - Features must begin with an issue, not a PR - let interest accumulate before writing code; niche features may only land as an example/tool, or on a private fork.
 - Bug-fix PRs must include a reproducible issue and a regression test that fails before your change and passes after. Fixes without a test may be closed without review.
 - New CLI or public API additions carry a **higher bar** than internal changes - justify why an existing mechanism doesn't suffice.
+- Keep it simple: complexity multiplies security risk and maintenance cost, so a simpler change that does 90% of the job is often preferred over a complex one that does 100%.
 - Meeting all of the above still doesn't guarantee a merge - see [Pull requests (for maintainers)](#pull-requests-for-maintainers).
 - If you are a new contributor
     - Limit your open PRs to 1
