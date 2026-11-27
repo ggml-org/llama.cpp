@@ -618,7 +618,7 @@ llama_model_kimi_k31::graph::build_dsa_layer(
     // the cache holds at least 4096 cells. on the dense fallbacks the mask keeps the result correct
     // but the kq and kqv products still run over the whole cache, and the indexer is pure overhead
     const int64_t n_sel = std::min<int64_t>(mctx_mla->get_n_kv(), hparams.indexer_top_k);
-    ggml_tensor * out = build_attn_mha(Q, k, v, nullptr, sel, nullptr, nullptr, nullptr, nullptr, layer.wv_b,
+    ggml_tensor * out = build_attn_mha(Q, k, v, sel, nullptr, nullptr, nullptr, nullptr, layer.wv_b,
                                        n_sel, kq_scale, il);
     cb(out, "kqv_out", il);
 

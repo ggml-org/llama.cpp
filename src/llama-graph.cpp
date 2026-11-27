@@ -3147,7 +3147,6 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          ggml_tensor * q,
          ggml_tensor * k,
          ggml_tensor * v,
-         ggml_tensor * kq_b,
          ggml_tensor * kq_mask,
          ggml_tensor * kv_rows,
          ggml_tensor * bias,
@@ -3178,7 +3177,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_tensor * bias_dense = ggml_get_rows(ctx0, bias_table, bias_idxs);
         bias_dense = ggml_reshape_4d(ctx0, bias_dense, q->ne[2], bias_idxs->ne[0], q->ne[1], n_stream);
         bias_dense = ggml_cont(ctx0, ggml_permute(ctx0, bias_dense, 2, 0, 1, 3));
-        cb(bias_dense, "kq_b", il);
+        cb(bias_dense, "kq_bias", il);
 
         ggml_tensor * mask = kq_mask->type == GGML_TYPE_F32 ? kq_mask : ggml_cast(ctx0, kq_mask, GGML_TYPE_F32);
         mask = ggml_add(ctx0, bias_dense, mask);
@@ -3191,10 +3190,10 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
     ggml_tensor * cur;
 
-    const bool use_flash_attn = cparams.flash_attn && kq_b == nullptr;
+    const bool use_flash_attn = cparams.flash_attn && (!bias || bias_idxs);
     GGML_ASSERT(use_flash_attn || kv_rows == nullptr);
     if (use_flash_attn) {
-        GGML_ASSERT(kq_b == nullptr && "Flash attention does not support dense KQ bias");
+        GGML_ASSERT(!bias || bias_idxs);
 
         if (k_scale) {
             q = ggml_mul(ctx0, q, k_scale);
@@ -3229,12 +3228,6 @@ ggml_tensor * llm_graph_context::build_attn_mha(
 
         if (bias) {
             ggml_flash_attn_ext_add_bias(cur, bias, bias_idxs);
-            auto * dev = model.dev_layer(il);
-            if ((!cparams.offload_kqv && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU) || !ggml_backend_dev_supports_op(dev, cur)) {
-                // Keep ordinary flash attention on the layer device.
-                ggml_flash_attn_ext_add_bias(cur, nullptr, nullptr);
-                cur->src[3] = dense_bias_mask();
-            }
         }
 
         if (v_mla) {
@@ -3259,7 +3252,7 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cur = ggml_mul(ctx0, cur, v_scale);
         }
     } else {
-        if (bias) {
+        if (bias && bias_idxs) {
             kq_mask = dense_bias_mask();
         }
         // A cache without an exported scale uses a unit scale.
@@ -3299,9 +3292,9 @@ ggml_tensor * llm_graph_context::build_attn_mha(
             cb(kq, "kq_scaled_2", il);
         }
 
-        if (kq_b) {
-            kq = ggml_add(ctx0, kq, kq_b);
-            cb(kq, "kq_plus_kq_b", il);
+        if (bias && !bias_idxs) {
+            kq = ggml_add(ctx0, kq, bias);
+            cb(kq, "kq_plus_bias", il);
         }
 
         kq = ggml_soft_max_ext(ctx0, kq, kq_mask, kq_scale, hparams.f_max_alibi_bias);
@@ -3406,7 +3399,7 @@ ggml_tensor * llm_graph_context::build_attn(
         kq_b = ggml_pad(ctx0, kq_b, n_kv_pad, 0, 0, 0);
     }
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, nullptr, nullptr, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_mask, kv_rows, kq_b, nullptr, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -3534,7 +3527,7 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto & kq_mask = inp->self_attn_mask.raw;
     const auto & kv_rows = inp->self_attn_mask.rows;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, nullptr, nullptr, sinks, v_mla, 0, kq_scale, il,
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_mask, kv_rows, kq_b, nullptr, sinks, v_mla, 0, kq_scale, il,
             mctx_cur->get_k_scale(il), mctx_cur->get_v_scale(il));
     cb(cur, "kqv_out", il);
 
@@ -3616,7 +3609,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, nullptr, nullptr, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_mask, kv_rows, kq_b, nullptr, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -3729,7 +3722,7 @@ ggml_tensor * llm_graph_context::build_attn(
     const int64_t n_embd_v = v_cur ? v_cur->ne[0] : v_mla->ne[0];
     ggml_tensor * v = ggml_view_4d(ctx0, k, n_embd_v, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask_top_k, nullptr, nullptr, nullptr, sinks, v_mla, top_k->ne[0], kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_mask_top_k, nullptr, kq_b, nullptr, sinks, v_mla, top_k->ne[0], kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -3752,7 +3745,6 @@ static ggml_tensor * build_attn_iswa_impl(
         ggml_tensor * q_cur,
         ggml_tensor * k_cur,
         ggml_tensor * v_cur,
-        ggml_tensor * kq_b,
         ggml_tensor * kq_mask,
         ggml_tensor * kv_rows,
         ggml_tensor * sinks,
@@ -3826,7 +3818,7 @@ static ggml_tensor * build_attn_iswa_impl(
     ggml_tensor * k = use_kv_cur ? k_cur : mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = use_kv_cur ? v_cur : mctx_cur->get_v(ctx0, il);
 
-    ggml_tensor * cur = gctx.build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, bias, bias_idxs, sinks, v_mla, 0, kq_scale, il,
+    ggml_tensor * cur = gctx.build_attn_mha(q, k, v, kq_mask, kv_rows, bias, bias_idxs, sinks, v_mla, 0, kq_scale, il,
             mctx_cur->get_k_scale(il), mctx_cur->get_v_scale(il));
     gctx.cb(cur, "kqv_out", il);
 
@@ -3866,7 +3858,7 @@ ggml_tensor * llm_graph_context::build_attn(
     const auto & kq_mask = is_swa ? inp->self_attn_mask_swa.raw  : inp->self_attn_mask.raw;
     const auto & kv_rows = is_swa ? inp->self_attn_mask_swa.rows : inp->self_attn_mask.rows;
 
-    return build_attn_iswa_impl(*this, inp, wo, wo_b, q_cur, k_cur, v_cur, kq_b, kq_mask, kv_rows, sinks, v_mla, kq_scale, il);
+    return build_attn_iswa_impl(*this, inp, wo, wo_b, q_cur, k_cur, v_cur, kq_mask, kv_rows, sinks, v_mla, kq_scale, il, kq_b, nullptr);
 }
 
 ggml_tensor * llm_graph_context::build_attn(
@@ -3918,7 +3910,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = ggml_view_4d(ctx0, k, v_cur->ne[0], k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, nullptr, nullptr, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_mask, kv_rows, kq_b, nullptr, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (k_rot) {
@@ -3975,7 +3967,7 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = k_cur;
     ggml_tensor * v = v_cur;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, kv_rows, nullptr, nullptr, sinks, v_mla, 0, kq_scale, il);
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_mask, kv_rows, kq_b, nullptr, sinks, v_mla, 0, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -4523,7 +4515,7 @@ ggml_tensor * llm_graph_context::build_attn(
     GGML_ASSERT(attn_mask.rows == nullptr);
     ggml_tensor * bias_idxs = is_swa ? inp->self_rel_pos_swa : inp->self_rel_pos;
 
-    return build_attn_iswa_impl(*this, inp_attn, wo, wo_b, q_cur, k_cur, v_cur, nullptr, attn_mask.raw, nullptr,
+    return build_attn_iswa_impl(*this, inp_attn, wo, wo_b, q_cur, k_cur, v_cur, attn_mask.raw, nullptr,
             sinks, nullptr, kq_scale, il, bias, bias_idxs);
 }
 

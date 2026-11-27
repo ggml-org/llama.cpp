@@ -895,7 +895,7 @@ ggml_tensor * llama_model_hy_v4_flash::graph::build_attention(
         ggml_tensor * k = mctx_mla->get_k(ctx0, il);
         ggml_tensor * v = ggml_view_4d(ctx0, k, kv_lora_rank, k->ne[1], k->ne[2], k->ne[3], k->nb[1], k->nb[2], k->nb[3], 0);
 
-        attn = build_attn_mha(Qcur, k, v, nullptr, sel, nullptr, nullptr, nullptr, layer.attn_sinks, layer.wv_b, n_sel, kq_scale, il);
+        attn = build_attn_mha(Qcur, k, v, sel, nullptr, nullptr, nullptr, layer.attn_sinks, layer.wv_b, n_sel, kq_scale, il);
     }
     cb(attn, "attn_kqv", il);
 
