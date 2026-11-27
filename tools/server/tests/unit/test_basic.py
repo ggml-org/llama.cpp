@@ -171,3 +171,24 @@ def test_server_ctrl_break():
     server.process.send_signal(signal.CTRL_BREAK_EVENT)
     # exit code 0 means a clean shutdown, the default handler would end it with STATUS_CONTROL_C_EXIT
     assert server.process.wait(timeout=60) == 0
+
+
+# regression test for https://github.com/ggml-org/llama.cpp/issues/33176
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX signal, Windows uses console control events")
+def test_server_sigterm_during_stream():
+    global server
+    server.n_ctx = 4096
+    server.start()
+    stream = server.make_stream_request("POST", "/completion", data={
+        "prompt": "Once upon a time",
+        "n_predict": 1024,
+        "ignore_eos": True,
+        "stream": True,
+    })
+    next(stream) # first chunk received: the generation is in flight
+    server.process.send_signal(signal.SIGTERM)
+    # without the fix, shutdown blocks for the whole sse_ping_interval (30s): the HTTP worker
+    # waits in server_response_reader.next() for results that never arrive.
+    # the client connection must stay open during the wait, or the worker exits on disconnect instead
+    assert server.process.wait(timeout=10) == 0
+    stream.close()

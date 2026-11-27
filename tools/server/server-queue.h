@@ -185,7 +185,7 @@ public:
     server_task_result_ptr recv(const std::unordered_set<int> & id_tasks);
 
     // same as recv(), but have timeout in seconds
-    // if timeout is reached, nullptr is returned
+    // if timeout is reached or the queue is terminated, nullptr is returned
     server_task_result_ptr recv_with_timeout(const std::unordered_set<int> & id_tasks, int timeout);
 
     // single-task version of recv()
@@ -200,6 +200,9 @@ public:
 
     // terminate the waiting loop
     void terminate();
+
+    // returns false after terminate() is called
+    bool is_running();
 };
 
 // RAII wrapper to make working with server_queue and server_response easier
@@ -234,6 +237,7 @@ struct server_response_reader {
     bool has_next() const;
 
     // return nullptr if should_stop() is true before receiving a result
+    // if the response queue is terminated (server is shutting down), return an error result instead
     // note: if one error is received, it will stop further processing and return error result
     server_task_result_ptr next(const std::function<bool()> & should_stop);
 

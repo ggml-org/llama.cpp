@@ -433,11 +433,7 @@ server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_
     while (true) {
         std::unique_lock<std::mutex> lock(mutex_results);
         condition_results.wait(lock, [&]{
-            if (!running) {
-                RES_DBG("%s : queue result stop\n", "recv");
-                std::terminate(); // we cannot return here since the caller is HTTP code
-            }
-            return !queue_results.empty();
+            return !running || !queue_results.empty();
         });
 
         for (size_t i = 0; i < queue_results.size(); i++) {
@@ -446,6 +442,11 @@ server_task_result_ptr server_response::recv(const std::unordered_set<int> & id_
                 queue_results.erase(queue_results.begin() + i);
                 return res;
             }
+        }
+
+        if (!running) {
+            // terminated and no more results for these tasks
+            return nullptr;
         }
     }
 
@@ -465,11 +466,12 @@ server_task_result_ptr server_response::recv_with_timeout(const std::unordered_s
             }
         }
 
-        std::cv_status cr_res = condition_results.wait_until(lock, deadline);
         if (!running) {
-            RES_DBG("%s : queue result stop\n", __func__);
-            std::terminate(); // we cannot return here since the caller is HTTP code
+            // terminated and no more results for these tasks
+            return nullptr;
         }
+
+        std::cv_status cr_res = condition_results.wait_until(lock, deadline);
         if (cr_res == std::cv_status::timeout) {
             return nullptr;
         }
@@ -510,8 +512,14 @@ void server_response::broadcast(server_task_result_ptr && result) {
 }
 
 void server_response::terminate() {
+    std::unique_lock<std::mutex> lock(mutex_results);
     running = false;
     condition_results.notify_all();
+}
+
+bool server_response::is_running() {
+    std::unique_lock<std::mutex> lock(mutex_results);
+    return running;
 }
 
 //
@@ -552,14 +560,23 @@ bool server_response_reader::has_next() const {
 }
 
 // return nullptr if should_stop() is true before receiving a result
+// if the response queue is terminated (server is shutting down), return an error result instead
 // note: if one error is received, it will stop further processing and return error result
 server_task_result_ptr server_response_reader::next(const std::function<bool()> & should_stop) {
     while (true) {
         server_task_result_ptr result = queue_results.recv_with_timeout(id_tasks, polling_interval_seconds);
         if (result == nullptr) {
-            // timeout, check stop condition
+            // timeout or termination, check stop condition
             if (should_stop()) {
                 return nullptr;
+            }
+            if (!queue_results.is_running()) {
+                // server is shutting down, no more results will arrive
+                auto err = std::make_unique<server_task_result_error>();
+                err->id       = *id_tasks.begin();
+                err->err_type = ERROR_TYPE_UNAVAILABLE;
+                err->err_msg  = "server is shutting down";
+                return err;
             }
         } else {
             if (result->is_error()) {
