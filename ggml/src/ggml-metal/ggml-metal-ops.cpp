@@ -236,8 +236,13 @@ static int ggml_metal_op_encode_impl(ggml_metal_op_t ctx, int idx) {
             int n_fuse = 1;
             const ggml_metal_fusion * fusion = ctx->can_fuse(idx, GGML_METAL_FUSION_FULL, &n_fuse);
             if (fusion) {
-                // fused kernels write to the last node of the group, not necessarily to the first node's dst
-                is_concurrent = ggml_mem_ranges_check(ctx->mem_ranges, ctx->node(idx + n_fuse - 1));
+                // every node of the group contributes sources and destinations, check all of them
+                for (int j = 0; j < n_fuse; ++j) {
+                    if (!ggml_mem_ranges_check(ctx->mem_ranges, ctx->node(idx + j))) {
+                        is_concurrent = false;
+                        break;
+                    }
+                }
             }
         }
 
