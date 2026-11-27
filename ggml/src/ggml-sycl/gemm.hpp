@@ -43,16 +43,22 @@ public:
         auto stream = ctx.stream_dnnl(q);
         auto eng = ctx.engine_dnnl(q);
 
-        dnnl::memory::dims a_dims = {batches_a, m, k };
-        dnnl::memory::dims a_strides = {stra2, stra1, stra0};
+        // broadcast as a size-1 dimension: oneDNN f16 matmul is wrong for shifted, only 2-byte aligned base pointers
+        const dnnl_dim_t outer = std::min(batches_a, batches_b);
+        const dnnl_dim_t ra    = batches_a / outer;
+        const dnnl_dim_t rb    = batches_b / outer;
+        GGML_ASSERT(ra * outer == batches_a && rb * outer == batches_b);
+
+        dnnl::memory::dims a_dims    = { outer, ra, m, k };
+        dnnl::memory::dims a_strides = { stra2 * ra, stra2, stra1, stra0 };
         const auto a_in_md = dnnl::memory::desc(a_dims, at, a_strides);
 
-        dnnl::memory::dims b_dims = {batches_b, k, n };
-        dnnl::memory::dims b_strides = {strb2, strb0, strb1};
+        dnnl::memory::dims b_dims    = { outer, rb, k, n };
+        dnnl::memory::dims b_strides = { strb2 * rb, strb2, strb0, strb1 };
         const auto b_in_md = dnnl::memory::desc(b_dims, bt, b_strides);
 
-        dnnl::memory::dims c_dims = { std::max(batches_a, batches_b), m, n};
-        dnnl::memory::dims c_strides = {m*n, 1,  m };
+        dnnl::memory::dims   c_dims    = { outer, std::max(ra, rb), m, n };
+        dnnl::memory::dims   c_strides = { m * n * std::max(ra, rb), m * n, 1, m };
         const auto c_md    = dnnl::memory::desc(c_dims, ct, c_strides);
         dnnl::primitive_attr primitive_attr;
         primitive_attr.set_scratchpad_mode(dnnl::scratchpad_mode::user);

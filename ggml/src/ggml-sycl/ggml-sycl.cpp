@@ -4204,57 +4204,14 @@ static void ggml_sycl_mul_mat_batched_sycl(ggml_backend_sycl_context & ctx, cons
             int64_t str_b1 = nb11 / type_size_src1;
             int64_t str_b2 = nb12 / type_size_src1;
 
-            auto launch_gemm_for_batches = [&ctx, queue](const sycl::half *src0,
-                                                const sycl::half *src1, float *dst,
-                                                int64_t a0, int64_t a1, int64_t batcha,
-                                                int64_t /*b0*/, int64_t b1, int64_t batchb,
-                                                int64_t sa0, int64_t sa1, int64_t sa2,
-                                                int64_t sb0, int64_t sb1, int64_t sb2,
-                                                int64_t sd2) {
-                bool supported_broadcast = batchb == batcha ? true
-                        : batchb == 1 || batcha == 1        ? true
-                                                            : false;
-                if (supported_broadcast) {
-                    DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0,
-                            DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2, src1,
-                            DnnlGemmWrapper::to_dt<sycl::half>(), sb0, sb1, sb2, dst,
-                            DnnlGemmWrapper::to_dt<float>(), queue, batcha, batchb);
-                } else {
-                    // iterate over batches from smaller set of matrices (matrix 0)
-                    int64_t batches0 = batcha;
-                    int64_t batches1 = batchb;
-
-                    if (batches0 > batches1) {
-                        int64_t num_mul_mats = batches1;
-                        int64_t sub_batch = batches0 / num_mul_mats;
-                        // src0 is batched and bigger, shift and multiply with src1
-                        for (int64_t i0 = 0; i0 < num_mul_mats; i0++) {
-                            const sycl::half *src0_shifted = src0 + (sa2 * i0 * sub_batch);
-                            const sycl::half *src1_shifted = src1 + (sb2 * i0);
-                            float *dst_shifted = dst + (sd2 * i0 * sub_batch);
-                            DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0_shifted,
-                                    DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2,
-                                    src1_shifted, DnnlGemmWrapper::to_dt<sycl::half>(), sb0,
-                                    sb1, sb2, dst_shifted, DnnlGemmWrapper::to_dt<float>(),
-                                    queue, sub_batch, 1);
-                        }
-                    } else {
-                        int64_t num_mul_mats = batches0;
-                        int64_t sub_batch = batches1 / num_mul_mats;
-                        // src1 is batched and bigger, shift and multiply with src0
-                        for (int64_t i1 = 0; i1 < num_mul_mats; i1++) {
-                            const sycl::half *src0_shifted = src0 + (sa2 * i1);
-                            const sycl::half *src1_shifted = src1 + (sb2 * i1 * sub_batch);
-                            float *dst_shifted = dst + (sd2 * i1 * sub_batch);
-                            DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0_shifted,
-                                    DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2,
-                                    src1_shifted, DnnlGemmWrapper::to_dt<sycl::half>(), sb0,
-                                    sb1, sb2, dst_shifted, DnnlGemmWrapper::to_dt<float>(),
-                                    queue, 1, sub_batch);
-                        }
-                    }
-                }
-            };
+            auto launch_gemm_for_batches =
+                [&ctx, queue](const sycl::half * src0, const sycl::half * src1, float * dst, int64_t a0, int64_t a1,
+                              int64_t batcha, int64_t /*b0*/, int64_t b1, int64_t batchb, int64_t sa0, int64_t sa1,
+                              int64_t sa2, int64_t sb0, int64_t sb1, int64_t sb2, int64_t /*sd2*/) {
+                    DnnlGemmWrapper::gemm(ctx, a1, b1, a0, src0, DnnlGemmWrapper::to_dt<sycl::half>(), sa0, sa1, sa2,
+                                          src1, DnnlGemmWrapper::to_dt<sycl::half>(), sb0, sb1, sb2, dst,
+                                          DnnlGemmWrapper::to_dt<float>(), queue, batcha, batchb);
+                };
 
             const bool cont_batches_dim2_a = nb02 * ne02 == nb03;
             const bool cont_batches_dim2_b = nb12 * ne12 == nb13;
