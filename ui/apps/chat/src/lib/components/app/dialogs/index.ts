@@ -19,10 +19,9 @@
 export { default as DialogMcpServerAddNew } from './DialogMcpServerAddNew.svelte';
 
 /**
- * **DialogMcpServers** - MCP servers dialog shown from the chat form
+ * **DialogMcpServers** - MCP servers dialog, opened with `uiStore.openMcpServers`
  *
- * Shows the same MCP server list as the `/mcp-servers` route inside a modal
- * dialog.
+ * Lists the MCP servers, to add, edit, turn on and remove them.
  */
 export { default as DialogMcpServers } from './DialogMcpServers.svelte';
 
@@ -145,6 +144,16 @@ export { default as DialogConversationDelete } from './DialogConversationDelete.
  * ```
  */
 export { default as DialogConversationRename } from './DialogConversationRename.svelte';
+
+/**
+ * **DialogConversationShare** - Share a conversation to Hugging Face
+ *
+ * Uploads a conversation, or its branch up to a message, to a dataset of the user's Hugging
+ * Face account as an agent trace. The dialog itself (sign-in, dataset picker, upload) is
+ * `HfShareDialog` of @ggml-org/llama-huggingface; this component says what a conversation is:
+ * its scopes and its trace. It opens from `uiStore.conversationShare`, so it is mounted once.
+ */
+export { default as DialogConversationShare } from './DialogConversationShare.svelte';
 
 /**
  * **DialogGroup** - Name a new sidebar group, or rename one

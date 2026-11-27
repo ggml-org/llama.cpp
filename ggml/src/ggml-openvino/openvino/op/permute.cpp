@@ -3,7 +3,6 @@
 #include "../utils.h"
 #include "ggml-openvino/ggml-openvino-extra.h"
 
-#include <climits>
 #include <cstdint>
 #include <memory>
 #include <openvino/core/node.hpp>
@@ -112,10 +111,6 @@ OutputVector translate_permute(const NodeContext & context) {
 
         auto new_shape =
             std::make_shared<ov::op::v0::Concat>(ov::OutputVector{n_seq_active, neg_one, n_heads, head_size}, 0);
-
-        // // Alternative
-        // auto zero = ov::op::v0::Constant::create(ov::element::i64, {1}, {0});
-        // auto new_shape = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{n_seq_active, neg_one, zero, zero}, 0);
 
         auto reshaped = std::make_shared<ov::op::v1::Reshape>(src, new_shape, true);
         res = std::make_shared<ov::op::v1::Transpose>(reshaped, perm);

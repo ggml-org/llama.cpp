@@ -38,6 +38,27 @@
 			</div>
 		</StateGalleryItem>
 
+		<StateGalleryItem label="inset-list" note="a sheet's native-style list">
+			<!-- inside a float panel, with the sheet's rounder group radius, as a drawer sets it -->
+			<div
+				class="matte-float flex flex-col gap-1.5 rounded-2xl border p-3 [--inset-group-radius:var(--sheet-group-radius)]"
+			>
+				<h3 class="inset-list-title">Models</h3>
+
+				<section class="inset-list">
+					<button class="inset-list-row" type="button">
+						<span class="inset-list-row-body">Loaded</span>
+					</button>
+
+					<button class="inset-list-row" type="button">
+						<span class="inset-list-row-body">Favorites</span>
+					</button>
+				</section>
+
+				<p class="inset-list-caption">The divider starts at the label.</p>
+			</div>
+		</StateGalleryItem>
+
 		<StateGalleryItem label="matte-float" note="menus, popovers, dialogs">
 			<div class="matte-float h-28 rounded-xl border"></div>
 		</StateGalleryItem>

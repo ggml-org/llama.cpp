@@ -16,20 +16,14 @@ typedef std::map<std::string, Output<Node>> TensorMap;
 
 class NodeContext : public frontend::NodeContext {
 public:
-    NodeContext(const std::shared_ptr<GgmlDecoder> & decoder,
-                std::shared_ptr<TensorMap> & tensor_map,
-                int node_idx,
-                TranslateSession * translate_session = nullptr) :
+    NodeContext(const std::shared_ptr<GgmlDecoder> & decoder, std::shared_ptr<TensorMap> & tensor_map, int node_idx) :
         ov::frontend::NodeContext(decoder->get_op_type(node_idx)),
         m_decoder(decoder),
         m_tensor_map(tensor_map),
-        m_node_idx(node_idx),
-        m_translate_session(translate_session) {
+        m_node_idx(node_idx) {
         m_input_names = decoder->get_input_names(m_node_idx);
         m_output_names = decoder->get_output_names(m_node_idx);
     }
-
-    TranslateSession * get_translate_session() const { return m_translate_session; }
 
     const std::vector<std::string> & get_input_names() const { return m_input_names; }
 
@@ -107,6 +101,8 @@ public:
 
     size_t get_output_op_offset() const { return m_decoder->get_output_op_offset(m_node_idx); }
 
+    std::string get_inplace_op_src() const { return m_decoder->get_inplace_op_src(m_node_idx); }
+
     ov::element::Type get_output_type() const { return m_decoder->get_output_type(m_node_idx); }
 
     std::vector<size_t> get_output_stride() const { return m_decoder->get_output_stride(m_node_idx); }
@@ -170,7 +166,6 @@ private:
     std::shared_ptr<GgmlDecoder> m_decoder;
     std::shared_ptr<TensorMap> & m_tensor_map;
     int m_node_idx;
-    TranslateSession * m_translate_session;
     std::vector<std::string> m_input_names;
     std::vector<std::string> m_output_names;
 };

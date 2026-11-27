@@ -19,6 +19,7 @@
 #include <memory>
 #include <random>
 #include <regex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -176,6 +177,7 @@ static void usage(char ** argv) {
     LOG("  -o, --out <dir>          Save generated test models to <dir> instead of running backend tests\n");
     LOG("  -v <N>                   Set log verbosity level\n");
     LOG("  -b, --backend <backend>  Run only on the given backend device\n");
+    LOG("  --rpc <endpoints>        Add RPC servers (comma-separated host:port), must precede -b\n");
     LOG("  --kv-shift               Check K-shift against a decode at the shifted positions (CPU only)\n");
     LOG("  -h, --help               Show this help message\n\n");
     LOG("Examples:\n");
@@ -300,15 +302,20 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_KIMI_K31
+            || arch == LLM_ARCH_RAON1_MINI
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_HY_V4
+            || arch == LLM_ARCH_HY_V4_FLASH
             || arch == LLM_ARCH_XING4_0) {
         n_embd = 128;
         n_head = 1;
         n_ff   = 192;
         if (arch == LLM_ARCH_MISTRAL_LARGE4) {
             n_layer = 4; // cover NoPE, shared indexer and KV sharing layers
+        }
+        if (arch == LLM_ARCH_HY_V4_FLASH) {
+            n_layer = 4; // dense + MoE across both sparse and sliding attention layers
         }
     } else if (arch == LLM_ARCH_GLM5_NEXT) {
         // several heads so that -sm tensor can split them and the MLA flash attention has GQA > 1
@@ -382,16 +389,19 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
             arch == LLM_ARCH_KIMI_LINEAR || arch == LLM_ARCH_BAILINGMOE3 || arch == LLM_ARCH_KIMI_K3 || arch == LLM_ARCH_KIMI_K31 ||
-            arch == LLM_ARCH_GLM5_NEXT
+            arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_HY_V4_FLASH || arch == LLM_ARCH_RAON1_MINI
             ) {
         GGML_ASSERT(n_layer >= 2);
         std::vector<uint32_t> n_head_per_layer;
         n_head_per_layer.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
-            n_head_per_layer.push_back(il == 1 ? 0 : n_head);
+            // hy_v4_flash: the odd layers are sliding-window, with twice the heads
+            n_head_per_layer.push_back(arch == LLM_ARCH_HY_V4_FLASH
+                    ? (il % 2 ? 2*n_head : n_head)
+                    : (il == 1 ? 0 : n_head));
         }
         // GLM5 next KDA heads come from the uniform head count, only head_count_kv is per layer.
-        if (arch == LLM_ARCH_GLM5_NEXT) {
+        if (arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_RAON1_MINI) {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head);
             // the MLA cache holds one latent head
             for (uint32_t & n : n_head_per_layer) {
@@ -400,7 +410,12 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         } else {
             ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT, n_head_per_layer);
         }
-        ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
+        if (arch == LLM_ARCH_HY_V4_FLASH) {
+            // MLA-as-MQA: one latent KV head on every layer, whatever the query head count
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, uint32_t(1));
+        } else {
+            ms.add_kv(LLM_KV_ATTENTION_HEAD_COUNT_KV, n_head_per_layer);
+        }
     } else if (arch == LLM_ARCH_METIS16) {
         // the layer types repeat in every pass
         std::vector<uint32_t> n_head_kv_per_layer;
@@ -428,8 +443,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_BAILINGMOE3
             || arch == LLM_ARCH_KIMI_K3
             || arch == LLM_ARCH_KIMI_K31
+            || arch == LLM_ARCH_RAON1_MINI
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
+            || arch == LLM_ARCH_HY_V4_FLASH
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_XING4_0) {
@@ -472,6 +489,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_ATTENTION_CLAMP_KQV,              1.0f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,          1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,      1e-5f);
+    ms.add_kv(LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,    1e-6f);
     ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,          1e-5f);
     ms.add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,       uint32_t(8));
     ms.add_kv(LLM_KV_ATTENTION_Q_LORA_RANK,            (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) ? uint32_t(64) : uint32_t(512));
@@ -496,7 +514,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, pattern);
     } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
             arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_GRANITE_SWA || arch == LLM_ARCH_DOTS3NOTE ||
-            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE || arch == LLM_ARCH_DOMYN_EDGE) {
+            arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_MAPLE || arch == LLM_ARCH_FLINT || arch == LLM_ARCH_BEAM || arch == LLM_ARCH_RICURSIVE || arch == LLM_ARCH_DOMYN_EDGE ||
+            arch == LLM_ARCH_HY_V4_FLASH) {
         std::vector<uint32_t> pattern;
         pattern.reserve(n_layer);
         for (uint32_t il = 0; il < n_layer; il++) {
@@ -530,6 +549,14 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
 
     if (arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE) {
         ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, false);
+    }
+
+    if (arch == LLM_ARCH_RAON1_MINI) {
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE, 1.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM, true);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT, uint32_t(4));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON, 1e-5f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE, 2.0f);
     }
 
     // MSA requires one indexer head per GQA (KV) head, unlike the DSA archs where the
@@ -586,6 +613,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     // summing to n_rot / 2 (n_rot is 64 in this fixture)
     if (arch == LLM_ARCH_BAILINGMOE3) {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({8, 12, 12, 0}));
+    } else if (arch == LLM_ARCH_HY_V4_FLASH) {
+        // the published files carry the VL sections, so the text model runs the M-RoPE path
+        ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({12, 10, 10, 0}));
     } else {
         ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
     }
@@ -604,6 +634,53 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             indexer_types.push_back(il % 2 ? 0 : 1);
         }
         ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
+    }
+
+    if (arch == LLM_ARCH_HY_V4_FLASH) {
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,     uint32_t(4));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,   1.0e-6f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_MAGNITUDE, 2.0f);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,           10.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,       1.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_NORM,        true);
+        ms.add_kv(LLM_KV_ROPE_FREQ_BASE_SWA,         10000.0f);
+        // the indexer lives on the non-SWA layers, the even ones here
+        {
+            std::vector<uint32_t> indexer_types;
+            indexer_types.reserve(n_layer);
+            for (uint32_t il = 0; il < n_layer; il++) {
+                indexer_types.push_back(il % 2 ? 0 : 1);
+            }
+            ms.add_kv(LLM_KV_ATTENTION_INDEXER_TYPES, indexer_types);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_HEAD_COUNT, uint32_t(2));
+        ms.add_kv(LLM_KV_ATTENTION_INDEXER_KEY_LENGTH, uint32_t(96));
+
+        // one Engram module on layer 1, the head offsets are the running sum of the bucket counts
+        {
+            // the loader reads the bucket ranges as u64 arrays
+            const std::vector<uint64_t> primes = {7, 11, 13, 17};
+            std::vector<uint64_t> offsets;
+            uint64_t base = 0;
+            for (uint64_t p : primes) {
+                offsets.push_back(base);
+                base += p;
+            }
+            ms.add_kv(LLM_KV_PLE_LAYERS,                  std::vector<uint32_t>({1}));
+            ms.add_kv(LLM_KV_PLE_NGRAM_SIZE,              uint32_t(3));
+            ms.add_kv(LLM_KV_PLE_HEADS_PER_NGRAM,         uint32_t(2));
+            ms.add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER,  uint32_t(32));
+            // n_modules * ngram_size multipliers, odd as the reference derives them
+            ms.add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS,       std::vector<uint64_t>({3, 5, 7}));
+            ms.add_kv(LLM_KV_PLE_HEAD_OFFSETS,            offsets);
+            ms.add_kv(LLM_KV_PLE_HEAD_VOCAB_SIZES,        primes);
+            ms.add_kv(LLM_KV_ENGRAM_PAD_TOKEN_ID,         uint32_t(1));
+            std::vector<int32_t> token_map(n_vocab);
+            for (uint32_t t = 0; t < n_vocab; t++) {
+                token_map[t] = (int32_t) t;
+            }
+            ms.add_kv(LLM_KV_ENGRAM_TOKEN_MAP,            token_map);
+        }
     }
 
     if (arch == LLM_ARCH_MISTRAL_LARGE4) {
@@ -756,7 +833,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     if (moe) {
         ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, n_ff);
         ms.add_kv(LLM_KV_EXPERT_SHARED_FEED_FORWARD_LENGTH, n_ff / 2);  // distinct from n_ff so a saver key-clobber surfaces on reload
-        ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       n_ff);
+        // a latent width distinct from n_ff_exp catches a transposed routed_down / routed_up
+        ms.add_kv(LLM_KV_EXPERT_LATENT_LENGTH,       arch == LLM_ARCH_HY_V4_FLASH ? uint32_t(64) : n_ff);
         ms.add_kv(LLM_KV_INTERLEAVE_MOE_LAYER_STEP,  uint32_t(2));
         // with more experts than a ubatch uses, the copy of the used experts in host memory skips some of them
         ms.add_kv(LLM_KV_EXPERT_COUNT,               uint32_t(host_experts_test(arch) ? 64 : arch == LLM_ARCH_CLOVER_MOE ? 4 : 2));
@@ -1129,6 +1207,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_HUNYUAN_MOE:
         case LLM_ARCH_HY_V3:
         case LLM_ARCH_HY_V4:
+        case LLM_ARCH_HY_V4_FLASH:
         case LLM_ARCH_OPENAI_MOE:
         case LLM_ARCH_LFM2MOE:
         case LLM_ARCH_SMALLTHINKER:
@@ -1143,6 +1222,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_KIMI_LINEAR:
         case LLM_ARCH_KIMI_K3:
         case LLM_ARCH_KIMI_K31:
+        case LLM_ARCH_RAON1_MINI:
         case LLM_ARCH_GLM5_NEXT:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
@@ -1168,6 +1248,7 @@ static bool moe_implemented(const llm_arch arch) {
     }
     switch (arch) {
         case LLM_ARCH_LLAMA:
+        case LLM_ARCH_GEMMA4:
         case LLM_ARCH_REFACT:
         case LLM_ARCH_MINICPM:
         case LLM_ARCH_GRANITE:
@@ -1219,7 +1300,7 @@ static bool arch_supported(const llm_arch arch) {
     // FIXME: these hit scheduler/view-backed-output issues with WebGPU on CI.
 #ifdef GGML_USE_WEBGPU
     if (arch == LLM_ARCH_DEEPSEEK32 || arch == LLM_ARCH_GLM_DSA || arch == LLM_ARCH_DOTS3NOTE || arch == LLM_ARCH_QWEN4EXP ||
-            arch == LLM_ARCH_HY_V4) {
+            arch == LLM_ARCH_HY_V4 || arch == LLM_ARCH_HY_V4_FLASH) {
         return false;
     }
 #endif // GGML_USE_WEBGPU
@@ -1474,7 +1555,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                         const double nmse_val = nmse(logits_cpu, logits_dev);
                         snprintf(nmse_str, sizeof(nmse_str), "(%.2e)", nmse_val);
                         status_nmse = "\033[1;32mOK\033[0m";
-                        if (nmse_val > 1e-4) {
+                        // hrm_text repeats its stacks, which accumulates rounding error
+                        const double nmse_max = arch == LLM_ARCH_HRM_TEXT ? 5e-4 : 1e-4;
+                        if (nmse_val > nmse_max) {
                             test_ok = false;
                             status_nmse = "\033[1;31mFAIL\033[0m";
                         }
@@ -1786,8 +1869,11 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
             }
             const char * config_name = moe ? "MoE" : "Dense";
 
-            // the attention scale depends on the absolute position, so the hidden states of the prefix do too
-            const double thold = arch == LLM_ARCH_MISTRAL_LARGE4 ? 1e-4 : 1e-6;
+            // the hidden states of the prefix depend on the absolute position:
+            // mistral-large4 scales attention by position, hunyuan/maincoder apply q/k norm weights after RoPE
+            const bool pos_dependent = arch == LLM_ARCH_MISTRAL_LARGE4 || arch == LLM_ARCH_HUNYUAN_MOE ||
+                                       arch == LLM_ARCH_HUNYUAN_DENSE  || arch == LLM_ARCH_MAINCODER;
+            const double thold = pos_dependent ? 1e-4 : 1e-6;
 
             // at least 4 layers, so that "every 4th layer" patterns (NoPE, full attention) are covered
             // exaone4 is SWA only with 64 layers, smallthinker always ropes with 4
@@ -1904,6 +1990,31 @@ static int test_kv_shift(const std::string & arch_filter, const size_t seed, con
     return n_failed == 0 ? 0 : 1;
 }
 
+static bool add_rpc_devices(const std::string & endpoints) {
+    ggml_backend_reg_t rpc_reg = ggml_backend_reg_by_name("RPC");
+    if (rpc_reg == nullptr) {
+        LOG_ERR("%s: RPC backend not available\n", __func__);
+        return false;
+    }
+    typedef ggml_backend_reg_t (*add_server_t)(const char * endpoint);
+    auto add_server = (add_server_t) ggml_backend_reg_get_proc_address(rpc_reg, "ggml_backend_rpc_add_server");
+    if (add_server == nullptr) {
+        LOG_ERR("%s: RPC backend has no ggml_backend_rpc_add_server\n", __func__);
+        return false;
+    }
+    std::stringstream ss(endpoints);
+    std::string endpoint;
+    while (std::getline(ss, endpoint, ',')) {
+        ggml_backend_reg_t reg = add_server(endpoint.c_str());
+        if (reg == nullptr) {
+            LOG_ERR("%s: failed to connect to RPC server %s\n", __func__, endpoint.c_str());
+            return false;
+        }
+        ggml_backend_register(reg);
+    }
+    return true;
+}
+
 int main(int argc, char ** argv) {
     // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
     common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
@@ -1981,6 +2092,16 @@ int main(int argc, char ** argv) {
                     return 1;
                 }
                 target_backend = ggml_backend_dev_name(dev);
+            } else {
+                usage(argv);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--rpc") == 0) {
+            if (i + 1 < argc) {
+                // must precede -b so that the RPC devices can be selected by name
+                if (!add_rpc_devices(argv[++i])) {
+                    return 1;
+                }
             } else {
                 usage(argv);
                 return 1;

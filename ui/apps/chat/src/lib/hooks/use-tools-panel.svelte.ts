@@ -1,6 +1,6 @@
 import { CLI_FLAGS } from '#lib/constants/index.ts';
 import { ToolSource } from '#lib/enums/index.ts';
-import { conversationsStore, mcpStore, toolsStore, uiStore } from '#lib/stores/index.ts';
+import { conversationsStore, mcpStore, toolsStore } from '#lib/stores/index.ts';
 import type { ToolEntry, ToolGroup } from '#lib/types/index.ts';
 import { SvelteSet } from 'svelte/reactivity';
 
@@ -47,8 +47,8 @@ export function useToolsPanel(): UseToolsPanelReturn {
 
 		if (toolsStore.toolGroups.length > 0) return null;
 
-		// the MCP half only while MCP shows: with it hidden, there is nowhere to add a server
-		const mcpHint = uiStore.isMcpShown
+		// the MCP half only while MCP is on
+		const mcpHint = mcpStore.isFeatureEnabled
 			? ' To see MCP Tools you need to add / enable MCP Server(s).'
 			: '';
 

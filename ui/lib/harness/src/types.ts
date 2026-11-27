@@ -90,9 +90,14 @@ export interface LlmTotals {
 }
 
 export interface ToolCallTiming {
+  /** The call's id, to match the timing to its call. */
+  id: string;
   name: string;
   duration_ms: number;
   success: boolean;
+  /** Wall-clock start and end (ms since epoch), waits for approval included. */
+  startedAt: number;
+  endedAt: number;
 }
 
 export interface TurnStats {

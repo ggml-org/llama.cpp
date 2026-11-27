@@ -58,6 +58,11 @@ class QwenModel(TextModel):
 class Qwen2Model(TextModel):
     model_arch = gguf.MODEL_ARCH.QWEN2
 
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> tuple[Tensor, ...] | None:
+        if type(self).modify_tensors is Qwen2Model.modify_tensors and len(self._map_fp8_weight_names(name)) == 1:
+            return (scale,)
+        return None
+
     def set_vocab(self):
         # HuggingFaceBio/Carbon-14B: Qwen3 with the HybridDNATokenizer (Qwen3 BPE plus DNA 6-mers)
         if self._is_hybriddna():
@@ -91,6 +96,11 @@ class Qwen2MoeModel(TextModel):
                 self.format_tensor_name(gguf.MODEL_TENSOR.FFN_UP_EXP, bid),
             )
         return super()._map_fp8_weight_names(name)
+
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> tuple[Tensor, ...] | None:
+        if type(self).modify_tensors is Qwen2MoeModel.modify_tensors and len(self._map_fp8_weight_names(name)) == 1:
+            return (scale,)
+        return None
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -395,12 +405,49 @@ class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
     def _map_fp8_weight_names(self, name: str) -> tuple[str, ...]:
         if name.endswith(".linear_attn.in_proj_qkvz.weight"):
             bid = next(int(part) for part in self.map_tensor_name(name).split(".") if part.isdecimal())
-            # Both split projections keep the original per-tensor scales.
             return (
                 self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV, bid),
                 self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid),
             )
         return super()._map_fp8_weight_names(name)
+
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> tuple[Tensor, ...] | None:
+        if type(self).modify_tensors is not Qwen3NextModel.modify_tensors:
+            return None
+        if name.endswith(".linear_attn.in_proj_qkvz.weight"):
+            return self._split_qkvz(scale)
+        if len(self._map_fp8_weight_names(name)) == 1:
+            return (scale,)
+        return None
+
+    def _split_qkvz(self, data_torch: Tensor) -> tuple[Tensor, Tensor]:
+        # original order:  [q, k, v, z] * head_count
+        # corrected order: [q * head_count, k * head_count, v * head_count, z * head_count]
+        head_k_dim = self.hparams["linear_key_head_dim"]
+        head_v_dim = self.hparams["linear_value_head_dim"]
+        num_v_heads = self.hparams["linear_num_value_heads"]
+        num_k_heads = self.hparams["linear_num_key_heads"]
+        hidden_size = data_torch.shape[1]
+        split_arg_list_qkvz = [
+            head_k_dim, # q partition
+            head_k_dim, # k partition
+            (num_v_heads // num_k_heads * head_v_dim), # v partition
+            (num_v_heads // num_k_heads * head_v_dim), # z partition
+        ]
+        # view as (n_embd, head_count, [q+k+v+z])
+        data_torch = data_torch.permute(1, 0).contiguous()
+        data_torch = data_torch.view(-1, num_k_heads, sum(split_arg_list_qkvz))
+        # split into q, k, v, z
+        q, k, v, z = torch.split(data_torch, split_arg_list_qkvz, dim=-1)
+        # flatten dim + head_count
+        q = q.contiguous().view(hidden_size, -1)
+        k = k.contiguous().view(hidden_size, -1)
+        v = v.contiguous().view(hidden_size, -1)
+        z = z.contiguous().view(hidden_size, -1)
+        # stack back
+        qkv = torch.cat([q, k, v], dim=-1).permute(1, 0).contiguous()
+        z = z.permute(1, 0).contiguous()
+        return qkv, z
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
@@ -432,32 +479,7 @@ class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
             data_torch = data_torch + 1
 
         if "in_proj_qkvz.weight" in name:
-            # original order:  [q, k, v, z] * head_count
-            # corrected order: [q * head_count, k * head_count, v * head_count, z * head_count]
-            head_k_dim = self.hparams["linear_key_head_dim"]
-            head_v_dim = self.hparams["linear_value_head_dim"]
-            num_v_heads = self.hparams["linear_num_value_heads"]
-            num_k_heads = self.hparams["linear_num_key_heads"]
-            hidden_size = self.hparams["hidden_size"]
-            split_arg_list_qkvz = [
-                head_k_dim, # q partition
-                head_k_dim, # k partition
-                (num_v_heads // num_k_heads * head_v_dim), # v partition
-                (num_v_heads // num_k_heads * head_v_dim), # z partition
-            ]
-            # view as (n_embd, head_count, [q+k+v+z])
-            data_torch = data_torch.permute(1, 0).contiguous()
-            data_torch = data_torch.view(-1, num_k_heads, sum(split_arg_list_qkvz))
-            # split into q, k, v, z
-            q, k, v, z = torch.split(data_torch, split_arg_list_qkvz, dim=-1)
-            # flatten dim + head_count
-            q = q.contiguous().view(hidden_size, -1)
-            k = k.contiguous().view(hidden_size, -1)
-            v = v.contiguous().view(hidden_size, -1)
-            z = z.contiguous().view(hidden_size, -1)
-            # stack back
-            qkv = torch.cat([q, k, v], dim=-1).permute(1, 0).contiguous()
-            z = z.permute(1, 0).contiguous()
+            qkv, z = self._split_qkvz(data_torch)
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_QKV,  bid, ".weight"), qkv)
             yield (self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid, ".weight"), z)
         else:
@@ -868,6 +890,22 @@ class Qwen3_5MoeTextModel(_Qwen35MRopeMixin, _LinearAttentionVReorderBase):
 class DFlashModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.DFLASH
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._target_is_inkling2 = False
+        if self.target_model_dir is not None:
+            target_hparams = ModelBase.load_hparams(self.target_model_dir, False)
+            self._target_is_inkling2 = get_model_architecture(target_hparams, ModelType.TEXT).startswith("Inkling2")
+            if self._target_is_inkling2:
+                # the target GGUF keeps only the tokenizer rows of the padded vocab
+                target_hparams = {**target_hparams, **target_hparams.get("text_config", {})}
+                self.hparams["vocab_size"] = target_hparams["unpadded_vocab_size"]
+                self.hparams["eos_token_id"] = target_hparams["eos_token_id"]
+                # the loop core runs num_passes times, other looping targets need their own visit count
+                self._target_n_visits = target_hparams["num_hidden_layers"]
+                if (loop := target_hparams.get("loop_config")) is not None:
+                    self._target_n_visits += (loop["num_passes"] - 1) * (loop["core_end"] - loop["core_start"])
+
     def set_vocab(self):
         if self.target_model_dir is None:
             raise ValueError(
@@ -917,6 +955,11 @@ class DFlashModel(Qwen3Model):
             self.gguf_writer.add_conv_group_size(int(dflash_config["conv_group_size"]))
             self.gguf_writer.add_selector_rank(int(dflash_config["selector_rank"]))
             self.gguf_writer.add_selector_top_k(int(dflash_config["selector_top_k"]))
+            softcap_mode = dflash_config.get("selector_softcap_mode", "before_correction")
+            if softcap_mode not in ("before_correction", "after_correction"):
+                raise ValueError(f"DFlash2: unknown selector_softcap_mode {softcap_mode!r}")
+            if softcap_mode == "after_correction":
+                self.gguf_writer.add_selector_softcap_after_correction(True)
 
         output_multiplier = dflash_config.get(
             "output_multiplier", self.hparams.get("output_multiplier")
@@ -942,7 +985,10 @@ class DFlashModel(Qwen3Model):
 
         target_layer_ids = dflash_config.get("target_layer_ids", self.hparams.get("target_layer_ids", []))
         if target_layer_ids:
-            extract_layer_ids = [i + 1 for i in target_layer_ids]
+            # Inkling ids count loop visits, the last one is the final norm output
+            if self._target_is_inkling2 and target_layer_ids[-1] != self._target_n_visits:
+                raise ValueError(f"Inkling2 DFlash2: target_layer_ids {target_layer_ids} must end at the Inkling final norm ({self._target_n_visits})")
+            extract_layer_ids = target_layer_ids if self._target_is_inkling2 else [i + 1 for i in target_layer_ids]
             self.gguf_writer.add_target_layers(extract_layer_ids)
 
         use_sliding_window = self.hparams.get("use_sliding_window", False) or dflash_config.get("use_swa", False)
@@ -969,19 +1015,6 @@ class DFlashModel(Qwen3Model):
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
         yield from super().generate_extra_tensors()
 
-        mask_path = self.dir_model / "mask_embedding.pt"
-        if not mask_path.is_file():
-            return
-
-        mask = torch.load(mask_path, map_location="cpu", weights_only=True)
-        mask_id = self.hparams.get("dflash_config", {}).get("mask_token_id")
-        if mask_id is None or mask["mask_token_id"] != mask_id:
-            raise ValueError("mask_embedding.pt mask_token_id does not match dflash_config")
-        if tuple(mask["embedding"].shape) != (self.hparams["hidden_size"],):
-            raise ValueError("mask_embedding.pt has an unexpected embedding shape")
-        if not 0 <= mask_id < self.hparams["vocab_size"]:
-            raise ValueError("mask_embedding.pt mask_token_id is outside the vocabulary")
-
         def target_tensor(name: str) -> Tensor:
             if self.target_model_dir is None:
                 raise ValueError("mask_embedding.pt requires --target-model-dir with the target embeddings and output head")
@@ -998,6 +1031,23 @@ class DFlashModel(Qwen3Model):
                     if name in part:
                         return LazyTorchTensor.from_local_tensor(part[name])
             raise ValueError(f"Target tensor {name!r} was not found in safetensors")
+
+        if self._target_is_inkling2:
+            # the draft borrows the raw target embeddings, Inkling norms them before its first layer
+            yield "model.embed_norm.weight", target_tensor("model.llm.embed_norm.weight")
+
+        mask_path = self.dir_model / "mask_embedding.pt"
+        if not mask_path.is_file():
+            return
+
+        mask = torch.load(mask_path, map_location="cpu", weights_only=True)
+        mask_id = self.hparams.get("dflash_config", {}).get("mask_token_id")
+        if mask_id is None or mask["mask_token_id"] != mask_id:
+            raise ValueError("mask_embedding.pt mask_token_id does not match dflash_config")
+        if tuple(mask["embedding"].shape) != (self.hparams["hidden_size"],):
+            raise ValueError("mask_embedding.pt has an unexpected embedding shape")
+        if not 0 <= mask_id < self.hparams["vocab_size"]:
+            raise ValueError("mask_embedding.pt mask_token_id is outside the vocabulary")
 
         embedding_name = "model.embed_tokens.weight"
         if embedding_name in self.model_tensors:
@@ -1061,6 +1111,8 @@ class DFlashModel(Qwen3Model):
             "model.candidate_selector.predecessor_codebook",
             "model.candidate_selector.successor_codebook",
         ):
+            # padded vocabs (Inkling): the selector only indexes the draft vocab
+            data_torch = data_torch[:self.hparams["vocab_size"]]
             name += ".weight"
 
         yield from super().modify_tensors(data_torch, name, bid)

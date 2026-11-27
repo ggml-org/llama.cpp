@@ -20,8 +20,10 @@
 		open: boolean;
 		isStreaming: boolean;
 		executingToolCallId?: string | null;
-		/** Task start (ms since epoch) for the live timer, or null for none. */
+		/** Start of the group's loop (ms since epoch), or null for no timer. */
 		elapsedStartedAt?: number | null;
+		/** End of the group's loop (ms since epoch), or null while it runs. */
+		elapsedEndedAt?: number | null;
 		/**
 		 * What the server is doing while the reply waits on it ( "Processing 40%",
 		 * "Loading weights" ), shown as the live title when this is the last row.
@@ -33,6 +35,7 @@
 
 	let {
 		children,
+		elapsedEndedAt = null,
 		elapsedStartedAt = null,
 		executingToolCallId,
 		isStreaming,
@@ -54,7 +57,7 @@
 </script>
 
 <div class="tool-call-group min-w-0">
-	<CollapsibleContentBlock inlineChevron {onToggle} {open} shimmerTitle={Boolean(activity)}>
+	<CollapsibleContentBlock {onToggle} {open} pinnedChevron shimmerTitle={Boolean(activity)}>
 		{#snippet titleSnippet()}
 			<span class="flex min-w-0 items-baseline gap-x-2">
 				<!-- collapsed, the summary steps back behind the answer; a live title keeps its shimmer -->
@@ -65,9 +68,9 @@
 			</span>
 		{/snippet}
 
-		{#snippet titleSuffix()}
+		{#snippet trailing()}
 			{#if elapsedStartedAt !== null}
-				<ToolCallElapsed startedAt={elapsedStartedAt} />
+				<ToolCallElapsed endedAt={elapsedEndedAt} startedAt={elapsedStartedAt} />
 			{/if}
 		{/snippet}
 

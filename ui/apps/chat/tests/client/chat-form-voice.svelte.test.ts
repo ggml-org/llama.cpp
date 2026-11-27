@@ -8,7 +8,7 @@ import ChatFormVoiceTestWrapper from './components/ChatFormVoiceTestWrapper.svel
 import { EditorView } from '@codemirror/view';
 import { VoiceTranscriptStatus } from '@ggml-org/llama-ui/voice';
 import { VoiceRecorderStatus } from '@ggml-org/llama-voice';
-import { SETTINGS_KEYS, VOICE_MODE_MESSAGE } from '#lib/constants/index.ts';
+import { SETTINGS_KEYS, VOICE_MODE_MESSAGE, VOICE_WARMUP_REST_MS } from '#lib/constants/index.ts';
 import { ServerRole, VoiceInputMode } from '#lib/enums/index.ts';
 import { voiceTranscriptsStore } from '#lib/stores/index.ts';
 import { parseFilesToMessageExtras } from '#lib/utils/browser-only.ts';
@@ -43,7 +43,7 @@ function seed(
 
 async function renderForm({ isLoading = false } = {}) {
 	const recorder = new FakeVoiceRecorder();
-	const state = $state({ files: [] as ChatUploadedFile[], sent: 0, value: '' });
+	const state = $state({ files: [] as ChatUploadedFile[], sent: 0, stopped: 0, value: '' });
 	const screen = render(ChatFormVoiceTestWrapper, { isLoading, state, voiceRecorder: recorder });
 
 	await tick();
@@ -286,6 +286,20 @@ describe('while a reply streams', () => {
 		await expect
 			.element(screen.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage }).last())
 			.toBeEnabled();
+	});
+
+	it('drops the recording on Escape, and the reply goes on', async () => {
+		seed(true, VoiceInputMode.DICTATION);
+
+		const { recorder, recordingRow, screen, state } = await renderForm({ isLoading: true });
+
+		await screen.getByRole('button', { name: VOICE_MODE_MESSAGE.dictate }).last().click();
+		await expect.poll(recordingRow).toBeTruthy();
+
+		await userEvent.keyboard('{Escape}');
+		await expect.poll(recordingRow).toBeNull();
+		expect(recorder.cancelled).toBe(1);
+		expect(state.stopped).toBe(0);
 	});
 });
 
@@ -569,5 +583,61 @@ describe('a voice message', () => {
 		});
 
 		voiceTranscriptsStore.forget(file.name);
+	});
+});
+
+// the microphone opens ahead of a press only once the pointer rests on the button
+describe('the microphone warm-up', () => {
+	function grantMicrophone() {
+		const getUserMedia = vi.fn(async () => new MediaStream());
+		const spies = [
+			vi
+				.spyOn(navigator.permissions, 'query')
+				.mockResolvedValue({ state: 'granted' } as PermissionStatus),
+			vi.spyOn(navigator.mediaDevices, 'getUserMedia').mockImplementation(getUserMedia)
+		];
+
+		return { getUserMedia, restore: () => spies.forEach((spy) => spy.mockRestore()) };
+	}
+
+	const pointer = (type: string) =>
+		new PointerEvent(type, { bubbles: type !== 'pointerenter', pointerType: 'mouse' });
+
+	it('opens nothing for a pointer only passing over the button', async () => {
+		seed(true);
+
+		const mic = grantMicrophone();
+		const { screen } = await renderForm();
+		const button = screen
+			.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage })
+			.last()
+			.element();
+
+		button.dispatchEvent(pointer('pointerenter'));
+		button.dispatchEvent(pointer('pointermove'));
+		await new Promise((resolve) => setTimeout(resolve, VOICE_WARMUP_REST_MS / 2));
+		button.dispatchEvent(pointer('pointerleave'));
+		await new Promise((resolve) => setTimeout(resolve, VOICE_WARMUP_REST_MS * 2));
+
+		expect(mic.getUserMedia).not.toHaveBeenCalled();
+		mic.restore();
+	});
+
+	it('opens the microphone once the pointer rests on the button', async () => {
+		seed(true);
+
+		const mic = grantMicrophone();
+		const { screen } = await renderForm();
+		const button = screen
+			.getByRole('button', { name: VOICE_MODE_MESSAGE.voiceMessage })
+			.last()
+			.element();
+
+		button.dispatchEvent(pointer('pointerenter'));
+
+		await expect.poll(() => mic.getUserMedia.mock.calls.length).toBe(1);
+
+		button.dispatchEvent(pointer('pointerleave'));
+		mic.restore();
 	});
 });

@@ -83,7 +83,7 @@ llama_model_kokoro::graph::graph(const llm_graph_params & params) : llm_graph_co
     inpL = build_norm(inpL, model.tok_norm, model.tok_norm_b, LLM_NORM, 0);
     cb(inpL, "inp_norm", 0);
 
-    inpL = ggml_add(ctx0, ggml_mul_mat(ctx0, model.tok_embd_proj, inpL), model.tok_embd_proj_b);
+    inpL = ggml_add(ctx0, build_lora_mm(model.tok_embd_proj, inpL), model.tok_embd_proj_b);
     cb(inpL, "inp_proj", 0);
 
     auto * inp_attn = build_attn_inp_no_cache();
@@ -104,7 +104,7 @@ llama_model_kokoro::graph::graph(const llm_graph_params & params) : llm_graph_co
             cb(Vcur, "Vcur", il);
 
             cur = build_attn(inp_attn,
-                    layer.wo, layer.wo_b, layer.wo_s,
+                    layer.wo, layer.wo_b,
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f / sqrtf(float(n_embd_head)), il);
             cb(cur, "kqv_out", il);
         }
@@ -121,9 +121,9 @@ llama_model_kokoro::graph::graph(const llm_graph_params & params) : llm_graph_co
         cb(ffn_inp, "ffn_inp", il);
 
         cur = build_ffn(cur,
-                layer.ffn_up,   layer.ffn_up_b,   NULL,
-                NULL,           NULL,             NULL,
-                layer.ffn_down, layer.ffn_down_b, NULL, NULL,
+                layer.ffn_up,   layer.ffn_up_b,
+                NULL,           NULL,
+                layer.ffn_down, layer.ffn_down_b, NULL,
                 LLM_FFN_GELU, LLM_FFN_SEQ, il);
         cb(cur, "ffn_out", il);
 

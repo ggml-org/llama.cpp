@@ -49,6 +49,9 @@ OutputVector translate_recurrent_cache_reset(const NodeContext & context);
 // add_sliced_mask_stateful); any other input, e.g. the mask rows gemma-4 gathers for its KV-shared layers, as is.
 ov::Output<ov::Node> get_kq_mask_input(const NodeContext & context, size_t input_index);
 
+// The mask of gemma-4's KV-shared layers, whose rows get_kq_mask_input() gathers from an input mask
+bool is_pruned_mask_name(const std::string & name);
+
 // A stateless KV cache in the [1, ctx, n_heads_kv, head_size] layout (GgmlOvDecoder::is_kvcache_4d), as opposed to
 // [1, n_seq, ctx, n_heads_kv * head_size]
 inline bool is_kvcache_4d_shape(const ov::PartialShape & shape) {

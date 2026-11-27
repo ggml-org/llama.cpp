@@ -168,7 +168,7 @@ export const chatCommands: ChatFormCommand[] = [
 	},
 	{
 		action: ChatFormCommandAction.COMPACT,
-		description: 'Summarize the conversation to free up context',
+		description: 'Summarize to free up context',
 		disabled: true,
 		keywords: ['summarize', 'context'],
 		name: 'compact'

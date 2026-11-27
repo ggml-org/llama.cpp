@@ -4,23 +4,35 @@
 		type UseChatFormPickersReturn
 	} from '#lib/hooks/use-chat-form-pickers.svelte.ts';
 
+	interface Props {
+		cwd?: string | null;
+		serverHome?: string | null;
+	}
+
+	let { cwd = null, serverHome = null }: Props = $props();
+
 	let value = $state('');
 	let caretOffset = $state(0);
 	const calls: string[] = [];
 
 	const pickers = useChatFormPickers({
 		canCompact: () => true,
+		canEditSystemMessage: () => true,
+		editsCwdInline: () => true,
 		focusInput: () => {},
 		getCaretOffset: () => caretOffset,
-		getCwd: () => null,
+		getCwd: () => cwd,
 		getPickersRef: () => undefined,
-		getServerHome: () => null,
+		getServerHome: () => serverHome,
 		getShowModelSelector: () => true,
 		getValue: () => value,
 		hasCwdTools: () => true,
 		hasPrompts: () => true,
 		onCompact: () => {
 			calls.push('onCompact');
+		},
+		onSystemMessage: () => {
+			calls.push('onSystemMessage');
 		},
 		openModelSelector: () => {
 			calls.push('openModelSelector');
@@ -40,6 +52,17 @@
 		value = text;
 		caretOffset = text.length;
 		pickers.handleInput();
+	}
+
+	// The same, with the caret at `|` in `text`: an edit somewhere in the middle.
+	export function typeAt(text: string) {
+		value = text.replace('|', '');
+		caretOffset = text.indexOf('|');
+		pickers.handleInput();
+	}
+
+	export function getCaretOffset() {
+		return caretOffset;
 	}
 
 	export function getValue() {

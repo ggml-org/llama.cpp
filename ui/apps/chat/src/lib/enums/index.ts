@@ -22,6 +22,7 @@ export {
 	StreamConnectionState,
 	ContentPartType,
 	ConversationSelectionMode,
+	ConversationShareScope,
 	ErrorDialogType,
 	MessageRole,
 	MessageType,
@@ -94,7 +95,13 @@ export {
 	ServerModelsSseEventType
 } from './llama-server.enums';
 
-export { ParameterSource, SyncableParameterType, SettingsFieldType } from './settings.enums';
+export {
+	ParameterSource,
+	SettingsFieldBlock,
+	SettingsFieldType,
+	SettingsPlatform,
+	SyncableParameterType
+} from './settings.enums';
 
 export {
 	ColorLevel,
@@ -126,3 +133,5 @@ export {
 export { SplashOrientation } from './splash.enums';
 
 export { ChatFormVoiceState, VoiceInputMode, VoiceMode, VoiceModelRole } from './voice.enums';
+
+export { AddSheetPage, ModelsSheetPage, SettingsSheetPage } from './sheet.enums';

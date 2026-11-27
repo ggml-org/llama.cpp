@@ -19,6 +19,8 @@ layout (constant_id = 13) const uint32_t FaTypeV = 0;
 // sizeof(decode buffer): quants -> ggml block size; F32 -> 16 (decodeBufF32 vec4).
 layout (constant_id = 14) const uint32_t FaBlockBytesK = 2;
 layout (constant_id = 15) const uint32_t FaBlockBytesV = 2;
+// Indexed bias: table->ne[0], 0 = no bias
+layout (constant_id = 16) const uint32_t BiasBins = 0;
 
 const bool USE_MASK_OPT    = (Flags & 1) != 0;
 const bool MASK_ENABLE     = (Flags & 2) != 0;
@@ -30,6 +32,7 @@ const bool Q_IN_REGS       = (Flags & 32) != 0;
 // coopmat1: subgroups own Q rows, O in coopmat accumulators. K/V staged in LDS, or loaded from global memory with FLIP_DIRECT.
 const bool FLIP            = (Flags & 64) != 0;
 const bool FLIP_DIRECT     = (Flags & 128) != 0;
+const bool USE_BIAS        = BiasBins != 0;
 
 // Round up head sizes to a multiple of 16, for coopmat1/coopmat2 paths
 const uint32_t HSK_pad = (HSK + 15) & ~15;
@@ -89,6 +92,9 @@ layout (binding = 5) writeonly buffer OV4 {D_TYPEV4 data_ov4[];};
 layout (binding = 6) readonly buffer MO {uint32_t data_mask_opt[];};
 
 layout (binding = 7) readonly buffer SP {int32_t data_sparse[];};
+
+layout (binding = 8) readonly buffer BT {float data_bias_table[];};
+layout (binding = 9) readonly buffer BI {int32_t data_bias_idx[];};
 
 // Use -FLT_MAX/2 rather than -inf to reduce the possibility of NaNs, e.g. when computing Mold-M.
 #define NEG_FLT_MAX_OVER_2 uintBitsToFloat(0xFEFFFFFF)
@@ -248,6 +254,23 @@ bool fa_kv_index(uint lin, out uint kv_col) {
     }
     kv_col = lin;
     return !KV_bounds_check || lin < KV;
+}
+
+// Flattened query and Q head of tile row r. With GQA collapse rows are heads. False for padding rows.
+bool fa_bias_row(const in uint32_t r, out uint32_t query, out uint32_t head) {
+    if (p.gqa_ratio > 1) {
+        query = iq3 * p.nem1 + gqa_iq1;
+        head  = iq2 + r;
+        return r < N;
+    }
+    query = iq3 * p.nem1 + i * Br + r;
+    head  = iq2;
+    return i * Br + r < N;
+}
+
+float fa_bias(const in uint32_t query, const in uint32_t head, const in uint32_t kv_col) {
+    const uint32_t bin = uint32_t(data_bias_idx[query * p.KV + kv_col]);
+    return data_bias_table[(query * p.neq2 + head) * BiasBins + bin];
 }
 
 // Bias applied to softmax to stay in fp16 range.

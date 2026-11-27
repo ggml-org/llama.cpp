@@ -2,11 +2,28 @@ export const INITIAL_FILE_SIZE = 0;
 export const PROMPT_CONTENT_SEPARATOR = '\n\n';
 export const CLIPBOARD_CONTENT_QUOTE_PREFIX = '"';
 export const PROMPT_TRIGGER_PREFIX = '/';
+/** The slash command that sets the working directory, typed as `/cwd <path>`. */
+export const CWD_COMMAND_NAME = 'cwd';
+/** A command's name after the `/`: letters, digits and dashes (`system-message`). */
+export const COMMAND_NAME_REGEX = /^[\w-]*$/;
+/** Where a working directory is typed, anywhere in the input: `/cwd <path>`. */
+export const CWD_COMMAND_PREFIX = `${PROMPT_TRIGGER_PREFIX}${CWD_COMMAND_NAME} `;
+/**
+ * The command picker fits its suggestions: as wide as the longest one, between a floor
+ * that keeps short lists readable and a cap no wider than the form.
+ */
+export const CHAT_FORM_PICKER_WIDTH_CLASS =
+	'w-max min-w-64 max-w-[min(36rem,var(--bits-popover-anchor-width))]';
+/**
+ * The pickers that list paths (`@` mentions, `/cwd`) keep one width, so the list does not
+ * resize as the results change with every keystroke.
+ */
+export const CHAT_FORM_PATH_PICKER_WIDTH_CLASS = 'w-[min(36rem,var(--bits-popover-anchor-width))]';
 export const NEW_CHAT_DRAFT_KEY = '__new_chat__';
 /** Lines of text from which the main chat form expands into its large editor. */
 export const CHAT_FORM_EXPAND_MIN_LINES = 4;
-/** Below this text height (a 24px line and change) the main chat form keeps to one row. */
-export const CHAT_FORM_SINGLE_ROW_MAX_TEXT_PX = 36;
+/** Below this text height (a line and change) the main chat form keeps to one row. */
+export const CHAT_FORM_SINGLE_ROW_MAX_TEXT_LINES = 1.5;
 
 /**
  * How far the chat form floats above the bottom of the screen: a phone browser's toolbar is

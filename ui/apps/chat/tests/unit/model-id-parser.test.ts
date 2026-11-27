@@ -65,6 +65,7 @@ describe('parseModelId', () => {
 		expect(parseModelId('model-100B-F16')).toMatchObject({ quantization: 'F16' });
 		expect(parseModelId('model-100B-BF16')).toMatchObject({ quantization: 'BF16' });
 		expect(parseModelId('model-100B-MXFP4')).toMatchObject({ quantization: 'MXFP4' });
+		expect(parseModelId('model-26B-NVFP4')).toMatchObject({ quantization: 'NVFP4' });
 
 		// Colon-separated quantization
 		expect(parseModelId('model-100B:UD-IQ1_S')).toMatchObject({ quantization: 'UD-IQ1_S' });

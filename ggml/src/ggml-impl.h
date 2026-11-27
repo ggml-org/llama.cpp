@@ -104,6 +104,16 @@ static inline bool ggml_impl_is_view(const struct ggml_tensor * t) {
     return t->view_src != NULL;
 }
 
+// scale of src[i] set by ggml_mul_mat_ext / ggml_mul_mat_id_ext
+static inline const struct ggml_tensor * ggml_get_src_scale(const struct ggml_tensor * op, int i) {
+    GGML_ASSERT(i == 0 || i == 1);
+    switch (op->op) {
+        case GGML_OP_MUL_MAT:    return op->src[2 + i];
+        case GGML_OP_MUL_MAT_ID: return op->src[3 + i];
+        default:                 return NULL;
+    }
+}
+
 static inline float ggml_compute_softplus_f32(float input) {
     return (input > 20.0f) ? input : log1pf(expf(input));
 }
@@ -113,6 +123,8 @@ GGML_API void ggml_rope_yarn_corr_dims(
     int n_dims, int n_ctx_orig, float freq_base, float beta_fast, float beta_slow, bool truncate, float dims[2]);
 
 GGML_API bool ggml_rope_get_truncate(const struct ggml_tensor * a);
+
+GGML_API bool ggml_validate_flash_attn_ext_indexed_bias(const struct ggml_tensor * a);
 
 //
 // logging

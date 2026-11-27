@@ -11,8 +11,6 @@ import FileIcon from '@lucide/svelte/icons/file';
 // not a microphone: that one is for recording and dictation
 import AudioIcon from '@lucide/svelte/icons/file-headphone';
 import FileTextIcon from '@lucide/svelte/icons/file-text';
-import CompactCommandIcon from '@lucide/svelte/icons/fold-vertical';
-import CwdCommandIcon from '@lucide/svelte/icons/folder-open';
 import ImageIcon from '@lucide/svelte/icons/image';
 import LoadingIcon from '@lucide/svelte/icons/loader-2';
 import ModelIcon from '@lucide/svelte/icons/package';
@@ -20,12 +18,12 @@ import PauseDownloadIcon from '@lucide/svelte/icons/pause';
 import ResumeDownloadIcon from '@lucide/svelte/icons/play';
 import LoadIcon from '@lucide/svelte/icons/power';
 import RetryIcon from '@lucide/svelte/icons/rotate-cw';
-import PromptCommandIcon from '@lucide/svelte/icons/sparkles';
+// the box with an arrow leaving it, not the three joined dots
+import ShareIcon from '@lucide/svelte/icons/share';
 import VideoIcon from '@lucide/svelte/icons/video';
 import CancelLoadIcon from '@lucide/svelte/icons/x';
-import { ChatFormCommandAction, FileTypeCategory, ModelCapability } from '#lib/enums/index.ts';
+import { FileTypeCategory, ModelCapability } from '#lib/enums/index.ts';
 import type { ModelCapabilities } from '#lib/types/models.js';
-import type { Component } from 'svelte';
 export {
 	CAPABILITY_ICONS,
 	CAPABILITY_LABELS,
@@ -48,6 +46,12 @@ export const DEFAULT_FILE_ICON = FileIcon;
 /** The mark for a model, wherever one is listed. */
 export const MODEL_ICON = ModelIcon;
 
+/** Sharing something out of the app: every share action, button and dialog uses this one icon. */
+export const SHARE_ICON = ShareIcon;
+
+/** What sharing a conversation looks like as an action, on a message and in every conversation menu. */
+export const SHARE_ACTION = { icon: SHARE_ICON, label: 'Share' } as const;
+
 /** The mark for the Discover Models surface and its entry points. */
 export const DISCOVER_ICON = DiscoverIcon;
 
@@ -63,14 +67,6 @@ export const MODALITY_KEYS: ModalityKey[] = MODALITY_ORDER.map(
 export const CAPABILITY_FLAG_KEYS: Record<ModelCapability, keyof ModelCapabilities> = {
 	[ModelCapability.REASONING]: 'reasoning',
 	[ModelCapability.TOOL_USE]: 'tools'
-};
-
-/** Icons of the slash-command picker, one per chat-form command. */
-export const CHAT_FORM_COMMAND_ICONS: Record<ChatFormCommandAction, Component> = {
-	[ChatFormCommandAction.COMPACT]: CompactCommandIcon,
-	[ChatFormCommandAction.CWD]: CwdCommandIcon,
-	[ChatFormCommandAction.MODEL]: MODEL_ICON,
-	[ChatFormCommandAction.PROMPT]: PromptCommandIcon
 };
 
 /** Icons of the download control a manager row shows while it downloads. */

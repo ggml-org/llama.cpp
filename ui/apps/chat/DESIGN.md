@@ -715,6 +715,9 @@ here; if something really is missing, add it here first.
 - **Sizes:** Tailwind's 4px spacing scale. Icons are Lucide, `size-icon-md` (16px), or
   `size-icon-sm` (14px) in compact controls. Controls are `h-control-sm`, `h-control-md` or
   `h-control-lg` (32, 36, 40px).
+- **Sharing:** anything that shares out of the app (an action, a button, a dialog title) uses
+  one icon, Lucide's `Share`: a box with an arrow leaving it (`SHARE_ICON`). Never `Share2`,
+  the three joined dots.
 - **Surfaces:** one surface utility per element (`card-surface`, `matte-float`, `matte-key`,
   `matte-well`), never raw `shadow-*`, `border-*` and `backdrop-blur-*` combinations.
 - **Tokens:** read a semantic token directly. A component token is only for a value the
@@ -1097,6 +1100,16 @@ screens. Status lamps, avatars and the round icon buttons in the chat form are f
   shade, which makes a field. Unlike the other `matte-glass` surfaces it does not blur: it
   already sits on glass, and a second backdrop blur re-paints the panel's fill behind it and
   turns the group visibly lighter, whatever its own fill.
+- **Inset lists:** a phone's sheets (settings, add to chat, the model picker) list their
+  options the native way. `inset-list` is an inset group of rows, `inset-list-row` a row a
+  finger tall (3rem) that is tappable as a whole, and `inset-list-row-body` its label and value,
+  whose top border is the divider: it starts at the label, past the row's icon, and the first
+  row has none. `inset-list-title` sits above a group and `inset-list-caption` below it. Inside
+  a drawer the groups take `--sheet-group-radius` (1.25rem, the chat form's single-row radius) in place of the card radius, to sit
+  with the sheet's own 2.5rem corners. A sheet's close or back key is `sheet-key`, a round key
+  1rem from the top and from the side, with the title centered on its middle. Build them with Llama UI's
+  `InsetList`, `InsetListRow`, `InsetListSplitRow`, `SheetHeader` and `SheetPages`
+  (`@ggml-org/llama-ui/app/sheets`) rather than with the utilities by hand.
 - **Selected rows:** `selected-row-surface` marks the row a sidebar list is on: a
   conversation, a project or a top action, on desktop and on a phone. It is a 5% tint of the
   text colour, under hover's 10%, with the inset group's edge and shade, so the selected row

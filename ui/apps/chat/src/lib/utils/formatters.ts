@@ -177,6 +177,18 @@ export function formatPerformanceTime(ms: number): string {
 }
 
 /**
+ * A running time that ticks once a second: whole seconds under a minute, so
+ * the label does not flicker every tick, then as formatPerformanceTime.
+ */
+export function formatElapsedTime(ms: number): string {
+	const elapsedMs = Math.max(0, ms);
+
+	return elapsedMs < SECONDS_PER_MINUTE * MS_PER_SECOND
+		? `${Math.floor(elapsedMs / MS_PER_SECOND)}s`
+		: formatPerformanceTime(elapsedMs);
+}
+
+/**
  * Formats attachment content for API requests with consistent header style.
  * Used when converting message attachments to text content parts.
  *
