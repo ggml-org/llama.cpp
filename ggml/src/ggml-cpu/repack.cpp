@@ -5033,6 +5033,15 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &q4_K_8x4_q8_K;
             }
         }
+#if defined(__aarch64__) && !defined(__APPLE__)
+        // no dotprod (e.g. Cortex-A53): AArch64 only, on 32-bit ARM the 8x8 kernels run scalar code
+        // not on Apple: repacked weights cannot go to BLAS (Accelerate), which is faster there for large batches
+        if (ggml_cpu_has_neon() && !ggml_cpu_has_dotprod()) {
+            if (cur->ne[1] % 8 == 0) {
+                return &q4_K_8x8_q8_K;
+            }
+        }
+#endif
         if (ggml_cpu_has_riscv_v()) {
             #if defined __riscv_zvfh
             switch (__riscv_vlenb() * 8) {
@@ -5072,6 +5081,15 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &q5_K_8x4_q8_K;
             }
         }
+#if defined(__aarch64__) && !defined(__APPLE__)
+        // no dotprod (e.g. Cortex-A53): AArch64 only, on 32-bit ARM the 8x8 kernels run scalar code
+        // not on Apple: repacked weights cannot go to BLAS (Accelerate), which is faster there for large batches
+        if (ggml_cpu_has_neon() && !ggml_cpu_has_dotprod()) {
+            if (cur->ne[1] % 8 == 0) {
+                return &q5_K_8x8_q8_K;
+            }
+        }
+#endif
     } else if (cur->type == GGML_TYPE_Q6_K) {
         if (ggml_cpu_has_neon() && ggml_cpu_has_matmul_int8()) {
             if (cur->ne[1] % 8 == 0) {
@@ -5083,6 +5101,15 @@ static const ggml::cpu::tensor_traits * ggml_repack_get_optimal_repack_type(cons
                 return &q6_K_8x4_q8_K;
             }
         }
+#if defined(__aarch64__) && !defined(__APPLE__)
+        // no dotprod (e.g. Cortex-A53): AArch64 only, on 32-bit ARM the 8x8 kernels run scalar code
+        // not on Apple: repacked weights cannot go to BLAS (Accelerate), which is faster there for large batches
+        if (ggml_cpu_has_neon() && !ggml_cpu_has_dotprod()) {
+            if (cur->ne[1] % 8 == 0) {
+                return &q6_K_8x8_q8_K;
+            }
+        }
+#endif
     } else if (cur->type == GGML_TYPE_IQ4_NL) {
         if (ggml_cpu_has_avx2()) {
             if (cur->ne[1] % 8 == 0) {
