@@ -3767,6 +3767,11 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
         if constexpr(quantize_enabled) {
             dev[i].src1_ddq = dev[i].src1_ddq_alloc.alloc(ctx.pool(i), nrows1*src1_padded_col_size*q8_1_ts/q8_1_bs);
 
+            // quantize leaves the padded tail unwritten, clear it so pooled reuse is safe
+            if (src1_padded_col_size != ne10) {
+                SYCL_CHECK(CHECK_TRY_ERROR(stream->memset(dev[i].src1_ddq, 0, src1_padded_col_size*nrows1*q8_1_ts/q8_1_bs)));
+            }
+
             if (src1_on_device && src1_is_contiguous) {
                 scope_op_debug_print scope_dbg_print(__func__, "/quantize_row_q8_1_sycl", dst,
                                                      /*num_src=*/2, " : converting src1 to Q8_1");
@@ -3870,6 +3875,13 @@ static void ggml_sycl_op_mul_mat(ggml_backend_sycl_context & ctx, const ggml_ten
                         scope_op_debug_print scope_dbg_print(__func__, "/quantize_row_q8_1_sycl", dst,
                                                              /*num_src=*/2, " : converting src1 to Q8_1");
                         try {
+
+                            // quantize leaves the padded tail unwritten, clear it so pooled reuse is safe
+                            if (src1_padded_col_size != ne10) {
+                                SYCL_CHECK(CHECK_TRY_ERROR(stream->memset(
+                                    src1_ddq_i, 0, src1_ncols * src1_padded_col_size * q8_1_ts / q8_1_bs)));
+                            }
+
                             quantize_row_q8_1_sycl<quantize_q8_1>(src1_ddf_i, src1_ddq_i, ne10, src1_ncols,
                                                                   src1_padded_col_size, stream);
                         } catch (const sycl::exception & exc) {
@@ -4344,9 +4356,18 @@ enum class mul_mat_algo {
 };
 
 inline bool ggml_sycl_supports_mmq(enum ggml_type type) {
-    // TODO: accuracy issues in MMQ
-    GGML_UNUSED(type);
-    return false;
+    // Q4_0-Q8_0 first for B580 check, rest stay off
+    // K-quants need tile rework: QI > WARP_SIZE breaks x_dm layout, hangs or miscomputes
+    switch (type) {
+        case GGML_TYPE_Q4_0:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q8_0:
+            return true;
+        default:
+            return false;
+    }
 }
 
 inline bool ggml_sycl_supports_reorder_mul_mat_sycl(enum ggml_type type) {
@@ -5161,6 +5182,12 @@ static bool can_use_mul_mat_q(const ggml_tensor * src0, const ggml_tensor * src1
     if (!ggml_sycl_supports_mmq(src0->type) || src0->type == GGML_TYPE_IQ2_XXS) {
         return false;
     }
+
+    // Skip XMX-reordered weights: not plain layout, MMQ would misread them.
+    if (src0->extra && static_cast<const ggml_tensor_extra_gpu *>(src0->extra)->optimized_feature.reorder) {
+        return false;
+    }
+    
 #if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
     if (src1->ne[1] > MMQ_MAX_BATCH_SIZE) {
         return false;

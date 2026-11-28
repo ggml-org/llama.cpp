@@ -1213,7 +1213,8 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
 
     const int blocks_per_row_x = ncols_x / qk;
     const int blocks_per_col_y = nrows_y / QK8_1;
-    const int blocks_per_warp = WARP_SIZE / qi;
+    // QI can exceed WARP_SIZE on Intel (e.g. QI4_K=32 > 16), guard against div-by-zero step
+    const int blocks_per_warp  = sycl::max(WARP_SIZE / qi, 1);
 
     const int & ncols_dst = ncols_y;
 
@@ -1341,7 +1342,8 @@ mul_mat_q(const void *__restrict__ vx, const void *__restrict__ vy,
 #define  MMQ_Y_Q4_0_RDNA1  64
 #define NWARPS_Q4_0_RDNA1  8
 #if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
-#define  MMQ_X_Q4_0_AMPERE 4
+// wider tiles run faster on B580, keep the plain types in sync
+#define  MMQ_X_Q4_0_AMPERE 16
 #define  MMQ_Y_Q4_0_AMPERE 32
 #define NWARPS_Q4_0_AMPERE 4
 #else
@@ -1364,8 +1366,6 @@ template <bool need_check> static void
     int   * tile_x_qh = nullptr;
     int   * tile_x_sc = nullptr;
 
-//sycl_todo: change according to hardware
-
     const int mmq_x  =  MMQ_X_Q4_0_AMPERE;
     const int mmq_y  =  MMQ_Y_Q4_0_AMPERE;
     const int nwarps = NWARPS_Q4_0_AMPERE;
@@ -1385,7 +1385,8 @@ template <bool need_check> static void
 #define  MMQ_Y_Q4_1_RDNA1  64
 #define NWARPS_Q4_1_RDNA1  8
 #if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
-#define  MMQ_X_Q4_1_AMPERE 4
+// wider tiles run faster on B580, keep the plain types in sync
+#define  MMQ_X_Q4_1_AMPERE 16
 #define  MMQ_Y_Q4_1_AMPERE 32
 #define NWARPS_Q4_1_AMPERE 4
 #else
@@ -1408,7 +1409,6 @@ template <bool need_check> static void
     int   * tile_x_qh = nullptr;
     int   * tile_x_sc = nullptr;
 
-//sycl_todo: change according to hardware
     const int mmq_x  =  MMQ_X_Q4_1_AMPERE;
     const int mmq_y  =  MMQ_Y_Q4_1_AMPERE;
     const int nwarps = NWARPS_Q4_1_AMPERE;
@@ -1428,7 +1428,8 @@ template <bool need_check> static void
 #define  MMQ_Y_Q5_0_RDNA1  64
 #define NWARPS_Q5_0_RDNA1  8
 #if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
-#define  MMQ_X_Q5_0_AMPERE 4
+// wider tiles run faster on B580, keep the plain types in sync
+#define  MMQ_X_Q5_0_AMPERE 16
 #define  MMQ_Y_Q5_0_AMPERE 32
 #define NWARPS_Q5_0_AMPERE 4
 #else
@@ -1451,7 +1452,6 @@ template <bool need_check> static void
     int   * tile_x_qh = nullptr;
     int   * tile_x_sc = nullptr;
 
-//sycl_todo: change according to hardware
     const int mmq_x  =  MMQ_X_Q5_0_AMPERE;
     const int mmq_y  =  MMQ_Y_Q5_0_AMPERE;
     const int nwarps = NWARPS_Q5_0_AMPERE;
@@ -1471,7 +1471,8 @@ template <bool need_check> static void
 #define  MMQ_Y_Q5_1_RDNA1  64
 #define NWARPS_Q5_1_RDNA1  8
 #if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
-#define  MMQ_X_Q5_1_AMPERE 4
+// wider tiles run faster on B580, keep the plain types in sync
+#define  MMQ_X_Q5_1_AMPERE 16
 #define  MMQ_Y_Q5_1_AMPERE 32
 #define NWARPS_Q5_1_AMPERE 4
 #else
@@ -1494,7 +1495,6 @@ mul_mat_q5_1(
     int   * tile_x_qh = nullptr;
     int   * tile_x_sc = nullptr;
 
-//sycl_todo: change according to hardware
     const int mmq_x  =  MMQ_X_Q5_1_AMPERE;
     const int mmq_y  =  MMQ_Y_Q5_1_AMPERE;
     const int nwarps = NWARPS_Q5_1_AMPERE;
@@ -1514,7 +1514,8 @@ mul_mat_q5_1(
 #define  MMQ_Y_Q8_0_RDNA1  64
 #define NWARPS_Q8_0_RDNA1  8
 #if defined(GGML_SYCL_SUPPORT_XMX) && !defined(GGML_SYCL_FORCE_MMQ)
-#define  MMQ_X_Q8_0_AMPERE 4
+// wider tiles run faster on B580, keep the plain types in sync
+#define  MMQ_X_Q8_0_AMPERE 16
 #define  MMQ_Y_Q8_0_AMPERE 32
 #define NWARPS_Q8_0_AMPERE 4
 #else
@@ -1537,7 +1538,6 @@ template <bool need_check> static void
     int   * tile_x_qh = nullptr;
     int   * tile_x_sc = nullptr;
 
-//sycl_todo: change according to hardware
     const int mmq_x  =  MMQ_X_Q8_0_AMPERE;
     const int mmq_y  =  MMQ_Y_Q8_0_AMPERE;
     const int nwarps = NWARPS_Q8_0_AMPERE;
