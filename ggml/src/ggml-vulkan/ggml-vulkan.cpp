@@ -7461,8 +7461,9 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     }
 
     // The partial tiles of a quantized A rely on the bound range to read zeros past the last row,
-    // so the range stays exact: the strided extent of a tensor read in place, the staged size otherwise.
-    const uint64_t x_range = qx_needs_dequant ? x_sz : ggml_nbytes(src0);
+    // so the range stays tight: the strided extent of a tensor read in place, rounded up to whole
+    // dwords for the shaders that load A as uint32, or the staged size otherwise.
+    const uint64_t x_range = qx_needs_dequant ? x_sz : std::min<uint64_t>(ggml_vk_align_size(ggml_nbytes(src0), 4), d_X->size - x_buf_offset);
     const uint64_t y_range = (qy_needs_dequant || quantize_y) ? y_sz : ggml_nbytes(src1);
 
     uint32_t stride_batch_x = qx_needs_dequant ? ne00*ne01 : ggml_vk_batch_stride(src0);
@@ -8624,7 +8625,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     }
     ggml_vk_sync_buffers(ctx, subctx);
 
-    const uint64_t x_range = qx_needs_dequant ? x_sz : ggml_nbytes(src0);
+    const uint64_t x_range = qx_needs_dequant ? x_sz : std::min<uint64_t>(ggml_vk_align_size(ggml_nbytes(src0), 4), d_X->size - x_buf_offset);
     const uint64_t y_range = (qy_needs_dequant || quantize_y) ? y_sz : ggml_nbytes(src1);
 
     uint32_t stride_batch_x = qx_needs_dequant ? ne00*ne01 : ggml_vk_batch_stride(src0);
