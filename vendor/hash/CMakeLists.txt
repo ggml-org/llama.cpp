@@ -10,7 +10,7 @@ set(VENDOR_SRCS
     sha256/sha256.c
 )
 
-add_library(${TARGET} STATIC
+add_library(${TARGET} OBJECT
     hash.cpp
     hash.h
     ${VENDOR_SRCS}
