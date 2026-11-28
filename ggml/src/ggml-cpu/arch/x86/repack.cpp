@@ -2113,6 +2113,16 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                 // dmin values - Load the sixteen dmin values from two block_q4_kx8 structures
                 const __m512 col_dmin_f32 = GGML_F32Cx8x2_LOAD(b_ptr_0[b].dmin, b_ptr_1[b].dmin);
 
+                // Batch-invariant accumulation: integer dots are summed
+                // across sub-block pairs (exact); FP scales apply once per
+                // superblock below, matching the single-row (gemv) order.
+                __m512i isum_rows[16];
+                __m512i isum_min_rows[16];
+                for (int i = 0; i < 16; i++) {
+                    isum_rows[i] = _mm512_setzero_si512();
+                    isum_min_rows[i] = _mm512_setzero_si512();
+                }
+
                 // Loop to iterate over the eight sub blocks of a super block - two sub blocks are processed per iteration
                 for (int sb = 0; sb < QK_K / 64; sb++) {
 
@@ -2417,27 +2427,39 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                         __m512i iacc_row_2 = _mm512_add_epi32(iacc_row_2_0, iacc_row_2_1);
                         __m512i iacc_row_3 = _mm512_add_epi32(iacc_row_3_0, iacc_row_3_1);
 
-                        // Load the scale(d) values for all the 4 Q8_k blocks and repeat it across lanes
-                        const __m128 row_scale_f32_sse = _mm_load_ps(a_ptrs[rp][b].d);
-                        const __m256 row_scale_f32_ymm = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);
-                        const __m512 row_scale_f32 = _mm512_insertf32x8(_mm512_castps256_ps512(row_scale_f32_ymm), row_scale_f32_ymm, 1);
-
-                        // Multiply with appropriate scales and accumulate (for both d and dmin) below
-                        acc_rows[rp * 4] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_0), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[rp * 4]);
-                        acc_rows[rp * 4  + 1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_1), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_rows[rp * 4 + 1]);
-                        acc_rows[rp * 4 + 2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_2), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[rp * 4 + 2]);
-                        acc_rows[rp * 4 + 3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_3), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[rp * 4 + 3]);
+                        // Batch-invariant accumulation: exact integer dots across
+                        // sub-block pairs; FP scaling happens once per superblock.
+                        isum_rows[rp * 4 + 0] = _mm512_add_epi32(isum_rows[rp * 4 + 0], iacc_row_0);
+                        isum_rows[rp * 4 + 1] = _mm512_add_epi32(isum_rows[rp * 4 + 1], iacc_row_1);
+                        isum_rows[rp * 4 + 2] = _mm512_add_epi32(isum_rows[rp * 4 + 2], iacc_row_2);
+                        isum_rows[rp * 4 + 3] = _mm512_add_epi32(isum_rows[rp * 4 + 3], iacc_row_3);
 
                         __m512i iacc_row_min_0 = _mm512_madd_epi16(_mm512_shuffle_epi32(lhs_bsums_hsum_0123_01, (_MM_PERM_ENUM)0), mins_01);
                         __m512i iacc_row_min_1 = _mm512_madd_epi16(_mm512_shuffle_epi32(lhs_bsums_hsum_0123_01, (_MM_PERM_ENUM)85), mins_01);
                         __m512i iacc_row_min_2 = _mm512_madd_epi16(_mm512_shuffle_epi32(lhs_bsums_hsum_0123_01, (_MM_PERM_ENUM)170), mins_01);
                         __m512i iacc_row_min_3 = _mm512_madd_epi16(_mm512_shuffle_epi32(lhs_bsums_hsum_0123_01, (_MM_PERM_ENUM)255), mins_01);
 
-                        acc_min_rows[rp * 4] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_0), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_min_rows[rp * 4]);
-                        acc_min_rows[rp * 4 + 1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_1), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_min_rows[rp * 4 + 1]);
-                        acc_min_rows[rp * 4 + 2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_2), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_min_rows[rp * 4 + 2]);
-                        acc_min_rows[rp * 4 + 3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_3), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_min_rows[rp * 4 + 3]);
+                        isum_min_rows[rp * 4 + 0] = _mm512_add_epi32(isum_min_rows[rp * 4 + 0], iacc_row_min_0);
+                        isum_min_rows[rp * 4 + 1] = _mm512_add_epi32(isum_min_rows[rp * 4 + 1], iacc_row_min_1);
+                        isum_min_rows[rp * 4 + 2] = _mm512_add_epi32(isum_min_rows[rp * 4 + 2], iacc_row_min_2);
+                        isum_min_rows[rp * 4 + 3] = _mm512_add_epi32(isum_min_rows[rp * 4 + 3], iacc_row_min_3);
                     }
+                }
+
+                // Apply FP scales once per superblock: a single rounding,
+                // matching the single-row (gemv) summation order.
+                for (int rp = 0; rp < 4; rp++) {
+                    const __m128 row_scale_f32_sse = _mm_load_ps(a_ptrs[rp][b].d);
+                    const __m256 row_scale_f32_ymm = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);
+                    const __m512 row_scale_f32 = _mm512_insertf32x8(_mm512_castps256_ps512(row_scale_f32_ymm), row_scale_f32_ymm, 1);
+                    acc_rows[rp * 4] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_rows[rp * 4 + 0]), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[rp * 4]);
+                    acc_rows[rp * 4  + 1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_rows[rp * 4 + 1]), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_rows[rp * 4 + 1]);
+                    acc_rows[rp * 4 + 2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_rows[rp * 4 + 2]), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[rp * 4 + 2]);
+                    acc_rows[rp * 4 + 3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_rows[rp * 4 + 3]), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[rp * 4 + 3]);
+                    acc_min_rows[rp * 4] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_min_rows[rp * 4 + 0]), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_min_rows[rp * 4]);
+                    acc_min_rows[rp * 4 + 1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_min_rows[rp * 4 + 1]), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_min_rows[rp * 4 + 1]);
+                    acc_min_rows[rp * 4 + 2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_min_rows[rp * 4 + 2]), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_min_rows[rp * 4 + 2]);
+                    acc_min_rows[rp * 4 + 3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_min_rows[rp * 4 + 3]), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_min_rows[rp * 4 + 3]);
                 }
             }
             // Store the accumulated values
@@ -2475,6 +2497,16 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                 // dmin values - Load the sixteen dmin values from two block_q4_kx8 structures
                 const __m512 col_dmin_f32 = GGML_F32Cx8x2_LOAD(b_ptr_0[b].dmin, b_ptr_1[b].dmin);
+
+                // Batch-invariant accumulation: integer dots are summed
+                // across sub-block pairs (exact); FP scales apply once per
+                // superblock below, matching the single-row (gemv) order.
+                __m512i isum_rows[4];
+                __m512i isum_min_rows[4];
+                for (int i = 0; i < 4; i++) {
+                    isum_rows[i] = _mm512_setzero_si512();
+                    isum_min_rows[i] = _mm512_setzero_si512();
+                }
 
                 // Loop to iterate over the eight sub blocks of a super block - two sub blocks are processed per iteration
                 for (int sb = 0; sb < QK_K / 64; sb++) {
@@ -2780,27 +2812,37 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     __m512i iacc_row_2 = _mm512_add_epi32(iacc_row_2_0, iacc_row_2_1);
                     __m512i iacc_row_3 = _mm512_add_epi32(iacc_row_3_0, iacc_row_3_1);
 
-                    // Load the scale(d) values for all the 4 Q8_k blocks and repeat it across lanes
-                    const __m128 row_scale_f32_sse = _mm_load_ps(a_ptr[b].d);
-                    const __m256 row_scale_f32_ymm = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);
-                    const __m512 row_scale_f32 = _mm512_insertf32x8(_mm512_castps256_ps512(row_scale_f32_ymm), row_scale_f32_ymm, 1);
-
-                    // Multiply with appropriate scales and accumulate (for both d and dmin) below
-                    acc_rows[0] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_0), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[0]);
-                    acc_rows[1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_1), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_rows[1]);
-                    acc_rows[2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_2), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[2]);
-                    acc_rows[3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_3), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[3]);
+                    // Batch-invariant accumulation: exact integer dots across
+                    // sub-block pairs; FP scaling happens once per superblock.
+                    isum_rows[0] = _mm512_add_epi32(isum_rows[0], iacc_row_0);
+                    isum_rows[1] = _mm512_add_epi32(isum_rows[1], iacc_row_1);
+                    isum_rows[2] = _mm512_add_epi32(isum_rows[2], iacc_row_2);
+                    isum_rows[3] = _mm512_add_epi32(isum_rows[3], iacc_row_3);
 
                     __m512i iacc_row_min_0 = _mm512_madd_epi16(_mm512_shuffle_epi32(lhs_bsums_hsum_0123_01, (_MM_PERM_ENUM)0), mins_01);
                     __m512i iacc_row_min_1 = _mm512_madd_epi16(_mm512_shuffle_epi32(lhs_bsums_hsum_0123_01, (_MM_PERM_ENUM)85), mins_01);
                     __m512i iacc_row_min_2 = _mm512_madd_epi16(_mm512_shuffle_epi32(lhs_bsums_hsum_0123_01, (_MM_PERM_ENUM)170), mins_01);
                     __m512i iacc_row_min_3 = _mm512_madd_epi16(_mm512_shuffle_epi32(lhs_bsums_hsum_0123_01, (_MM_PERM_ENUM)255), mins_01);
 
-                    acc_min_rows[0] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_0), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_min_rows[0]);
-                    acc_min_rows[1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_1), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_min_rows[1]);
-                    acc_min_rows[2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_2), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_min_rows[2]);
-                    acc_min_rows[3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(iacc_row_min_3), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_min_rows[3]);
+                    isum_min_rows[0] = _mm512_add_epi32(isum_min_rows[0], iacc_row_min_0);
+                    isum_min_rows[1] = _mm512_add_epi32(isum_min_rows[1], iacc_row_min_1);
+                    isum_min_rows[2] = _mm512_add_epi32(isum_min_rows[2], iacc_row_min_2);
+                    isum_min_rows[3] = _mm512_add_epi32(isum_min_rows[3], iacc_row_min_3);
                 }
+
+                // Apply FP scales once per superblock: a single rounding,
+                // matching the single-row (gemv) summation order.
+                const __m128 row_scale_f32_sse = _mm_load_ps(a_ptr[b].d);
+                const __m256 row_scale_f32_ymm = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);
+                const __m512 row_scale_f32 = _mm512_insertf32x8(_mm512_castps256_ps512(row_scale_f32_ymm), row_scale_f32_ymm, 1);
+                acc_rows[0] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_rows[0]), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[0]);
+                acc_rows[1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_rows[1]), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_rows[1]);
+                acc_rows[2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_rows[2]), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[2]);
+                acc_rows[3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_rows[3]), _mm512_mul_ps(col_scale_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[3]);
+                acc_min_rows[0] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_min_rows[0]), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_min_rows[0]);
+                acc_min_rows[1] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_min_rows[1]), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_min_rows[1]);
+                acc_min_rows[2] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_min_rows[2]), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_min_rows[2]);
+                acc_min_rows[3] = _mm512_fmadd_ps(_mm512_cvtepi32_ps(isum_min_rows[3]), _mm512_mul_ps(col_dmin_f32, _mm512_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_min_rows[3]);
             }
             // Store accumulated values
             for (int i = 0; i < 4; i++) {
@@ -2848,6 +2890,16 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                 // dmin values - Load the eight dmin values of block_q4_kx8
                 const __m256 col_dmin_f32 = GGML_F32Cx8_LOAD(b_ptr[b].dmin);
+
+                // Batch-invariant accumulation: integer dots are summed
+                // across sub-block pairs (exact); FP scales apply once per
+                // superblock below, matching the single-row (gemv) order.
+                __m256i isum_rows[16];
+                __m256i isum_min_rows[16];
+                for (int i = 0; i < 16; i++) {
+                    isum_rows[i] = _mm256_setzero_si256();
+                    isum_min_rows[i] = _mm256_setzero_si256();
+                }
 
                 // Loop to iterate over the eight sub blocks of a super block - two sub blocks are processed per iteration
                 for (int sb = 0; sb < QK_K / 64; sb++) {
@@ -3126,27 +3178,39 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                         __m256i iacc_row_2 = _mm256_add_epi32(iacc_row_2_0, iacc_row_2_1);
                         __m256i iacc_row_3 = _mm256_add_epi32(iacc_row_3_0, iacc_row_3_1);
 
-                        // Load the scale(d) values for all the 4 Q8_k blocks and repeat it across lanes
-                        const __m128 row_scale_f32_sse = _mm_load_ps(a_ptrs[rp][b].d);
-                        const __m256 row_scale_f32 = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);//GGML_F32Cx8_REPEAT_LOAD(a_ptrs[rp][b].d, loadMask);
-
-                        // Multiply with appropriate scales and accumulate (for both d and dmin) below
-                        acc_rows[rp * 4] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_0), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[rp * 4]);
-                        acc_rows[rp * 4 + 1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_1), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_rows[rp * 4 + 1]);
-                        acc_rows[rp * 4 + 2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_2), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[rp * 4 + 2]);
-                        acc_rows[rp * 4 + 3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_3), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[rp * 4 + 3]);
+                        // Batch-invariant accumulation: exact integer dots across
+                        // sub-block pairs; FP scaling happens once per superblock.
+                        isum_rows[rp * 4 + 0] = _mm256_add_epi32(isum_rows[rp * 4 + 0], iacc_row_0);
+                        isum_rows[rp * 4 + 1] = _mm256_add_epi32(isum_rows[rp * 4 + 1], iacc_row_1);
+                        isum_rows[rp * 4 + 2] = _mm256_add_epi32(isum_rows[rp * 4 + 2], iacc_row_2);
+                        isum_rows[rp * 4 + 3] = _mm256_add_epi32(isum_rows[rp * 4 + 3], iacc_row_3);
 
                         __m256i iacc_row_min_0 = _mm256_madd_epi16(_mm256_shuffle_epi32(lhs_bsums_hsum_0123_01, 0), mins_01);
                         __m256i iacc_row_min_1 = _mm256_madd_epi16(_mm256_shuffle_epi32(lhs_bsums_hsum_0123_01, 85), mins_01);
                         __m256i iacc_row_min_2 = _mm256_madd_epi16(_mm256_shuffle_epi32(lhs_bsums_hsum_0123_01, 170), mins_01);
                         __m256i iacc_row_min_3 = _mm256_madd_epi16(_mm256_shuffle_epi32(lhs_bsums_hsum_0123_01, 255), mins_01);
 
-                        acc_min_rows[rp * 4] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_min_0), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_min_rows[rp * 4]);
-                        acc_min_rows[rp * 4 + 1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_min_1), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_min_rows[rp * 4 + 1]);
-                        acc_min_rows[rp * 4 + 2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_min_2), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_min_rows[rp * 4 + 2]);
-                        acc_min_rows[rp * 4 + 3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_min_3), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_min_rows[rp * 4 + 3]);
+                        isum_min_rows[rp * 4 + 0] = _mm256_add_epi32(isum_min_rows[rp * 4 + 0], iacc_row_min_0);
+                        isum_min_rows[rp * 4 + 1] = _mm256_add_epi32(isum_min_rows[rp * 4 + 1], iacc_row_min_1);
+                        isum_min_rows[rp * 4 + 2] = _mm256_add_epi32(isum_min_rows[rp * 4 + 2], iacc_row_min_2);
+                        isum_min_rows[rp * 4 + 3] = _mm256_add_epi32(isum_min_rows[rp * 4 + 3], iacc_row_min_3);
 
                     }
+                }
+
+                // Apply FP scales once per superblock: a single rounding,
+                // matching the single-row (gemv) summation order.
+                for (int rp = 0; rp < 4; rp++) {
+                    const __m128 row_scale_f32_sse = _mm_load_ps(a_ptrs[rp][b].d);
+                    const __m256 row_scale_f32 = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse);//GGML_F32Cx8_REPEAT_LOAD(a_ptrs[rp][b].d, loadMask);
+                    acc_rows[rp * 4] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_rows[rp * 4 + 0]), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[rp * 4]);
+                    acc_rows[rp * 4 + 1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_rows[rp * 4 + 1]), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_rows[rp * 4 + 1]);
+                    acc_rows[rp * 4 + 2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_rows[rp * 4 + 2]), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[rp * 4 + 2]);
+                    acc_rows[rp * 4 + 3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_rows[rp * 4 + 3]), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[rp * 4 + 3]);
+                    acc_min_rows[rp * 4] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_min_rows[rp * 4 + 0]), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_min_rows[rp * 4]);
+                    acc_min_rows[rp * 4 + 1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_min_rows[rp * 4 + 1]), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_min_rows[rp * 4 + 1]);
+                    acc_min_rows[rp * 4 + 2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_min_rows[rp * 4 + 2]), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_min_rows[rp * 4 + 2]);
+                    acc_min_rows[rp * 4 + 3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_min_rows[rp * 4 + 3]), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_min_rows[rp * 4 + 3]);
                 }
             }
             // Store the accumulated values
@@ -3181,6 +3245,16 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
                 // dmin values - Load the eight dmin values of block_q4_Kx8
                 const __m256 col_dmin_f32 = GGML_F32Cx8_LOAD(b_ptr[b].dmin);
+
+                // Batch-invariant accumulation: integer dots are summed
+                // across sub-block pairs (exact); FP scales apply once per
+                // superblock below, matching the single-row (gemv) order.
+                __m256i isum_rows[4];
+                __m256i isum_min_rows[4];
+                for (int i = 0; i < 4; i++) {
+                    isum_rows[i] = _mm256_setzero_si256();
+                    isum_min_rows[i] = _mm256_setzero_si256();
+                }
 
                 // Loop to iterate over the eight sub blocks of a super block - two sub blocks are processed per iteration
                 for (int sb = 0; sb < QK_K / 64; sb++) {
@@ -3456,26 +3530,36 @@ void ggml_gemm_q4_K_8x8_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     __m256i iacc_row_2 = _mm256_add_epi32(iacc_row_2_0, iacc_row_2_1);
                     __m256i iacc_row_3 = _mm256_add_epi32(iacc_row_3_0, iacc_row_3_1);
 
-                    // Load the scale(d) values for all the 4 Q8_k blocks and repeat it across lanes
-                    const __m128 row_scale_f32_sse = _mm_load_ps(a_ptr[b].d);
-                    const __m256 row_scale_f32 = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse); //GGML_F32Cx8_REPEAT_LOAD(a_ptrs[rp][b].d, loadMask);
-
-                    // Multiply with appropriate scales and accumulate (for both d and dmin) below
-                    acc_rows[0] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_0), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[0]);
-                    acc_rows[1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_1), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_rows[1]);
-                    acc_rows[2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_2), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[2]);
-                    acc_rows[3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_3), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[3]);
+                    // Batch-invariant accumulation: exact integer dots across
+                    // sub-block pairs; FP scaling happens once per superblock.
+                    isum_rows[0] = _mm256_add_epi32(isum_rows[0], iacc_row_0);
+                    isum_rows[1] = _mm256_add_epi32(isum_rows[1], iacc_row_1);
+                    isum_rows[2] = _mm256_add_epi32(isum_rows[2], iacc_row_2);
+                    isum_rows[3] = _mm256_add_epi32(isum_rows[3], iacc_row_3);
 
                     __m256i iacc_row_min_0 = _mm256_madd_epi16(_mm256_shuffle_epi32(lhs_bsums_hsum_0123_01, 0), mins_01);
                     __m256i iacc_row_min_1 = _mm256_madd_epi16(_mm256_shuffle_epi32(lhs_bsums_hsum_0123_01, 85), mins_01);
                     __m256i iacc_row_min_2 = _mm256_madd_epi16(_mm256_shuffle_epi32(lhs_bsums_hsum_0123_01, 170), mins_01);
                     __m256i iacc_row_min_3 = _mm256_madd_epi16(_mm256_shuffle_epi32(lhs_bsums_hsum_0123_01, 255), mins_01);
 
-                    acc_min_rows[0] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_min_0), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_min_rows[0]);
-                    acc_min_rows[1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_min_1), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_min_rows[1]);
-                    acc_min_rows[2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_min_2), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_min_rows[2]);
-                    acc_min_rows[3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(iacc_row_min_3), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_min_rows[3]);
+                    isum_min_rows[0] = _mm256_add_epi32(isum_min_rows[0], iacc_row_min_0);
+                    isum_min_rows[1] = _mm256_add_epi32(isum_min_rows[1], iacc_row_min_1);
+                    isum_min_rows[2] = _mm256_add_epi32(isum_min_rows[2], iacc_row_min_2);
+                    isum_min_rows[3] = _mm256_add_epi32(isum_min_rows[3], iacc_row_min_3);
                 }
+
+                // Apply FP scales once per superblock: a single rounding,
+                // matching the single-row (gemv) summation order.
+                const __m128 row_scale_f32_sse = _mm_load_ps(a_ptr[b].d);
+                const __m256 row_scale_f32 = _mm256_set_m128(row_scale_f32_sse, row_scale_f32_sse); //GGML_F32Cx8_REPEAT_LOAD(a_ptrs[rp][b].d, loadMask);
+                acc_rows[0] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_rows[0]), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_rows[0]);
+                acc_rows[1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_rows[1]), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_rows[1]);
+                acc_rows[2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_rows[2]), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_rows[2]);
+                acc_rows[3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_rows[3]), _mm256_mul_ps(col_scale_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_rows[3]);
+                acc_min_rows[0] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_min_rows[0]), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 0)), acc_min_rows[0]);
+                acc_min_rows[1] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_min_rows[1]), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 85)), acc_min_rows[1]);
+                acc_min_rows[2] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_min_rows[2]), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 170)), acc_min_rows[2]);
+                acc_min_rows[3] = _mm256_fmadd_ps(_mm256_cvtepi32_ps(isum_min_rows[3]), _mm256_mul_ps(col_dmin_f32, _mm256_shuffle_ps(row_scale_f32, row_scale_f32, 255)), acc_min_rows[3]);
             }
 
             // Store the accumulated values
