@@ -396,6 +396,87 @@ MAKE_TEST(test_temporal_merge_grouping) {
 }
 
 //
+// mtmd decoder positions
+//
+
+MAKE_TEST(test_decoder_pos_minicpmv4_7) {
+    // transformers 5.19 MiniCPMV4_7Model.get_rope_index, five text tokens then <image>, so the chunk starts at pos_0 = 6.
+    // The chat template inserts "\n" after the image. llama.cpp does not, and these rows leave that token out.
+    struct test_case {
+        int ov_nx, ov_ny, n_col, n_row, nx, ny;
+        llama_pos pos_text; // T, H and W of the first text token after the image are all this value
+        std::vector<std::array<uint32_t, 3>> pos; // {T, H, W} for every token of the chunk, stored later as z, y, x
+    };
+    const llama_pos pos_0 = 6;
+    const std::vector<test_case> cases = {
+        // overview 5 wide by 2 high, four 7x2 crops, canvas 14 by 4. Text starts at 20.
+        { 5, 2, 2, 2, 7, 2, 20, {
+            {5, 5, 5}, {5, 5, 8}, {5, 5, 11}, {5, 5, 15}, {5, 5, 18}, // overview row 0
+            {5, 8, 5}, {5, 8, 8}, {5, 8, 11}, {5, 8, 15}, {5, 8, 18}, // overview row 1
+            {5, 9, 19}, {5, 5, 5},                                     // </image>, <slice>
+            {5, 5, 5}, {5, 5, 6}, {5, 5, 7}, {5, 5, 8}, {5, 5, 9}, {5, 5, 10}, {5, 5, 11}, // crop (0,0) row 0
+            {5, 6, 5}, {5, 6, 6}, {5, 6, 7}, {5, 6, 8}, {5, 6, 9}, {5, 6, 10}, {5, 6, 11}, // crop (0,0) row 1
+            {5, 6, 11}, {5, 5, 12},                                                        // </slice>, <slice>
+            {5, 5, 12}, {5, 5, 13}, {5, 5, 14}, {5, 5, 15}, {5, 5, 16}, {5, 5, 17}, {5, 5, 18}, // crop (0,1) row 0
+            {5, 6, 12}, {5, 6, 13}, {5, 6, 14}, {5, 6, 15}, {5, 6, 16}, {5, 6, 17}, {5, 6, 18}, // crop (0,1) row 1
+            {5, 6, 18}, {5, 6, 19}, {5, 7, 5},                                              // </slice>, newline, <slice>
+            {5, 7, 5}, {5, 7, 6}, {5, 7, 7}, {5, 7, 8}, {5, 7, 9}, {5, 7, 10}, {5, 7, 11}, // crop (1,0) row 0
+            {5, 8, 5}, {5, 8, 6}, {5, 8, 7}, {5, 8, 8}, {5, 8, 9}, {5, 8, 10}, {5, 8, 11}, // crop (1,0) row 1
+            {5, 8, 11}, {5, 7, 12},                                                        // </slice>, <slice>
+            {5, 7, 12}, {5, 7, 13}, {5, 7, 14}, {5, 7, 15}, {5, 7, 16}, {5, 7, 17}, {5, 7, 18}, // crop (1,1) row 0
+            {5, 8, 12}, {5, 8, 13}, {5, 8, 14}, {5, 8, 15}, {5, 8, 16}, {5, 8, 17}, {5, 8, 18}, // crop (1,1) row 1
+            {5, 8, 18},                                                                        // </slice>
+        } },
+        // overview 4 by 3, no crops. Text starts at 10.
+        { 4, 3, 0, 0, 0, 0, 10, {
+            {5, 5, 5}, {5, 5, 6}, {5, 5, 7}, {5, 5, 8}, // overview row 0
+            {5, 6, 5}, {5, 6, 6}, {5, 6, 7}, {5, 6, 8}, // overview row 1
+            {5, 7, 5}, {5, 7, 6}, {5, 7, 7}, {5, 7, 8}, // overview row 2
+            {5, 8, 9},                                 // </image>
+        } },
+    };
+
+    for (const auto & tc : cases) {
+        const std::string name = std::to_string(tc.ov_nx) + "x" + std::to_string(tc.ov_ny) + " overview, " +
+            std::to_string(tc.n_col) + "x" + std::to_string(tc.n_row) + " crops of " +
+            std::to_string(tc.nx) + "x" + std::to_string(tc.ny);
+        mtmd::input_chunk_ptr chunk(mtmd_test_create_canvas_chunk(tc.ov_nx, tc.ov_ny, tc.n_col, tc.n_row, tc.nx, tc.ny));
+        const mtmd_image_tokens * image_tokens = mtmd_input_chunk_get_tokens_image(chunk.get());
+        const size_t n_tokens = mtmd_image_tokens_get_n_tokens(image_tokens);
+        t.assert_equal(name + " token count", tc.pos.size(), n_tokens);
+
+        // The mask orders cells by t, then (y, x) (llama_kv_cell_ext::is_2d_gt). Text must start after the last t.
+        mtmd_decoder_pos prev{};
+        for (size_t i = 0; i < n_tokens; i++) {
+            const mtmd_decoder_pos got = mtmd_image_tokens_get_decoder_pos(image_tokens, pos_0, i);
+            const auto & want = tc.pos[i];
+            t.assert_equal(name + " T " + std::to_string(i), want[0], got.z);
+            t.assert_equal(name + " H " + std::to_string(i), want[1], got.y);
+            t.assert_equal(name + " W " + std::to_string(i), want[2], got.x);
+            if (i > 0) {
+                t.assert_true(name + " order " + std::to_string(i),
+                    std::tie(prev.t, prev.y, prev.x) < std::tie(got.t, got.y, got.x));
+            }
+            prev = got;
+        }
+        const llama_pos n_pos = mtmd_image_tokens_get_n_pos(image_tokens);
+        t.assert_equal(name + " text position", tc.pos_text, pos_0 + n_pos);
+        t.assert_true(name + " text is after the chunk", n_tokens > 0 && (llama_pos) prev.t < pos_0 + n_pos);
+    }
+
+    // one 1x1 slice: the markers need more KV positions than the 1x1 canvas, so the text starts one position after the last t
+    {
+        mtmd::input_chunk_ptr chunk(mtmd_test_create_canvas_chunk(1, 1, 1, 1, 1, 1));
+        const mtmd_image_tokens * image_tokens = mtmd_input_chunk_get_tokens_image(chunk.get());
+        const llama_pos n_pos = mtmd_image_tokens_get_n_pos(image_tokens);
+        t.assert_equal("1x1 slice: text starts after the last KV position", (llama_pos) 4, n_pos);
+        const size_t n_tokens = mtmd_image_tokens_get_n_tokens(image_tokens);
+        const mtmd_decoder_pos last = mtmd_image_tokens_get_decoder_pos(image_tokens, pos_0, n_tokens - 1);
+        t.assert_true("1x1 slice: the chunk ends before the text", (llama_pos) last.t < pos_0 + n_pos);
+    }
+}
+
+//
 // mtmd_helper video
 //
 

@@ -1680,6 +1680,34 @@ std::vector<std::vector<const mtmd_bitmap *>> mtmd_group_mergeable_bitmaps(std::
     return output;
 }
 
+// MiniCPM-V 4.7: the suffix after each tile. The overview is </image>, or </image><slice> when there are crops
+// a crop is </slice><slice>, </slice>\n<slice> at the end of a row, and </slice> on the last crop
+static void mtmd_canvas_assign_suffixes(mtmd_image_preproc_out & preproc) {
+    const int n_col = preproc.grid_x;
+    const int n_row = preproc.grid_y;
+    if (preproc.entries.empty()) {
+        preproc.overview.suffix_type = MTMD_SUFFIX_MINICPMV_OV;
+        return;
+    }
+    preproc.overview.suffix_type = MTMD_SUFFIX_MINICPMV_OV_SLICE;
+    preproc.overview.anyres.grid_x = n_col;
+    preproc.overview.anyres.grid_y = n_row;
+    for (int y = 0; y < n_row; y++) {
+        for (int x = 0; x < n_col; x++) {
+            auto & suffix = preproc.entries[y * n_col + x].suffix_type;
+            const bool end_of_row = x == n_col - 1;
+            const bool end_of_grid = end_of_row && y == n_row - 1;
+            if (end_of_grid) {
+                suffix = MTMD_SUFFIX_MINICPMV_LAST;
+            } else if (end_of_row) {
+                suffix = MTMD_SUFFIX_MINICPMV_ROW_END;
+            } else {
+                suffix = MTMD_SUFFIX_MINICPMV_SLICE;
+            }
+        }
+    }
+}
+
 struct mtmd_tokenizer {
     const mtmd_context * ctx;
 
@@ -2405,38 +2433,16 @@ struct mtmd_tokenizer {
     // MiniCPM-V 4.7: the overview and all slices go in one chunk, the graph appends the separators after each tile:
     //   [ov] </image><slice> [S00] </slice><slice> [S01] </slice>\n<slice> [S10] </slice><slice> [S11] </slice>
     void add_canvas_chunk(mtmd_image_preproc_out && preproc_out, const std::string & id) {
-        const int n_col = preproc_out.grid_x;
-        const int n_row = preproc_out.grid_y;
-        auto & slices = preproc_out.entries;
         GGML_ASSERT(preproc_out.has_overview());
-        GGML_ASSERT((int) slices.size() == n_col * n_row);
-
-        auto & ov = preproc_out.overview;
-        ov.suffix_type = MTMD_SUFFIX_MINICPMV_OV;
-        if (!slices.empty()) {
-            ov.suffix_type = MTMD_SUFFIX_MINICPMV_OV_SLICE;
-            ov.anyres.grid_x = n_col;
-            ov.anyres.grid_y = n_row;
-        }
-        for (int y = 0; y < n_row; y++) {
-            for (int x = 0; x < n_col; x++) {
-                auto & suffix = slices[y * n_col + x].suffix_type;
-                if (y == n_row - 1 && x == n_col - 1) {
-                    suffix = MTMD_SUFFIX_MINICPMV_LAST;
-                } else if (x == n_col - 1) {
-                    suffix = MTMD_SUFFIX_MINICPMV_ROW_END;
-                } else {
-                    suffix = MTMD_SUFFIX_MINICPMV_SLICE;
-                }
-            }
-        }
+        GGML_ASSERT((int) preproc_out.entries.size() == preproc_out.grid_x * preproc_out.grid_y);
+        mtmd_canvas_assign_suffixes(preproc_out);
 
         mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
         image_tokens->pos = MTMD_POS_TYPE_CANVAS;
         image_tokens->id  = id;
         auto & entries = image_tokens->batch_f32.entries;
-        entries.push_back(std::move(ov));
-        for (auto & slice : slices) {
+        entries.push_back(std::move(preproc_out.overview));
+        for (auto & slice : preproc_out.entries) {
             entries.push_back(std::move(slice));
         }
         // token grid of the last entry, the grids of the other entries are scaled from it
@@ -5028,63 +5034,121 @@ size_t mtmd_image_tokens_get_ny(const mtmd_image_tokens * image_tokens) {
     return image_tokens->ny;
 }
 
-// map a tile coordinate onto the canvas like the reference: round(linspace(0, canvas - 1, grid)), round() breaks ties to even
-static uint32_t mtmd_canvas_scale(uint32_t coord, uint32_t grid, uint32_t canvas) {
-    if (grid <= 1 || canvas <= 1) {
+// map a tile coordinate onto the canvas like the reference: round(linspace(0, span - 1, n)), round() breaks ties to even, matching nearbyint
+static uint32_t mtmd_canvas_scale(uint32_t index, uint32_t n, uint32_t span) {
+    if (n <= 1 || span <= 1) {
         return 0;
     }
-    const double v = (double) coord * (double) (canvas - 1) / (double) (grid - 1);
-    return std::min((uint32_t) std::nearbyint(v), canvas - 1);
+    const double v = (double) index * (double) (span - 1) / (double) (n - 1);
+    return std::min((uint32_t) std::nearbyint(v), span - 1);
+}
+
+// MTMD_POS_TYPE_CANVAS: canvas size (width, height) in tokens, the grid of slices, or the overview alone
+static std::pair<uint32_t, uint32_t> mtmd_canvas_size(const mtmd_image_tokens * image_tokens) {
+    const auto & grid = image_tokens->batch_f32.entries[0].anyres;
+    if (grid.is_tiled()) {
+        return {
+            (uint32_t) grid.grid_x * image_tokens->nx,
+            (uint32_t) grid.grid_y * image_tokens->ny,
+        };
+    }
+    return { image_tokens->nx, image_tokens->ny };
+}
+
+// The overview samples the whole canvas. A crop is its own row and column, shifted by the crop's top-left.
+static std::pair<uint32_t, uint32_t> mtmd_canvas_coord(const mtmd_image_tokens * image_tokens, size_t entry, uint32_t row, uint32_t col) {
+    if (entry == 0) {
+        const auto [width, height] = mtmd_canvas_size(image_tokens);
+        const auto [gw, gh] = image_tokens->canvas_tile_grid(0);
+        return {
+            mtmd_canvas_scale(row, gh, height),
+            mtmd_canvas_scale(col, gw, width),
+        };
+    }
+    const auto & grid = image_tokens->batch_f32.entries[0].anyres;
+    const uint32_t n_col = (uint32_t) grid.grid_x;
+    const uint32_t crop = (uint32_t) entry - 1;
+    return {
+        (crop / n_col) * image_tokens->ny + row,
+        (crop % n_col) * image_tokens->nx + col,
+    };
 }
 
 // MTMD_POS_TYPE_CANVAS: every tile shares the <image> token before the chunk as origin
-// the overview is stretched over the whole canvas, each slice fills its own cell; the time component is the origin, in slot z
-// a tile takes one position in slot t (the KV cache position), the separators after it take one position each
-static mtmd_decoder_pos mtmd_canvas_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t i) {
+// the overview is stretched over the whole canvas, each slice fills its own cell; slot z is that origin
+// slot t is the KV cache position: a token keeps the previous t when it comes later on the canvas, otherwise it takes the next t
+static mtmd_decoder_pos mtmd_canvas_decoder_pos(const mtmd_image_tokens * image_tokens, llama_pos pos_0, size_t index) {
     const auto & entries = image_tokens->batch_f32.entries;
-    const auto & grid    = entries[0].anyres;
+    const uint32_t origin = (uint32_t) (pos_0 - 1);
     const uint32_t nx = image_tokens->nx;
     const uint32_t ny = image_tokens->ny;
-    const uint32_t canvas_w = grid.is_tiled() ? grid.grid_x * nx : nx;
-    const uint32_t canvas_h = grid.is_tiled() ? grid.grid_y * ny : ny;
-    const uint32_t base = pos_0 - 1;
+    const auto [canvas_w, canvas_h] = mtmd_canvas_size(image_tokens);
+    const uint32_t n_col = (uint32_t) entries[0].anyres.grid_x;
+    uint32_t t = (uint32_t) pos_0;
+    bool seen = false;
+    uint32_t prev_h = 0;
+    uint32_t prev_w = 0;
+    auto advance = [&](uint32_t h, uint32_t w) {
+        if (seen && (h < prev_h || (h == prev_h && w <= prev_w))) {
+            t++;
+        }
+        seen = true;
+        prev_h = h;
+        prev_w = w;
+    };
 
-    mtmd_decoder_pos pos;
-    uint32_t t = pos_0;
-    for (size_t k = 0; k < entries.size(); ++k) {
-        const auto [gw, gh] = image_tokens->canvas_tile_grid(k);
-        if (i < gw * gh) {
-            const uint32_t row = i / gw;
-            const uint32_t col = i % gw;
-            uint32_t h;
-            uint32_t w;
-            if (k == 0) {
-                h = mtmd_canvas_scale(row, gh, canvas_h);
-                w = mtmd_canvas_scale(col, gw, canvas_w);
+    auto at = [&](uint32_t h, uint32_t w) {
+        mtmd_decoder_pos pos;
+        pos.t = t;
+        pos.x = origin + w;
+        pos.y = origin + h;
+        pos.z = origin;
+        return pos;
+    };
+
+    for (size_t entry = 0; entry < entries.size(); ++entry) {
+        const auto [gw, gh] = image_tokens->canvas_tile_grid(entry);
+        const size_t n_content = (size_t) gw * (size_t) gh;
+        const auto [h0, w0] = mtmd_canvas_coord(image_tokens, entry, 0, 0);
+        const auto [h1, w1] = mtmd_canvas_coord(image_tokens, entry, gh - 1, gw - 1);
+        // Cells inside one tile increase in (h, w), so they share the t of the first cell.
+        // The following marker is compared against the last cell.
+        advance(h0, w0);
+        if (index < n_content) {
+            const auto [h, w] = mtmd_canvas_coord(image_tokens, entry, (uint32_t) (index / gw), (uint32_t) (index % gw));
+            return at(h, w);
+        }
+        prev_h = h1;
+        prev_w = w1;
+        index -= n_content;
+
+        const auto & markers = mtmd_suffix_rows(entries[entry].suffix_type);
+        for (size_t j = 0; j < markers.size(); ++j) {
+            std::pair<uint32_t, uint32_t> cell;
+            if (markers[j] == 0) {
+                // </image>, one past the far corner
+                cell = { canvas_h, canvas_w };
+            } else if (markers[j] == 1) {
+                // <slice>, top-left of the next crop
+                GGML_ASSERT(n_col > 0);
+                cell = { ((uint32_t) entry / n_col) * ny, ((uint32_t) entry % n_col) * nx };
+            } else if (markers[j] == 2) {
+                // </slice>, last cell of this crop
+                cell = mtmd_canvas_coord(image_tokens, entry, gh - 1, gw - 1);
+            } else if (markers[j] == 3) {
+                // "\n", just past the right edge of this row of crops
+                GGML_ASSERT(n_col > 0 && entry > 0);
+                cell = { (((uint32_t) entry - 1) / n_col + 1) * ny - 1, n_col * nx };
             } else {
-                const uint32_t s = k - 1;
-                h = (s / grid.grid_x) * ny + row;
-                w = (s % grid.grid_x) * nx + col;
+                GGML_ABORT("invalid canvas marker");
             }
-            pos.t = t;
-            pos.x = base + w;
-            pos.y = base + h;
-            pos.z = base;
-            return pos;
+            const auto [h, w] = cell;
+            advance(h, w);
+            if (index == j) {
+                return at(h, w);
+            }
         }
-        i -= gw * gh;
-
-        const size_t n_sep = mtmd_suffix_rows(entries[k].suffix_type).size();
-        if (i < n_sep) {
-            const uint32_t p = t + 1 + i;
-            pos.t = p;
-            pos.x = p;
-            pos.y = p;
-            pos.z = p;
-            return pos;
-        }
-        i -= n_sep;
-        t += 1 + n_sep;
+        index -= markers.size();
     }
     GGML_ABORT("token index out of range");
 }
@@ -5173,12 +5237,16 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
             return image_tokens->n_tokens();
         case MTMD_POS_TYPE_CANVAS:
             {
-                // one position per tile, plus one per separator
-                llama_pos n_pos = 0;
-                for (const auto & entry : image_tokens->batch_f32.entries) {
-                    n_pos += 1 + (llama_pos) mtmd_suffix_rows(entry.suffix_type).size();
+                // Text starts at origin + max(height, width) + 1. pos_0 == 1 puts the origin at 0, so the span is that max.
+                // Markers on a 1x1 crop walk t past the canvas. Text then starts one position after that t.
+                const auto [canvas_w, canvas_h] = mtmd_canvas_size(image_tokens);
+                const llama_pos n_canvas = std::max(canvas_w, canvas_h);
+                const llama_pos n_kv = mtmd_canvas_decoder_pos(image_tokens, 1, image_tokens->n_tokens() - 1).t;
+                if (n_kv > n_canvas) {
+                    LOG_WRN("%s: the %ux%u canvas has fewer positions than the %d KV cache positions of the image, the text after it starts %d positions late\n", __func__, canvas_w, canvas_h, n_kv, n_kv - n_canvas);
+                    return n_kv;
                 }
-                return n_pos;
+                return n_canvas;
             }
         default:
             GGML_ABORT("invalid position type");
@@ -5186,6 +5254,36 @@ llama_pos mtmd_image_tokens_get_n_pos(const mtmd_image_tokens * image_tokens) {
 }
 
 // test function
+
+mtmd_input_chunk * mtmd_test_create_canvas_chunk(int ov_nx, int ov_ny, int n_col, int n_row, int nx, int ny) {
+    mtmd_image_preproc_out preproc_out;
+    preproc_out.overview.set_size({ ov_nx, ov_ny }, true, false);
+    preproc_out.grid_x = n_col;
+    preproc_out.grid_y = n_row;
+    for (int i = 0; i < n_col * n_row; i++) {
+        mtmd_image_f32 slice;
+        slice.set_size({ nx, ny }, true, false);
+        preproc_out.entries.push_back(std::move(slice));
+    }
+    mtmd_canvas_assign_suffixes(preproc_out);
+    const bool has_slices = n_col * n_row > 0;
+
+    // create a canvas chunk
+    mtmd_image_tokens_ptr image_tokens(new mtmd_image_tokens);
+    image_tokens->pos = MTMD_POS_TYPE_CANVAS;
+    image_tokens->nx = has_slices ? nx : ov_nx;
+    image_tokens->ny = has_slices ? ny : ov_ny;
+    image_tokens->batch_f32.entries.push_back(std::move(preproc_out.overview));
+    for (auto & slice : preproc_out.entries) {
+        image_tokens->batch_f32.entries.push_back(std::move(slice));
+    }
+    return new mtmd_input_chunk{
+        MTMD_INPUT_CHUNK_TYPE_IMAGE,
+        {}, // text tokens
+        std::move(image_tokens),
+        nullptr, // audio tokens
+    };
+}
 
 mtmd_input_chunks * mtmd_test_create_input_chunks() {
     mtmd_input_chunks * chunks = mtmd_input_chunks_init();
