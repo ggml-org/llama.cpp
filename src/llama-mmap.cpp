@@ -1125,10 +1125,18 @@ void llama_prefetch(llama_memory_ranges mr) {
     }
 #else
     for (const auto & range : mr) {
-        // TODO: in a follow-up, use posix_madvise(.., POSIX_MADV_WILLNEED) to match the rest of this file
-        if (madvise(const_cast<void *>(range.addr), range.size, MADV_WILLNEED) != 0) {
-            LLAMA_LOG_WARN("llama_prefetch: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
-            return;
+#if defined(__linux__)
+        // Linux reads at most one readahead window (read_ahead_kb, 128 KiB by default) per call
+        const size_t step = 128 * 1024;
+#else
+        const size_t step = range.size;
+#endif
+        for (size_t offs = 0; offs < range.size; offs += step) {
+            // TODO: in a follow-up, use posix_madvise(.., POSIX_MADV_WILLNEED) to match the rest of this file
+            if (madvise(const_cast<char *>((const char *) range.addr) + offs, std::min(step, range.size - offs), MADV_WILLNEED) != 0) {
+                LLAMA_LOG_WARN("llama_prefetch: madvise(MADV_WILLNEED) failed: %s\n", strerror(errno));
+                return;
+            }
         }
     }
 #endif
