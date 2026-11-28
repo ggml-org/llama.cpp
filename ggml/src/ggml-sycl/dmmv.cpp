@@ -1897,6 +1897,92 @@ static void dequantize_mul_mat_vec_glu_reorder_esimd(const void * vx, const void
     });
 }
 
+// A dense policy applied to one route of a MUL_MAT_ID: the work-groups of all routes form one 1-D grid, `per`
+// groups a route, and the dense policy sees the group index within its route.
+template <typename P> struct esimd_moe_route_policy {
+    P   inner;
+    int per;
+
+    ESIMD_INLINE const void * w_a() const { return inner.w_a(); }
+    ESIMD_INLINE const void * w_b() const { return inner.w_b(); }
+
+    ESIMD_INLINE int  row_a(int g) const { return inner.row_a(g % per); }
+    ESIMD_INLINE int  row_b(int g) const { return inner.row_b(g % per); }
+    ESIMD_INLINE bool has_b(int g, int nrows) const { return inner.has_b(g % per, nrows); }
+
+    ESIMD_INLINE void epilogue(int g, int nrows, float sum_a, float sum_b) const {
+        inner.epilogue(g % per, nrows, sum_a, sum_b);
+    }
+};
+
+// Routed-expert mat-vec on per-expert reordered K-quant slices, on the dense ESIMD kernel and its traits: each
+// expert slice has the layout reorder_qw_<type> gives a dense weight of nrows rows, so the dense kernel runs on it
+// unchanged. GLU: gate and up of one row per work-group, fused SwiGLU/GEGLU; otherwise a row pair per work-group.
+// The activation is read as f32, so the q8_1 quantize of the sub-group path is skipped.
+template <ggml_type T, bool GLU>
+static void moe_reorder_esimd_launch(const void * vx_a, const void * vx_up, const float * y_base, const int32_t * ids_dev,
+                                     float * dst_base, const int ncols, const int nrows, const int n_experts_used,
+                                     const int n_tokens, const size_t expert_weight_stride, const size_t dst_row_stride,
+                                     const size_t src1_row_stride, const size_t ids_token_stride,
+                                     const size_t dst_token_stride, const size_t src1_token_stride,
+                                     const ggml_glu_op glu_op, dpct::queue_ptr stream) {
+    GGML_ASSERT(ncols % QK_K == 0);
+    const int    per    = GLU ? nrows : (nrows + 1) / 2;
+    const size_t groups = (size_t) n_tokens * n_experts_used * per;
+    stream->submit([&](sycl::handler & h) {
+        sycl::local_accessor<float, 1> lmem(sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE * 2), h);
+        h.parallel_for(
+            sycl::nd_range<1>(sycl::range<1>(groups * GGML_SYCL_DMMV_ESIMD_WG_SIZE),
+                              sycl::range<1>(GGML_SYCL_DMMV_ESIMD_WG_SIZE)),
+            [=](sycl::nd_item<1> it) [[intel::sycl_explicit_simd]] {
+                const int g     = it.get_group(0);
+                const int route = g / per;
+                const int token = route / n_experts_used;
+                const int slot  = route - token * n_experts_used;
+                const int i02   = *(const int32_t *) ((const char *) ids_dev + (size_t) token * ids_token_stride +
+                                                     (size_t) slot * sizeof(int32_t));
+                float * dst = (float *) ((char *) dst_base + (size_t) token * dst_token_stride +
+                                         (size_t) slot * dst_row_stride);
+                if (i02 < 0) {  // skipped slot (id -1): zero rows; the whole work-group leaves before the barrier
+                    if (it.get_local_id(0) == 0) {
+                        const int r = GLU ? g % per : 2 * (g % per);
+                        dst[r] = 0.0f;
+                        if (!GLU && r + 1 < nrows) {
+                            dst[r + 1] = 0.0f;
+                        }
+                    }
+                    return;
+                }
+                const float * y = (const float *) ((const char *) y_base + (size_t) token * src1_token_stride +
+                                                   (size_t) slot * src1_row_stride);
+                const char * wa = (const char *) vx_a + (size_t) i02 * expert_weight_stride;
+                if constexpr (GLU) {
+                    const char * wu = (const char *) vx_up + (size_t) i02 * expert_weight_stride;
+                    dequantize_mul_mat_vec_reorder_esimd<T>(
+                        esimd_moe_route_policy<esimd_dmmv_glu_policy>{ { wa, wu, dst, glu_op }, per },
+                        y, ncols, nrows, lmem, it);
+                } else {
+                    dequantize_mul_mat_vec_reorder_esimd<T>(
+                        esimd_moe_route_policy<esimd_dmmv_row_pair_policy>{ { wa, dst }, per },
+                        y, ncols, nrows, lmem, it);
+                }
+            });
+    });
+}
+
+bool ggml_sycl_mul_mat_vec_q_id_reorder_esimd(enum ggml_type src0_type, const void * vx_base, const float * y,
+                                              const int32_t * ids_dev, float * dst_base, int ncols, int nrows,
+                                              int n_experts_used, size_t expert_weight_stride, size_t dst_row_stride,
+                                              size_t src1_row_stride, dpct::queue_ptr stream) {
+    if (src0_type != GGML_TYPE_Q3_K || ncols % QK_K != 0) {
+        return false;
+    }
+    // one token: the token strides are never applied
+    moe_reorder_esimd_launch<GGML_TYPE_Q3_K, false>(vx_base, nullptr, y, ids_dev, dst_base, ncols, nrows,
+        n_experts_used, 1, expert_weight_stride, dst_row_stride, src1_row_stride, 0, 0, 0, GGML_GLU_OP_SWIGLU, stream);
+    return true;
+}
+
 bool ggml_sycl_dequantize_mul_mat_vec_glu_reorder_esimd(enum ggml_type src0_type, enum ggml_glu_op glu_op,
                                                         const void * vx, const void * vgate, const float * y,
                                                         float * dst, int ncols, int nrows, dpct::queue_ptr stream) {

@@ -91,6 +91,7 @@
 #include "ggml-sycl/solve_tri.hpp"
 #include "ggml-sycl/gated_delta_net.hpp"
 #include "ggml-sycl/pool.hpp"
+#include "ggml-sycl/xmx-compat.hpp"
 #include "ggml-sycl/cross_entropy_loss.hpp"
 
 #define MEM_SIZE_2M	0x00200000
@@ -114,6 +115,10 @@ int g_ggml_sycl_enable_fusion = 1;
 int g_ggml_sycl_fuse_conv_window = 1;
 int g_ggml_sycl_enable_esimd = 1;
 int g_ggml_sycl_mmid_esimd = 1;
+int g_ggml_sycl_dense_esimd_max_cols = -1;  // -1: per weight type (ggml_sycl_dense_esimd_max_cols)
+int64_t g_ggml_sycl_dense_esimd_min_weights = 16 * 1024 * 1024;
+int g_ggml_sycl_dense_esimd_gm = 8;
+int g_ggml_sycl_dense_esimd_kranges = -1;
 int g_ggml_sycl_mmvq_wide = 1;
 int g_ggml_sycl_enable_xmx_esimd = 1;
 int g_ggml_sycl_xmx_max_cols = GGML_SYCL_XMX_MAX_COLS_DEFAULT;
@@ -121,6 +126,7 @@ int g_ggml_sycl_xmx_glu_max_cols = GGML_SYCL_XMX_GLU_MAX_COLS;
 int g_ggml_sycl_prioritize_dmmv = 0;
 int g_ggml_sycl_xmx_gather_types = GGML_SYCL_XMX_GATHER_TYPES_DEFAULT;
 int g_ggml_sycl_xmx_gather_shapes = GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT;
+int g_ggml_sycl_hwemul = 0;
 int g_ggml_sycl_mmid_sched = GGML_SYCL_MMID_SCHED_DEVICE;
 int g_ggml_sycl_dynamic_precision = GGML_SYCL_DYNAMIC_PRECISION_DEFAULT;
 int g_ggml_sycl_dynamic_required_precision = GGML_SYCL_DYNAMIC_PRECISION_F32;
@@ -450,6 +456,11 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_fuse_conv_window = ggml_sycl_get_env("GGML_SYCL_FUSE_CONV_WINDOW", 1);
         g_ggml_sycl_enable_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_ESIMD", 1);
         g_ggml_sycl_mmid_esimd = ggml_sycl_get_env("GGML_SYCL_MMID_ESIMD", 1);
+        g_ggml_sycl_dense_esimd_max_cols =
+            getenv("GGML_SYCL_DENSE_ESIMD_MAX_COLS") ? ggml_sycl_get_env("GGML_SYCL_DENSE_ESIMD_MAX_COLS", 0) : -1;
+        g_ggml_sycl_dense_esimd_min_weights = ggml_sycl_get_env("GGML_SYCL_DENSE_ESIMD_MIN_WEIGHTS", 16 * 1024 * 1024);
+        g_ggml_sycl_dense_esimd_gm = ggml_sycl_get_env("GGML_SYCL_DENSE_ESIMD_GM", 8);
+        g_ggml_sycl_dense_esimd_kranges = ggml_sycl_get_env("GGML_SYCL_DENSE_ESIMD_KRANGES", -1);
         g_ggml_sycl_mmvq_wide = ggml_sycl_get_env("GGML_SYCL_MMVQ_WIDE", 1);
         g_ggml_sycl_enable_xmx_esimd = ggml_sycl_get_env("GGML_SYCL_ENABLE_XMX_ESIMD", 1);
         g_ggml_sycl_xmx_max_cols = std::max(0, ggml_sycl_get_env("GGML_SYCL_XMX_MAX_COLS", GGML_SYCL_XMX_MAX_COLS_DEFAULT));
@@ -460,6 +471,13 @@ static void ggml_check_sycl() try {
         g_ggml_sycl_xmx_gather_types = ggml_sycl_get_env("GGML_SYCL_XMX_GATHER_TYPES", GGML_SYCL_XMX_GATHER_TYPES_DEFAULT);
         g_ggml_sycl_mmid_sched = ggml_sycl_get_env("GGML_SYCL_MMID_SCHED", GGML_SYCL_MMID_SCHED_DEVICE) & 3;
         g_ggml_sycl_xmx_gather_shapes = ggml_sycl_get_env("GGML_SYCL_XMX_GATHER_SHAPES", GGML_SYCL_XMX_GATHER_SHAPES_DEFAULT);
+        g_ggml_sycl_hwemul = ggml_sycl_get_env("GGML_SYCL_HWEMUL", 0);
+        if (g_ggml_sycl_hwemul != 0 && !ggml_sycl_xmx::emulated) {
+            // the emulated architectures' instructions would run on this device's XMX and compute garbage
+            GGML_LOG_WARN("GGML_SYCL_HWEMUL=%d is ignored: it needs a build with GGML_SYCL_XMX_EMULATION\n",
+                          g_ggml_sycl_hwemul);
+            g_ggml_sycl_hwemul = 0;
+        }
         g_ggml_sycl_dynamic_precision =
             ggml_sycl_get_env_precision("GGML_SYCL_DYNAMIC_PRECISION", GGML_SYCL_DYNAMIC_PRECISION_DEFAULT);
         g_ggml_sycl_dynamic_required_precision =
@@ -509,6 +527,12 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_F16: yes\n");
 #else
         GGML_LOG_INFO("  GGML_SYCL_F16: no\n");
+#endif
+
+#if defined(GGML_SYCL_XMX_EMULATION)
+        GGML_LOG_INFO("  GGML_SYCL_XMX_EMULATION: yes (dpas and joint_matrix in software, slow)\n");
+#else
+        GGML_LOG_INFO("  GGML_SYCL_XMX_EMULATION: no\n");
 #endif
 
 #if defined(GGML_SYCL_FORCE_MMQ)
@@ -586,7 +610,14 @@ static void ggml_check_sycl() try {
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_TYPES: %d\n", g_ggml_sycl_xmx_gather_types);
         GGML_LOG_INFO("  GGML_SYCL_MMID_SCHED: %d\n", g_ggml_sycl_mmid_sched);
         GGML_LOG_INFO("  GGML_SYCL_MMID_ESIMD: %d\n", g_ggml_sycl_mmid_esimd);
+        if (g_ggml_sycl_dense_esimd_max_cols < 0) {
+            GGML_LOG_INFO("  GGML_SYCL_DENSE_ESIMD_MAX_COLS: per weight type\n");
+        } else {
+            GGML_LOG_INFO("  GGML_SYCL_DENSE_ESIMD_MAX_COLS: %d\n", g_ggml_sycl_dense_esimd_max_cols);
+        }
+        GGML_LOG_INFO("  GGML_SYCL_DENSE_ESIMD_MIN_WEIGHTS: %lld\n", (long long) g_ggml_sycl_dense_esimd_min_weights);
         GGML_LOG_INFO("  GGML_SYCL_XMX_GATHER_SHAPES: %d\n", g_ggml_sycl_xmx_gather_shapes);
+        GGML_LOG_INFO("  GGML_SYCL_HWEMUL: %d\n", g_ggml_sycl_hwemul);
         GGML_LOG_INFO("  GGML_SYCL_DYNAMIC_PRECISION: %s\n",
                       ggml_sycl_dynamic_precision_names[g_ggml_sycl_dynamic_precision]);
         GGML_LOG_INFO("  GGML_SYCL_DYNAMIC_REQUIRED_PRECISION: %s\n",
@@ -839,6 +870,9 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
             case GGML_TYPE_IQ3_XXS:
             case GGML_TYPE_IQ3_S:
             case GGML_TYPE_IQ4_NL:
+            case GGML_TYPE_IQ2_XXS:
+            case GGML_TYPE_IQ2_XS:
+            case GGML_TYPE_IQ2_S:
             case GGML_TYPE_IQ4_XS:
             case GGML_TYPE_MXFP4:{
                 ggml_tensor_extra_gpu * extra = new ggml_tensor_extra_gpu{};
@@ -4917,15 +4951,6 @@ static bool reorder_qw_q3_k(uint8_t * data_device, size_t size, size_t offset, d
         }, stream);
 }
 
-// Reorder each Q3_K expert slice on its own.
-static bool reorder_qw_q3_k_moe(uint8_t * data_device, size_t expert_bytes, int64_t n_expert, dpct::queue_ptr stream) {
-    for (int64_t e = 0; e < n_expert; ++e) {
-        if (!reorder_qw_q3_k(data_device + e * expert_bytes, expert_bytes, 0, stream)) {
-            return false;
-        }
-    }
-    return true;
-}
 
 static bool reorder_qw_q5_k(uint8_t * data_device, size_t size, size_t offset, dpct::queue_ptr stream) {
     GGML_ASSERT(offset == 0);
@@ -4999,6 +5024,37 @@ static bool reorder_qw_iq4(uint8_t * data_device, size_t size, dpct::queue_ptr s
         }, stream);
 }
 
+// Reorder a slice into the streams of its layout table (ggml_sycl_layout): the first field, which has a stream of
+// its own, is the planar head, the other fields the tail.
+template <typename block_t> static bool reorder_qw_layout(uint8_t * data_device, size_t size, dpct::queue_ptr stream) {
+    using L = ggml_sycl_layout<block_t>;
+    static_assert(L::N > 1 && !L::seg[1].join, "the first field has a stream of its own");
+    return reorder_qw_planar<block_t>(
+        __func__, data_device, size, L::seg[0].aos, L::seg[0].size,
+        [](const block_t & x, int64_t ib, uint8_t * tail, int64_t nblocks) {
+            const uint8_t * b = reinterpret_cast<const uint8_t *>(&x);
+            for (int f = 1; f < L::N; ++f) {
+                uint8_t * dst = tail + ggml_sycl_layout_at<L>(f, ib, nblocks) - nblocks * L::seg[0].size;
+                for (int j = 0; j < L::seg[f].size; ++j) {
+                    dst[j] = b[L::seg[f].aos + j];
+                }
+            }
+        },
+        stream);
+}
+
+// Reorder each expert slice on its own with the type's dense reorder: its layout is the one the dense
+// kernels, the MoE mat-vec and the grouped GEMM (ggml_sycl_layout) read.
+template <typename F>
+static bool reorder_qw_each_expert(uint8_t * data_device, size_t expert_bytes, int64_t n_expert, F && reorder) {
+    for (int64_t e = 0; e < n_expert; ++e) {
+        if (!reorder(data_device + e * expert_bytes, expert_bytes)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
     uint8_t * data_device = (uint8_t *) src0->data;
     size_t ncols = src0->ne[0];
@@ -5012,8 +5068,34 @@ static bool reorder_qw(const ggml_tensor * src0, dpct::queue_ptr stream) {
         switch (src0->type) {
             case GGML_TYPE_Q8_0:
                 return reorder_qw_q8_0_moe(data_device, src0->nb[2], src0->ne[2], stream);
+            case GGML_TYPE_Q2_K:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2],
+                                              [&](uint8_t * x, size_t n) { return reorder_qw_q2_k(x, n, 0, stream); });
             case GGML_TYPE_Q3_K:
-                return reorder_qw_q3_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2],
+                                              [&](uint8_t * x, size_t n) { return reorder_qw_q3_k(x, n, 0, stream); });
+            case GGML_TYPE_IQ3_XXS:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2],
+                                              [&](uint8_t * x, size_t n) { return reorder_qw_iq3_xxs(x, n, stream); });
+            case GGML_TYPE_IQ3_S:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2],
+                                              [&](uint8_t * x, size_t n) { return reorder_qw_iq3_s(x, n, stream); });
+            case GGML_TYPE_IQ2_XXS:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2], [&](uint8_t * x, size_t n) {
+                    return reorder_qw_layout<block_iq2_xxs>(x, n, stream);
+                });
+            case GGML_TYPE_IQ2_XS:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2], [&](uint8_t * x, size_t n) {
+                    return reorder_qw_layout<block_iq2_xs>(x, n, stream);
+                });
+            case GGML_TYPE_IQ2_S:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2], [&](uint8_t * x, size_t n) {
+                    return reorder_qw_layout<block_iq2_s>(x, n, stream);
+                });
+            case GGML_TYPE_IQ4_XS:
+                return reorder_qw_each_expert(data_device, src0->nb[2], src0->ne[2], [&](uint8_t * x, size_t n) {
+                    return reorder_qw_iq4<block_iq4_xs>(x, n, stream);
+                });
             case GGML_TYPE_Q4_K:
                 return reorder_qw_q4_k_moe(data_device, src0->nb[2], src0->ne[2], stream);
             case GGML_TYPE_Q5_K:
@@ -5103,9 +5185,26 @@ static void opt_for_reorder_id(ggml_backend_sycl_context * ctx, const ggml_tenso
     if (!g_ggml_sycl_enable_optimize || !ctx->opt_feature.reorder) {
         return;
     }
-    if (src0->type != GGML_TYPE_Q8_0 && src0->type != GGML_TYPE_Q3_K && src0->type != GGML_TYPE_Q4_K &&
-        src0->type != GGML_TYPE_Q5_K && src0->type != GGML_TYPE_Q6_K && src0->type != GGML_TYPE_MXFP4) {
-        return;
+    // Only the formats whose grouped GEMM gains from the reorder are reordered for MoE. Q4_0, Q4_1, Q5_0,
+    // Q5_1, NVFP4 and IQ1_M lose 3-37% in the ESIMD grouped GEMM with it, and Q1_0, Q2_0, IQ1_S and IQ4_NL
+    // gain nothing there; a weight has one layout for all its kernels.
+    switch (src0->type) {
+        case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_MXFP4:
+            break;
+        default:
+            return;
     }
     // The MXFP4 reorder kernels use 8-byte vector loads, so every expert slice must stay aligned.
     if (src0->type == GGML_TYPE_MXFP4 && (src0->nb[2] % 16 != 0 || (uintptr_t) src0->data % 16 != 0)) {
@@ -5169,6 +5268,36 @@ static bool can_use_mul_mat_q(const ggml_tensor * src0, const ggml_tensor * src1
     return src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32;
 }
 
+// Widest product (activation columns) the dense ESIMD GEMM takes for a weight type. Above the size threshold the
+// crossover with dequantize + oneDNN depends on the type and the layout, not the size (B60, 16M-89M weights). The
+// caps follow the reordered layout a weight has after its first decode: the IQ formats dequantize slowly and still
+// win at 1024 columns; Q3_K, Q4_K, Q5_K and Q8_0 stop winning between 256 and 512, the other types above 128.
+// GGML_SYCL_DENSE_ESIMD_MAX_COLS replaces the table with one value for every type.
+static int ggml_sycl_dense_esimd_max_cols(ggml_type type) {
+    if (g_ggml_sycl_dense_esimd_max_cols >= 0) {
+        return g_ggml_sycl_dense_esimd_max_cols;
+    }
+    switch (type) {
+        case GGML_TYPE_IQ4_NL:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_IQ3_XXS:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+            return 1024;
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_Q4_K:
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_Q8_0:
+            return 256;
+        default:
+            return 128;
+    }
+}
+
 static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/2);
 
@@ -5184,6 +5313,28 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
     }
 
     const bool split = ggml_backend_buffer_is_sycl_split(src0->buffer);
+
+    // Dense ESIMD dequant GEMM (on by default) for the products where it beats the other kernels: more columns than
+    // the mat-vec kernels take (MMVQ up to 8, the XMX mat-vec on reordered weights up to GGML_SYCL_XMX_MAX_COLS), at
+    // most ggml_sycl_dense_esimd_max_cols() of them (wider, dequantize + oneDNN wins), and a weight of at least
+    // GGML_SYCL_DENSE_ESIMD_MIN_WEIGHTS values (on small matrices too few tiles fill the device).
+    const int64_t dense_n = src1->ne[1];
+    if (g_ggml_sycl_dense_esimd_max_cols != 0 && g_ggml_sycl_enable_esimd && !split && dst->op == GGML_OP_MUL_MAT &&
+        ggml_is_quantized(src0->type) && src0->ne[2] == 1 && src0->ne[3] == 1 && src1->type == GGML_TYPE_F32 &&
+        dst->type == GGML_TYPE_F32 && dense_n > MMVQ_MAX_BATCH_SIZE &&
+        dense_n <= ggml_sycl_dense_esimd_max_cols(src0->type) &&
+        src0->ne[0] * src0->ne[1] >= g_ggml_sycl_dense_esimd_min_weights && src1->ne[2] == 1 && src1->ne[3] == 1 &&
+        ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst) &&
+        !can_use_xmx_batch(ctx.device, src0, src1)) {
+        const auto * extra     = static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
+        const bool   reordered = extra && extra->optimized_feature.reorder;
+        if (ggml_sycl_dense_dequant_gemm_esimd(src0->type, src0->data, (const float *) src1->data,
+                                               ggml_sycl_src1_prec(dst), (float *) dst->data, src0->ne[1],
+                                               src1->ne[1], src0->ne[0], reordered, ctx.pool(), ctx.stream())) {
+            return;
+        }
+    }
+
     int64_t min_compute_capability = INT_MAX;
 
     if (split) {
@@ -5661,6 +5812,17 @@ static bool ggml_sycl_mul_mat_id_mmvq_fused(
     const ggml_tensor_extra_gpu * src0_extra =
         static_cast<const ggml_tensor_extra_gpu *>(src0->extra);
     const bool use_reorder = src0_extra && src0_extra->optimized_feature.reorder;
+
+#ifdef GGML_SYCL_DMMV_HAS_ESIMD
+    // reads the f32 activation itself, so the q8_1 quantize below is skipped
+    if (use_reorder && g_ggml_sycl_enable_esimd && src0->type == GGML_TYPE_Q3_K &&
+        ggml_sycl_mul_mat_vec_q_id_reorder_esimd(src0->type, src0->data, (const float *) src1->data,
+            (const int32_t *) ids->data, (float *) dst->data, (int) ne10, nrows, n_experts_used,
+            /*expert_weight_stride=*/ src0->nb[2], /*dst_row_stride=*/ dst->nb[1],
+            /*src1_row_stride=*/ ne11 == 1 ? 0 : src1->nb[1], stream)) {
+        return true;
+    }
+#endif
 
     ggml_sycl_pool_alloc<char> src1_q8_alloc(ctx.pool(),
         (size_t) ne11 * src1_padded_cols * sizeof(block_q8_1) / QK8_1);

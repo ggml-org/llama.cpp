@@ -6831,6 +6831,42 @@ static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats, bool skip = 
     init_mul_mat_id_ids(ctx, n_mats, skip);
 }
 
+// GGML_OP_MUL_MAT on a weight that an earlier mat-vec used: a backend that reorders the weight on
+// its first mat-vec must compute the wider product from the reordered layout. The second input
+// depends on the first product, so the mat-vec runs first.
+struct test_mul_mat_reused_weight : public test_case {
+    const ggml_type type_a;
+    const int64_t   k;
+    const int64_t   n;
+
+    std::string vars() override {
+        return VARS_TO_STR3(type_a, k, n);
+    }
+
+    double max_nmse_err() override {
+        return 5e-4;
+    }
+
+    test_mul_mat_reused_weight(ggml_type type_a = GGML_TYPE_Q8_0, int64_t k = 256, int64_t n = 128)
+        : type_a(type_a), k(k), n(n) {}
+
+    ggml_tensor * build_graph(ggml_context * ctx) override {
+        ggml_tensor * w = ggml_new_tensor_2d(ctx, type_a, k, k);
+        ggml_set_name(w, "w");
+        ggml_tensor * x1 = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, 1);
+        ggml_set_name(x1, "x1");
+        ggml_tensor * y1 = ggml_mul_mat(ctx, w, x1);
+        ggml_set_name(y1, "y1");
+        ggml_tensor * xn = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, k, n);
+        ggml_set_name(xn, "xn");
+        ggml_tensor * xb = ggml_add(ctx, xn, y1);
+        ggml_set_name(xb, "xb");
+        ggml_tensor * out = ggml_mul_mat(ctx, w, xb);
+        ggml_set_name(out, "out");
+        return out;
+    }
+};
+
 // GGML_OP_MUL_MAT_ID
 struct test_mul_mat_id : public test_case {
     const ggml_type type_a;
@@ -13941,6 +13977,36 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 6, 4096, 5120, {1, 1}, {1, 1}));
 
+    // Dense ESIMD K ranges (few row tiles, K of >= 16 stored blocks): ranges on separate threads, summed atomically.
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_IQ4_XS, GGML_TYPE_Q8_0}) {
+        for (int n : {17, 64, 100}) {
+            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 64, n, 4096, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 96, n, 8192, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat_reused_weight(type, 4096, 64));
+    }
+
+    // Dense ESIMD tile tails and reuse after the single-column weight reorder.
+    for (ggml_type type : { GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0,
+                            GGML_TYPE_IQ4_XS }) {
+        for (int n : {2, 31, 32, 33, 63, 64, 65, 80, 81, 127, 128, 129}) {
+            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 96, n, 256, {1, 1}, {1, 1}));
+            test_cases.emplace_back(new test_mul_mat_reused_weight(type, 256, n));
+        }
+        test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 97, 65, 256, {1, 1}, {1, 1}));
+    }
+
+    // Dense ESIMD: short and odd K, row counts not a multiple of the row tile.
+    for (ggml_type type : { GGML_TYPE_Q3_K, GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0,
+                            GGML_TYPE_IQ4_XS }) {
+        for (int n : {33, 65, 129}) {
+            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 24, n, 768, {1, 1}, {1, 1}));
+        }
+        test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 32, 129, 1536, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 25, 65, 768, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat_reused_weight(type, 768, 65));
+    }
+
     // SIMD K boundaries, including tails shorter than one vector.
     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
         for (int k : {1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 48}) {
@@ -15764,6 +15830,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     for (int n : {1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 17, 24, 25, 32, 33}) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 4096, n, 14336, {1, 1}, {1, 1}));
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, 14336, n, 4096, {1, 1}, {1, 1}));
+    }
+
+    // The same product on a weight an earlier mat-vec used: a backend that reorders weights on their first mat-vec
+    // (as in real inference, after the first decode) computes these from the reordered layout. Only the last node
+    // is timed, so this is the wide product alone.
+    // Square sizes from 4M to 67M weights, also as a plain product (canonical layout), to place the dense ESIMD
+    // GEMM's size threshold (GGML_SYCL_DENSE_ESIMD_MIN_WEIGHTS).
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ3_S}) {
+        for (int64_t k : {2048, 4096, 8192}) {
+            for (int n : {32, 64, 128, 256, 512}) {
+                test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, k, n, k, {1, 1}, {1, 1}));
+                test_cases.emplace_back(new test_mul_mat_reused_weight(type, k, n));
+            }
+        }
+    }
+
+    // Dense FFN gate/up and down shapes of a 27B model (17408 x 5120).
+    for (ggml_type type : {GGML_TYPE_Q4_K, GGML_TYPE_Q5_K, GGML_TYPE_Q6_K, GGML_TYPE_Q8_0, GGML_TYPE_IQ4_XS}) {
+        for (auto mk : std::vector<std::array<int64_t, 2>>{ { 17408, 5120 }, { 5120, 17408 } }) {
+            for (int n : {16, 32, 64, 128, 256, 512, 1024}) {
+                test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, mk[0], n, mk[1], {1, 1}, {1, 1}));
+            }
+        }
     }
 
     // Q4_K multi-column mat-vec
