@@ -6,6 +6,10 @@
 #include "llama-hparams.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-memory-hybrid.h"
+#include "llama-memory-hybrid-idx.h"
+#include "llama-memory-hybrid-iswa.h"
+#include "llama-memory-recurrent.h"
 
 #include <cassert>
 #include <cstring>
@@ -412,12 +416,20 @@ bool llama_batch_allocr::init(
 
             if (!seq_first_embd[s]) {
                 if (p0 >= 0 && p0 >= seq_pos_min(s)) {
+                    const bool is_hybrid = mem != nullptr && (
+                            dynamic_cast<const llama_memory_hybrid *>(mem) != nullptr ||
+                            dynamic_cast<const llama_memory_hybrid_idx *>(mem) != nullptr ||
+                            dynamic_cast<const llama_memory_hybrid_iswa *>(mem) != nullptr ||
+                            dynamic_cast<const llama_memory_recurrent *>(mem) != nullptr);
+                    const char * hybrid_hint = is_hybrid
+                            ? " (if llama_memory_seq_rm was called on a hybrid/recurrent model, the recurrent cache may have refused rollback outside the last ubatch)\n"
+                            : "";
                     LLAMA_LOG_ERROR(
                             "%s: the tokens of sequence %d in the input batch have inconsistent sequence positions:\n"
                             " - the last position stored in the memory module of the context (i.e. the KV cache) for sequence %d is X = %d\n"
                             " - the tokens for sequence %d in the input batch have a starting position of Y = %d\n"
-                            " for M-RoPE, it is required that the position satisfies: X < Y\n",
-                            __func__, s, s, p0, s, seq_pos_min(s));
+                            " for M-RoPE, it is required that the position satisfies: X < Y\n%s",
+                            __func__, s, s, p0, s, seq_pos_min(s), hybrid_hint);
 
                     return false;
                 }
