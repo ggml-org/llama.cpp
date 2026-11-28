@@ -1,6 +1,7 @@
 #include "fused-gemm.hpp"
 #include "fused-gemm-esimd.hpp"
 #include "quants.hpp"
+#include "vecdotq.hpp"
 
 #include <sycl/ext/oneapi/matrix/matrix.hpp>
 
@@ -404,6 +405,7 @@ template <> struct fg_block_traits<block_q3_K>    { static constexpr int qk = QK
 template <> struct fg_block_traits<block_q4_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q5_K>    { static constexpr int qk = QK_K; };
 template <> struct fg_block_traits<block_q6_K>    { static constexpr int qk = QK_K; };
+template <> struct fg_block_traits<block_nvfp4>   { static constexpr int qk = QK_NVFP4; };
 
 // The A stages below are the dequantize_block_iq* kernels rewritten for one k step. There a
 // work-item handled one quarter (il) of one 32-wide sub-block (ib); here one lane produces the
@@ -723,6 +725,30 @@ template <typename E>
 static __dpct_inline__ void fg_stage_a(const block_q6_K * __restrict__ xrow, const int kb, typename E::pair * a) {
     FG_SUPERBLOCK(block_q6_K);
     fg_decode_q6_K<E>(blk->ql, blk->qh, blk->scales, (float) blk->d, ib, a);
+}
+
+// nvfp4: 4 sub-blocks of 16 values per 64-value block, each with a UE4M3 scale. k step kb is sub-blocks 2 * (kb % 2) and 2 * (kb % 2) + 1 of block kb / 2.
+// In a sub-block, the low nibbles of its 8 qs bytes are values 0..7 and the high nibbles values 8..15.
+template <typename E>
+static __dpct_inline__ void fg_stage_a(const block_nvfp4 * __restrict__ xrow, const int kb, typename E::pair * a) {
+    const block_nvfp4 * blk = xrow + kb / 2;
+#pragma unroll
+    for (int ls = 0; ls < 2; ++ls) {
+        const int   s = 2 * (kb % 2) + ls;
+        const float d = ggml_sycl_ue4m3_to_fp32(blk->d[s]);
+        // two words of 4 qs bytes each, decoded 4 codes at a time
+#pragma unroll
+        for (int w = 0; w < 2; ++w) {
+            const uint32_t q  = get_int_b4(blk->qs, s * 2 + w);
+            const uint32_t lo = mxfp4_codes_to_int8(q & 0x0f0f0f0fu);
+            const uint32_t hi = mxfp4_codes_to_int8((q >> 4) & 0x0f0f0f0fu);
+#pragma unroll
+            for (int h = 0; h < 2; ++h) {
+                a[8 * ls + 2 * w + h]     = E::make(d * (int8_t) (lo >> 16 * h), d * (int8_t) (lo >> (16 * h + 8)));
+                a[8 * ls + 4 + 2 * w + h] = E::make(d * (int8_t) (hi >> 16 * h), d * (int8_t) (hi >> (16 * h + 8)));
+            }
+        }
+    }
 }
 
 // Reorder (SoA) layout: each block field is one stream over the nblocks of the matrix (of the expert
@@ -1062,7 +1088,7 @@ static void grouped_gemm_pack_b(const float * y, typename S::tsb * packed, const
 template <typename T> static constexpr bool fg_plain_ok() {
     return !std::is_same_v<T, block_q8_0> && !std::is_same_v<T, block_q2_K> && !std::is_same_v<T, block_q3_K> &&
            !std::is_same_v<T, block_q4_K> && !std::is_same_v<T, block_q5_K> &&
-           !std::is_same_v<T, block_q6_K>;
+           !std::is_same_v<T, block_q6_K> && !std::is_same_v<T, block_nvfp4>;
 }
 
 template <typename T, bool R> struct fg_tag {
@@ -1100,6 +1126,7 @@ template <typename F> static bool fg_visit_type(ggml_type type, bool reordered, 
         case GGML_TYPE_Q4_K:    return fg_visit_layout<block_q4_K>(reordered, f);
         case GGML_TYPE_Q5_K:    return fg_visit_layout<block_q5_K>(reordered, f);
         case GGML_TYPE_Q6_K:    return fg_visit_layout<block_q6_K>(reordered, f);
+        case GGML_TYPE_NVFP4:   return fg_visit_layout<block_nvfp4>(reordered, f);
         default:                return false;
     }
 }
