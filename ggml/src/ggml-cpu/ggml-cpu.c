@@ -4020,6 +4020,13 @@ int ggml_cpu_has_sme2(void) {
 }
 
 void ggml_cpu_init(void) {
+    static atomic_bool is_initialized = false;
+
+    // ggml_graph_compute calls this on every compute; only the first call has work to do
+    if (atomic_load_explicit(&is_initialized, memory_order_acquire)) {
+        return;
+    }
+
     // needed to initialize ggml_time
     {
         struct ggml_init_params params = { 0, NULL, false };
@@ -4029,9 +4036,7 @@ void ggml_cpu_init(void) {
 
     ggml_critical_section_start();
 
-    static bool is_first_call = true;
-
-    if (is_first_call) {
+    if (!atomic_load_explicit(&is_initialized, memory_order_relaxed)) {
         // initialize GELU, Quick GELU, SILU and EXP F32 tables
         {
             const uint64_t t_start = ggml_time_us(); UNUSED(t_start);
@@ -4093,7 +4098,7 @@ void ggml_cpu_init(void) {
             ggml_cpu_disable_fusion = (env != NULL && atoi(env) == 1);
         }
 
-        is_first_call = false;
+        atomic_store_explicit(&is_initialized, true, memory_order_release);
     }
 
     ggml_critical_section_end();
