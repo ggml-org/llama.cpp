@@ -1425,7 +1425,6 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
         // tiny_aya digit grouping pattern from tokenizer.json:
         //   {"type": "Split", "pattern": {"Regex": "\\d{1,3}(?=(?:\\d{3})*\\b)"}, "behavior": "Isolated"}
         // Splits digits into groups of 3 from the right (e.g., 1234567 -> 1, 234, 567)
-        // TODO: Revisit this regex, in case there are any subtle tokenization differences with the original regex.
         bpe_offsets = unicode_regex_split_custom_afmoe(text, offsets);
     } else if (regex_expr == " ?[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]+| ?(?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+(?: (?:(?:(?![\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff])\\p{L})\\p{M}*)+)*|\\p{N}{1,3}(?=(?:\\p{N}{3})*(?!\\p{N}))| ?[^\\s\\p{L}\\p{N}]+[\\r\\n/]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {
         // Raon-1 mini: must match the LLAMA_VOCAB_PRE_TYPE_RAON regex in llama-vocab.cpp byte for byte
