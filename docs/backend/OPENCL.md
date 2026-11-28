@@ -95,6 +95,8 @@ If kernels compatible with the current GPU are found in the library, they will b
 If the library is missing, the builtin kernels are used.
 Add `-DGGML_OPENCL_USE_ADRENO_BIN_KERNELS=OFF` to disable the library entirely.
 
+CONV_3D can use the library's GMEM programs on supported X2 GPUs with F32 input and F32 or F16 weights. If the DLL is absent, the requested CONV_3D program is missing or cannot be loaded, or the tensor does not meet the GMEM requirements, CONV_3D uses the generic OpenCL kernel.
+
 
 ## CMake Options
 
