@@ -91,6 +91,31 @@ static void test_dist_singleton_rng() {
     llama_sampler_free(control);
 }
 
+static void test_adaptive_p_clone() {
+    const std::vector<float> logits = { std::log(0.6f), std::log(0.3f), std::log(0.1f) };
+    for (bool pending : { false, true }) {
+        llama_sampler * original = llama_sampler_init_adaptive_p(0.5f, 0.9f, 42);
+        const llama_token token = sample_dist(original, logits);
+        if (!pending) {
+            llama_sampler_accept(original, token);
+        }
+        llama_sampler * clone = llama_sampler_clone(original);
+        if (pending) {
+            llama_sampler_accept(original, token);
+            llama_sampler_accept(clone, token);
+        }
+        for (int i = 0; i < 64; ++i) {
+            const llama_token a = sample_dist(original, logits);
+            const llama_token b = sample_dist(clone, logits);
+            GGML_ASSERT(a == b);
+            llama_sampler_accept(original, a);
+            llama_sampler_accept(clone, b);
+        }
+        llama_sampler_free(original);
+        llama_sampler_free(clone);
+    }
+}
+
 static void test_temp(const std::vector<float> & probs, const std::vector<float> & probs_expected, float temp) {
     sampler_tester tester(probs, probs_expected);
 
@@ -339,6 +364,7 @@ int main(void) {
     ggml_time_init();
 
     test_dist_singleton_rng();
+    test_adaptive_p_clone();
 
     test_temp({0.1f, 0.2f, 0.3f, 0.4f}, {0.1f, 0.2f, 0.3f, 0.4f}, 1.0f);
     test_temp({0.1f, 0.2f, 0.3f, 0.4f}, {0.0f, 0.0f, 0.0f, 1.0f}, 0.0f);
