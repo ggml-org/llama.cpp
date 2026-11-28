@@ -1128,9 +1128,17 @@ static void launch_fattn_tile_switch_ncols1(ggml_backend_sycl_context & ctx, ggm
             constexpr int cols_per_block = 4;
             const int nwarps    = ggml_sycl_fattn_tile_get_nthreads (DKQ, DV, cols_per_block, cc) / warp_size;
             const int nbatch_fa = ggml_sycl_fattn_tile_get_nbatch_fa(DKQ, DV, cols_per_block, cc);
-            launch_fattn<DV, cols_per_block/ncols2, ncols2,
-                flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>, warp_size>
-                (ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+            // Prompt batches: this tile spills heavily with 128 registers (~10 KB per thread at D=256),
+            // so the large register file wins despite the lower occupancy. Small batches keep the occupancy.
+            if (Q->ne[1] >= 32) {
+                launch_fattn<DV, cols_per_block / ncols2, ncols2,
+                             flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>,
+                             warp_size, true>(ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+            } else {
+                launch_fattn<DV, cols_per_block / ncols2, ncols2,
+                             flash_attn_tile<DKQ, DV, cols_per_block / ncols2, ncols2, use_logit_softcap, warp_size>,
+                             warp_size>(ctx, dst, nwarps, nbytes_shared, nbatch_fa, true, true, false);
+            }
             return;
         }
     }
