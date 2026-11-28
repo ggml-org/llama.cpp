@@ -3,6 +3,7 @@
 set(LLAMA_CHAT_PARSERS_SOURCES
     ${CMAKE_CURRENT_LIST_DIR}/parsers.cpp
     ${CMAKE_CURRENT_LIST_DIR}/parsers.h
+    ${CMAKE_CURRENT_LIST_DIR}/apertus.cpp
     ${CMAKE_CURRENT_LIST_DIR}/cohere2moe.cpp
     ${CMAKE_CURRENT_LIST_DIR}/deepseek.cpp
     ${CMAKE_CURRENT_LIST_DIR}/functionary-v3-2.cpp

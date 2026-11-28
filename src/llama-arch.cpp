@@ -222,6 +222,7 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
     { LLM_KV_GENERAL_TENSOR_EXTRA_PREC_A4,           "general.tensor_extra.prec_a4"          },
 
     { LLM_KV_VOCAB_SIZE,                        "%s.vocab_size"                        },
+    { LLM_KV_VOCAB_SIZE_OUT,                    "%s.vocab_size_out"                    },
     { LLM_KV_VOCAB_SIZE_UNPADDED,               "%s.vocab_size_unpadded"               },
     { LLM_KV_CONTEXT_LENGTH,                    "%s.context_length"                    },
     { LLM_KV_EMBEDDING_LENGTH,                  "%s.embedding_length"                  },
@@ -1579,6 +1580,7 @@ bool llm_arch_supports_mixed_batch(const llm_arch & arch) {
 
 bool llm_arch_supports_sm_tensor(const llm_arch & arch) {
     switch (arch) {
+        case LLM_ARCH_APERTUS:
         case LLM_ARCH_CLOVER_MOE:
         case LLM_ARCH_ZAYA1:
         case LLM_ARCH_GROK:
@@ -1648,7 +1650,6 @@ bool llama_arch_supports_save(llm_arch arch) {
         case LLM_ARCH_GEMMA3N:
         case LLM_ARCH_BITNET:
         case LLM_ARCH_T5:
-        case LLM_ARCH_APERTUS:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_CLEF: // the head tensors are not saved
         case LLM_ARCH_INKLING2_LOOP: // the loop tensors are not saved and the cache slots are expanded at load

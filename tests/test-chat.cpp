@@ -6559,6 +6559,113 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // Apertus v1.5 tests - reasoning and FUNC_NAME_AS_KEY tool calls
+    {
+        auto tst = peg_tester("models/templates/swiss-ai-Apertus-v1.5.jinja", detailed_debug);
+
+        tst.test(R"(<|tools_prefix|>[{"special_function":{"arg1":1}}]<|tools_suffix|>)")
+            .tools({ special_function_tool })
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_NONE)
+            .expect_content(R"(<|tools_prefix|>[{"special_function":{"arg1":1}}]<|tools_suffix|>)")
+            .run();
+
+        tst.test(R"(<|inner_prefix|>Explain <|tools_prefix|> literally.<|inner_suffix|>Done.)")
+            .tools({ special_function_tool })
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .expect_reasoning("Explain <|tools_prefix|> literally.")
+            .expect_content("Done.")
+            .expect_reconstruction()
+            .run();
+
+        for (const auto choice : { COMMON_CHAT_TOOL_CHOICE_AUTO, COMMON_CHAT_TOOL_CHOICE_REQUIRED }) {
+            tst.test(R"(<|tools_prefix|>[{"special_function":{"arg1":1}},{"special_function_with_opt":{"arg1":2}}]<|tools_suffix|>)")
+                .tools({ special_function_tool, special_function_tool_with_optional_param })
+                .parallel_tool_calls(true)
+                .tool_choice(choice)
+                .expect_tool_calls({
+                    { "special_function", R"({"arg1":1})", "" },
+                    { "special_function_with_opt", R"({"arg1":2})", "" },
+                })
+                .run();
+        }
+
+        tst.test("Hello, world!\nWhat's up?")
+            .expect(message_assist)
+            .expect_reconstruction()
+            .run();
+
+        tst.test("<|inner_prefix|>I'm\nthinking<|inner_suffix|>Hello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .expect(message_assist_thoughts)
+            .expect_reconstruction()
+            .run();
+
+        tst.test("<|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}]<|tools_suffix|>")
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .expect_reconstruction()
+            .run();
+
+        tst.test("<|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}, "
+                 "{\"python\": {\"code\": \"print(1)\"}}]<|tools_suffix|>")
+            .parallel_tool_calls(true)
+            .tools({ special_function_tool, python_tool })
+            .expect_tool_calls({
+                { "special_function", "{\"arg1\":1}", "" },
+                { "python", "{\"code\":\"print(1)\"}", "" },
+            })
+            .run();
+
+        tst.test("Calling a tool.<|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}]<|tools_suffix|>")
+            .tools({ special_function_tool })
+            .expect(message_with_content_and_tool_call("Calling a tool.", "special_function", "{\"arg1\":1}"))
+            .expect_reconstruction()
+            .run();
+
+        // Recover complete tool-call JSON when the closing marker is missing.
+        tst.test("<|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}]")
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect(message_assist_call)
+            .run();
+
+        tst.test("<|tools_prefix|>[{\"special_function\": {\"arg1\": ")
+            .tools({ special_function_tool })
+            .is_partial(true)
+            .expect(simple_assist_msg("", "", "special_function", "{\"arg1\": "))
+            .run();
+
+        tst.test("<|inner_prefix|>Check the schema.<|inner_suffix|>{\"response\":\"ok\"}")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .json_schema(R"({"type":"object","properties":{"response":{"type":"string"}},"required":["response"]})")
+            .expect_reasoning("Check the schema.")
+            .expect_content("{\"response\":\"ok\"}")
+            .run();
+
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect(simple_assist_msg("Hello, world!\nWhat's up?", "I'm thinking"))
+            .run();
+
+        // A reasoning-only assistant prefill is valid and remains reasoning while incomplete.
+        tst.test(" thinking")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .is_partial(true)
+            .expect_reasoning("I'm thinking")
+            .run();
+    }
+
     // MiniMax-M2 tests - XML invoke format with parameter tags
     // Format: <minimax:tool_call><invoke name="func"><parameter name="key">value</parameter></invoke></minimax:tool_call>
     {
@@ -8395,6 +8502,161 @@ static void test_template_generation_prompt() {
         check(tmpls, basic(),                  "<|im_start|>assistant\n<think>\n");
         check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
         check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
+    }
+
+    {
+        auto tmpls = read_templates("models/templates/swiss-ai-Apertus-v1.5.jinja");
+        common_chat_templates_inputs tool_inputs;
+        tool_inputs.messages = { message_user };
+        tool_inputs.tools = { special_function_tool, special_function_tool_with_optional_param };
+        tool_inputs.add_generation_prompt = true;
+        tool_inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+        auto tool_parser = common_chat_templates_apply(tmpls.get(), tool_inputs);
+        assert_equals(false, tool_parser.grammar_lazy);
+        assert_equals(true, tool_parser.grammar_triggers.empty());
+        const std::string complete_call = R"(<|tools_prefix|>[{"special_function":{"arg1":1}}]<|tools_suffix|>)";
+        auto accepts_grammar = [&](const std::string & output) {
+            auto grammar = build_grammar(tool_parser.grammar);
+            return match_string_detailed(fake_tokenize({}, tool_parser.generation_prompt + output), grammar.get()).success;
+        };
+        assert_equals(true, accepts_grammar(complete_call));
+        assert_equals(false, accepts_grammar("No tool needed."));
+        const std::string no_suffix = R"(<|tools_prefix|>[{"special_function":{"arg1":1}}])";
+        assert_equals(true, accepts_grammar(no_suffix));
+        assert_equals(false, accepts_grammar(R"(<|tools_prefix|>[{"special_function":{"arg1":1}})"));
+        assert_msg_equals(message_assist_call, common_chat_peg_parse(tool_parser.parser, common_chat_input(no_suffix), false, common_chat_parser_params(tool_parser)), true);
+
+        for (const auto & malformed : {
+                R"(<|tools_prefix|>[{"unknown":{"arg1":1}}]<|tools_suffix|>)",
+                R"(<|tools_prefix|>[{"special_function" {"arg1":1}}]<|tools_suffix|>)",
+                R"(<|tools_prefix|>[{"special_function":{"arg1":1},"special_function":{"arg1":2}}]<|tools_suffix|>)" }) {
+            assert_equals(false, accepts_grammar(malformed));
+            for (auto choice : { COMMON_CHAT_TOOL_CHOICE_AUTO, COMMON_CHAT_TOOL_CHOICE_REQUIRED }) {
+                auto inputs = tool_inputs;
+                inputs.tool_choice = choice;
+                auto parser = common_chat_templates_apply(tmpls.get(), inputs);
+                bool has_calls = false;
+                try {
+                    has_calls = !common_chat_peg_parse(parser.parser, common_chat_input(malformed), false, common_chat_parser_params(parser)).tool_calls.empty();
+                } catch (const std::runtime_error &) {
+                    // Invalid complete envelopes may fail parsing instead of becoming content.
+                }
+                assert_equals(false, has_calls);
+            }
+        }
+
+        check(tmpls, basic(),                  "<|assistant_start|>");
+        check(tmpls, continuation_content(),   "<|assistant_start|><|inner_prefix|>I'm thinking<|inner_suffix|>Hello, ");
+        check(tmpls, continuation_reasoning(), "<|assistant_start|><|inner_prefix|>I'm");
+
+        common_chat_templates_inputs thinking_inputs;
+        thinking_inputs.messages = { system_msg, message_user };
+        thinking_inputs.enable_thinking = true;
+        auto thinking_params = common_chat_templates_apply(tmpls.get(), thinking_inputs);
+        assert_contains(thinking_params.prompt.str(), "<|developer_start|>Deliberation: enabled\n");
+        assert_equals(true, thinking_params.supports_thinking);
+        assert_equals(std::string("<|inner_prefix|>"), thinking_params.thinking_start_tag);
+        assert_equals(size_t(1), thinking_params.thinking_end_tags.size());
+        assert_equals(std::string("<|inner_suffix|>"), thinking_params.thinking_end_tags[0]);
+        bool has_tool_delimiter = false;
+        for (const auto & delimiter : thinking_params.message_delimiters.delimiters) {
+            if (delimiter.role == COMMON_CHAT_ROLE_TOOL && delimiter.delimiter == "<|tool_output_start|>") {
+                has_tool_delimiter = true;
+            }
+        }
+        assert_equals(true, has_tool_delimiter);
+
+        auto no_thinking_inputs = thinking_inputs;
+        no_thinking_inputs.enable_thinking = false;
+        auto no_thinking_params = common_chat_templates_apply(tmpls.get(), no_thinking_inputs);
+        assert_contains(no_thinking_params.prompt.str(), "<|developer_start|>Deliberation: disabled\n");
+
+        common_chat_msg assistant_history = simple_assist_msg("Previous answer", "Previous reasoning");
+        common_chat_msg user_followup;
+        user_followup.role = "user";
+        user_followup.content = "Follow up";
+
+        common_chat_templates_inputs history_inputs;
+        history_inputs.messages = { system_msg, message_user, assistant_history, user_followup };
+        auto history_params = common_chat_templates_apply(tmpls.get(), history_inputs);
+        assert_contains(
+            history_params.prompt.str(),
+            "<|assistant_start|><|inner_prefix|>Previous reasoning<|inner_suffix|>Previous answer"
+            "<|assistant_end|><|user_start|>Follow up<|user_end|><|assistant_start|>");
+
+        common_chat_templates_inputs tool_history_inputs;
+        tool_history_inputs.messages = { system_msg, message_user, tool_call_msg, tool_msg, user_followup };
+        tool_history_inputs.tools = { special_function_tool };
+        auto tool_history_params = common_chat_templates_apply(tmpls.get(), tool_history_inputs);
+        assert_contains(
+            tool_history_params.prompt.str(),
+            "<|assistant_start|><|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}]"
+            "<|tools_suffix|><|tool_output_start|>Sunny<|tool_output_end|><|assistant_end|>"
+            "<|user_start|>Follow up<|user_end|><|assistant_start|>");
+
+        common_chat_msg multi_tool_call = message_with_reasoning_content_and_multiple_tool_calls(
+            "Need tool results", "Calling tools",
+            {
+                { "special_function", "{\"arg1\": 1}" },
+                { "special_function_with_opt", "{\"arg1\": 2, \"arg2\": 3}" },
+            });
+
+        common_chat_msg second_tool_msg;
+        second_tool_msg.role = "tool";
+        second_tool_msg.tool_name = "special_function_with_opt";
+        second_tool_msg.tool_call_id = "call1";
+        second_tool_msg.content = "Rainy";
+
+        common_chat_msg final_after_tools = simple_assist_msg("Weather checked.");
+
+        common_chat_templates_inputs multi_tool_history_inputs;
+        multi_tool_history_inputs.messages = {
+            system_msg, message_user, multi_tool_call, tool_msg, second_tool_msg, final_after_tools, user_followup
+        };
+        multi_tool_history_inputs.tools = { special_function_tool, special_function_tool_with_optional_param };
+        auto multi_tool_history_params = common_chat_templates_apply(tmpls.get(), multi_tool_history_inputs);
+        assert_contains(
+            multi_tool_history_params.prompt.str(),
+            "<|assistant_start|><|inner_prefix|>Need tool results<|inner_suffix|>Calling tools"
+            "<|tools_prefix|>[{\"special_function\": {\"arg1\": 1}}, "
+            "{\"special_function_with_opt\": {\"arg1\": 2, \"arg2\": 3}}]<|tools_suffix|>"
+            "<|tool_output_start|>Sunny, Rainy<|tool_output_end|>Weather checked.<|assistant_end|>"
+            "<|user_start|>Follow up<|user_end|><|assistant_start|>");
+
+        common_chat_msg media_user;
+        media_user.role = "user";
+        media_user.content_parts = {
+            { "text", "Describe this image: ", "" },
+            { "media_marker", "<|image|>", "" },
+            { "text", " and transcribe this audio: ", "" },
+            { "media_marker", "<|audio|>", "" },
+        };
+
+        common_chat_templates_inputs media_inputs;
+        media_inputs.messages = { system_msg, media_user };
+        auto media_params = common_chat_templates_apply(tmpls.get(), media_inputs);
+        assert_contains(
+            media_params.prompt.str(),
+            "<|user_start|>Describe this image: <|image|> and transcribe this audio: <|audio|><|user_end|>");
+
+        common_chat_msg reserved_user;
+        reserved_user.role = "user";
+        reserved_user.content = "Explain <|assistant_start|> and <|tools_prefix|> literally.";
+        common_chat_templates_inputs reserved_inputs;
+        reserved_inputs.messages = { system_msg, reserved_user };
+        auto reserved_params = common_chat_templates_apply(tmpls.get(), reserved_inputs);
+        assert_contains(
+            reserved_params.prompt.str(),
+            "<|user_start|>Explain <|assistant_start|> and <|tools_prefix|> literally.<|user_end|>");
+
+        // Apertus uses enable_thinking; reasoning_effort kwargs do not select a level.
+        auto low_inputs = thinking_inputs;
+        low_inputs.chat_template_kwargs["reasoning_effort"] = R"("low")";
+        auto max_inputs = thinking_inputs;
+        max_inputs.chat_template_kwargs["reasoning_effort"] = R"("max")";
+        assert_equals(
+            common_chat_templates_apply(tmpls.get(), low_inputs).prompt.str(),
+            common_chat_templates_apply(tmpls.get(), max_inputs).prompt.str());
     }
 
     {

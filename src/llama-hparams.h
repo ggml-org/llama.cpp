@@ -300,6 +300,9 @@ struct llama_hparams {
     // output embedding dimension (0 = use n_embd)
     uint32_t n_embd_out_impl = 0;
 
+    // output vocabulary size (0 = use the tokenizer vocabulary size)
+    uint32_t n_vocab_out_impl = 0;
+
     uint32_t dflash_block_size       = 0;
     uint32_t dflash_conv_kernel_size = 0;
     uint32_t dflash_conv_group_size  = 0;

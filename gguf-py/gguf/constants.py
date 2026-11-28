@@ -107,6 +107,7 @@ class Keys:
 
     class LLM:
         VOCAB_SIZE                        = "{arch}.vocab_size"
+        VOCAB_SIZE_OUT                    = "{arch}.vocab_size_out"
         VOCAB_SIZE_UNPADDED               = "{arch}.vocab_size_unpadded"
         CONTEXT_LENGTH                    = "{arch}.context_length"
         EMBEDDING_LENGTH                  = "{arch}.embedding_length"

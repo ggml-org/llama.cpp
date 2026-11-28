@@ -1600,6 +1600,7 @@ void llama_model_base::load_hparams(llama_model_loader & ml) {
     }
 
     ml.get_key(LLM_KV_CONTEXT_LENGTH,          hparams.n_ctx_train);
+    ml.get_key(LLM_KV_VOCAB_SIZE_OUT,          hparams.n_vocab_out_impl, false);
     ml.get_key(LLM_KV_EMBEDDING_LENGTH,        hparams.n_embd);
     ml.get_key(LLM_KV_EMBEDDING_LENGTH_OUT,    hparams.n_embd_out_impl, false);
     ml.get_key(LLM_KV_ATTENTION_CAUSAL,        hparams.causal_attn,     false);

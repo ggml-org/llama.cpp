@@ -701,6 +701,9 @@ class GGUFWriter:
     def add_vocab_size(self, size: int) -> None:
         self.add_uint32(Keys.LLM.VOCAB_SIZE.format(arch=self.arch), size)
 
+    def add_vocab_size_out(self, size: int) -> None:
+        self.add_uint32(Keys.LLM.VOCAB_SIZE_OUT.format(arch=self.arch), size)
+
     def add_vocab_size_unpadded(self, size: int) -> None:
         self.add_uint32(Keys.LLM.VOCAB_SIZE_UNPADDED.format(arch=self.arch), size)
 

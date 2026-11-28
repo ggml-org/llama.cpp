@@ -1,4 +1,5 @@
 #include "models.h"
+#include <float.h>
 
 void llama_model_apertus::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
@@ -10,6 +11,7 @@ void llama_model_apertus::load_arch_hparams(llama_model_loader & ml) {
 
     switch (hparams.n_layer()) {
         case 32: type = LLM_TYPE_8B; break;
+        case 80: type = LLM_TYPE_70B; break;
         default: type = LLM_TYPE_UNKNOWN;
     }
 }
@@ -17,11 +19,16 @@ void llama_model_apertus::load_arch_hparams(llama_model_loader & ml) {
 void llama_model_apertus::load_arch_tensors(llama_model_loader &) {
     LLAMA_LOAD_LOCALS;
 
+    const int64_t n_vocab_out = hparams.n_vocab_out_impl > 0 ? hparams.n_vocab_out_impl : n_vocab;
+    if (n_vocab_out > n_vocab) {
+        throw std::runtime_error("output vocabulary size exceeds tokenizer vocabulary size");
+    }
+
     tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), { n_embd, n_vocab }, 0);
 
     // output
     output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), { n_embd }, 0);
-    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), { n_embd, n_vocab }, 0);
+    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), { n_embd, n_vocab_out }, 0);
 
     for (int i = 0; i < n_layer; ++i) {
         auto & layer = layers[i];
@@ -157,6 +164,17 @@ llama_model_apertus::graph::graph(const llm_graph_params & params) : llm_graph_c
 
     // lm_head
     cur = build_lora_mm(model.output, cur);
+
+    if (hparams.n_vocab_out_impl > 0 && hparams.n_vocab_out_impl < model.vocab.n_tokens()) {
+        const int64_t n_vocab     = model.vocab.n_tokens();
+        const int64_t n_vocab_out = hparams.n_vocab_out_impl;
+
+        ggml_tensor * output_padding = ggml_fill(
+            ctx0,
+            ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_vocab - n_vocab_out, cur->ne[1]),
+            -FLT_MAX);
+        cur = ggml_concat(ctx0, cur, output_padding, 0);
+    }
 
     cb(cur, "result_output", -1);
     res->t_logits = cur;

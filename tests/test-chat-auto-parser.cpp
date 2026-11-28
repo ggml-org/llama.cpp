@@ -2479,6 +2479,7 @@ static void test_role_markers_all_templates(testing & t) {
         // Apertus uses <|user_start|> / <|assistant_start|> but the user diff
         // carries the preceding <|assistant_end|> from the previous turn.
         { "Apertus-8B-Instruct.jinja",                       "<|user_start|>", "<|assistant_start|>" },
+        { "swiss-ai-Apertus-v1.5.jinja",                     "<|user_start|>", "<|assistant_start|>" },
 
         // Apriel 1.6 wraps the assistant body with <|begin_assistant|>, but
         // <|begin_assistant|> is also the detected reasoning start, so the

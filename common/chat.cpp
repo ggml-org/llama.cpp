@@ -1365,6 +1365,13 @@ static common_chat_params common_chat_params_init_lfm2_5(const common_chat_templ
 // Pick the dedicated handler for a template from its source, or null for the autoparser.
 // Order matters: the first match wins, and later checks assume the earlier ones did not match.
 static common_chat_params_init_fn common_chat_template_detect_params_init(const std::string & src) {
+    if (src.find("You are Apertus 1.5 Omni") != std::string::npos &&
+        src.find("<|inner_prefix|>") != std::string::npos &&
+        src.find("<|tools_prefix|>") != std::string::npos) {
+        LOG_DBG("Using specialized template: Apertus 1.5\n");
+        return common_chat_params_init_apertus_1_5;
+    }
+
     // Ministral/Mistral Large 3 - uses special reasoning structure fixes, can't use autoparser
     // Note: Mistral Small 3.2 uses [CALL_ID] which Ministral doesn't have, so we can distinguish them
     if (src.find("[SYSTEM_PROMPT]") != std::string::npos && src.find("[TOOL_CALLS]") != std::string::npos &&
