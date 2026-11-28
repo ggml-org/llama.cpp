@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -118,6 +119,23 @@ static void check_file(testing & t, const std::filesystem::path & path, bool use
     t.assert_equal(test_file_size, file.size());
     t.assert_true("read alignment is nonzero", file.read_alignment() != 0);
 
+    file.seek(17, SEEK_SET);
+    std::vector<uint8_t> positional(test_io_size);
+    file.read_at(positional.data(), positional.size(), test_file_size - positional.size());
+    t.assert_true("positional read expected bytes", matches(positional.data(), test_file_size - positional.size(), positional.size()));
+    t.assert_equal(size_t(17), file.tell());
+
+    auto read_range = [&](size_t offset) {
+        std::vector<uint8_t> data(test_io_size);
+        file.read_at(data.data(), data.size(), offset);
+        return matches(data.data(), offset, data.size());
+    };
+    auto read_first = std::async(std::launch::async, read_range, size_t(1));
+    auto read_last  = std::async(std::launch::async, read_range, test_file_size - test_io_size - 1);
+    t.assert_true("parallel positional read at start", read_first.get());
+    t.assert_true("parallel positional read at end", read_last.get());
+    t.assert_equal(size_t(17), file.tell());
+
     const size_t alignment = file.read_alignment();
     const std::vector<std::pair<size_t, size_t>> ranges = {
         { 0, 1 },
@@ -166,6 +184,21 @@ static void check_file(testing & t, const std::filesystem::path & path, bool use
         t.assert_true("unsafe EOF read expected bytes", matches(buffer_aligned.data, final_offset, test_file_size - final_offset));
         t.assert_equal(test_file_size, file.tell());
     }
+}
+
+static void check_file_ptr_lifetime(testing & t, const std::filesystem::path & path) {
+    FILE * fp = fopen(path.string().c_str(), "rb");
+    if (!t.assert_true("open FILE pointer", fp != nullptr)) {
+        return;
+    }
+
+    llama_file file(fp);
+    fclose(fp);
+
+    std::vector<uint8_t> data(test_io_size);
+    const size_t offset = test_file_size - data.size();
+    file.read_at(data.data(), data.size(), offset);
+    t.assert_true("positional read after FILE pointer is closed", matches(data.data(), offset, data.size()));
 }
 
 static void check_direct_io_fallback(testing & t, const std::filesystem::path & path) {
@@ -226,6 +259,7 @@ int main() {
 
     t.test("llama_file.buffered", [&] (testing & t) { check_file(t, test_file.path, false); });
     t.test("llama_file.direct", [&] (testing & t) { check_file(t, test_file.path, true); });
+    t.test("llama_file.file_ptr_lifetime", [&] (testing & t) { check_file_ptr_lifetime(t, test_file.path); });
     t.test("llama_file.direct_fallback", [&] (testing & t) { check_direct_io_fallback(t, test_file.path); });
     t.test("llama_mmap", [&] (testing & t) { check_mmap(t, test_file.path); });
     return t.summary();
