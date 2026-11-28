@@ -100,8 +100,8 @@ int main(int argc, char ** argv) {
         GGML_ASSERT(path_model_disk == params.model.path); // TODO better checks
 
         auto load_tensor_data = [&](const std::string & name, void * dst, const size_t size){
-            const int64_t tid    = gguf_find_tensor(gguf_ctx.get(), name.c_str());
-            const size_t  offset = gguf_get_data_offset(gguf_ctx.get()) + gguf_get_tensor_offset(gguf_ctx.get(), tid);
+            const int64_t  tid    = gguf_find_tensor(gguf_ctx.get(), name.c_str());
+            const uint64_t offset = gguf_get_data_offset(gguf_ctx.get()) + gguf_get_tensor_offset(gguf_ctx.get(), tid);
             GGML_ASSERT(size == gguf_get_tensor_size(gguf_ctx.get(), tid));
 
             FILE * file = ggml_fopen(params.out_file.c_str(), "rb");

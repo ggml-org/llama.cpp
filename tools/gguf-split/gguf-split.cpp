@@ -573,7 +573,7 @@ static void gguf_merge(const split_params & split_params) {
             f_input.seekg(offset);
             f_input.read((char *)read_data.data(), n_bytes);
             if (!f_input) {
-                fprintf(stderr, "%s: failed to read %zu bytes at offset %zu, input file may be truncated\n", __func__, n_bytes, offset);
+                fprintf(stderr, "%s: failed to read %zu bytes at offset %" PRIu64 ", input file may be truncated\n", __func__, n_bytes, offset);
                 exit(EXIT_FAILURE);
             }
             if (!split_params.dry_run) {
