@@ -82,5 +82,27 @@ int main() {
         success = false;
     }
 
+    const std::vector<std::string> regex_exprs_bytes    = { "\\p{L}+", "\\p{N}+", "\\s+" };
+    const std::string              byte_encode_text     = "\xc4\x80\xc4\xb1\xe0\xa4\x95\xf0\x9f\x98\x80";
+    const auto                     actual_byte_encode   = unicode_regex_split(byte_encode_text, regex_exprs_bytes);
+    // GPT-2 byte-level encoding of byte_encode_text, independent of unicode_byte_to_utf8().
+    const std::vector<std::string> expected_byte_encode = {
+        "\xc3\x84\xc4\xa2\xc3\x84\xc2\xb1\xc3\xa0\xc2\xa4\xc4\xb7",
+        "\xc3\xb0\xc5\x81\xc4\xba\xc4\xa2",
+    };
+
+    if (actual_byte_encode != expected_byte_encode) {
+        fprintf(stderr, "unexpected byte-encoded split:");
+        for (const auto & piece : actual_byte_encode) {
+            fprintf(stderr, " [");
+            for (const unsigned char byte : piece) {
+                fprintf(stderr, "%02x", byte);
+            }
+            fprintf(stderr, "]");
+        }
+        fprintf(stderr, "\n");
+        success = false;
+    }
+
     return success ? 0 : 1;
 }
