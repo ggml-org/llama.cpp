@@ -643,6 +643,9 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
     }
 }
 
+// Defined below with the fused dispatch mirror; consulted by the quantized decode route.
+static bool ggml_cuda_fattn_mma_f16_fused_q_applies(const int cc, const ggml_tensor * dst);
+
 static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
 #ifndef FLASH_ATTN_AVAILABLE
     GGML_UNUSED(device); GGML_UNUSED(dst);
@@ -790,12 +793,14 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
                     return BEST_FATTN_KERNEL_VEC;
                 }
             } else {
+                // The vec kernel has no GQA reuse: on quantized caches it re-reads and re-dequantizes K/V per query
+                // head, losing to the fused MMA dequant at depth (muse/nemotron nkvu q8 TG -13/-20 % at 64k).
                 if (cc >= GGML_CUDA_CC_ADA_LOVELACE) {
-                    if (Q->ne[1] <= 2) {
+                    if (Q->ne[1] <= 2 && !ggml_cuda_fattn_mma_f16_fused_q_applies(cc, dst)) {
                         return BEST_FATTN_KERNEL_VEC;
                     }
                 } else {
-                    if (Q->ne[1] == 1) {
+                    if (Q->ne[1] == 1 && !ggml_cuda_fattn_mma_f16_fused_q_applies(cc, dst)) {
                         return BEST_FATTN_KERNEL_VEC;
                     }
                 }
