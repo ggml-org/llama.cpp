@@ -20,6 +20,10 @@ struct llama_memory_params {
     ggml_type type_k;
     ggml_type type_v;
 
+    // sliding-window KV cache. GGML_TYPE_COUNT means "same as type_k / type_v"
+    ggml_type type_k_swa;
+    ggml_type type_v_swa;
+
     // use full-size SWA cache
     bool swa_full;
 
