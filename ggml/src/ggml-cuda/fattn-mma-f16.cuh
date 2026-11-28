@@ -1866,7 +1866,7 @@ static __global__ void flash_attn_ext_f16(
                             const int32_t s21,  const int32_t s22,  const int64_t s23,
                             const int32_t ne31, const int32_t ne32, const int32_t ne33,
                             const int32_t s31,  const int64_t s32,  const int64_t s33,
-        const fattn_indexed_bias bias) {
+        const fattn_bias_indexed bias) {
     GGML_UNUSED(bias); // biased ops are never dispatched to the mma kernel
     ggml_cuda_pdl_sync(); // TODO optimize placement
 #if defined(FLASH_ATTN_AVAILABLE) && (defined(VOLTA_MMA_AVAILABLE) || defined(TURING_MMA_AVAILABLE) || defined(AMD_WMMA_AVAILABLE) || defined(AMD_MFMA_AVAILABLE))

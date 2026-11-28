@@ -10303,7 +10303,7 @@ struct test_flash_attn_ext : public test_case {
         }
 
         ggml_tensor * out = ggml_flash_attn_ext(ctx, q, k, v, m, 1.0f/sqrtf(hsk), max_bias, logit_softcap);
-        ggml_flash_attn_ext_add_sinks(out, s);
+        ggml_flash_attn_ext_set_sinks(out, s);
         ggml_flash_attn_ext_set_n_kv_max(out, n_kv_max);
         ggml_prec_set_acc(out, prec);
         ggml_set_name(out, "out");
@@ -10379,7 +10379,7 @@ struct test_flash_attn_ext_mask_bcast : public test_flash_attn_ext {
         ggml_set_name(m, "m");
 
         ggml_tensor * out = ggml_flash_attn_ext(ctx, ref->src[0], ref->src[1], ref->src[2], m, 1.0f/sqrtf(hsk), max_bias, logit_softcap);
-        ggml_flash_attn_ext_add_sinks(out, ref->src[4]);
+        ggml_flash_attn_ext_set_sinks(out, ref->src[4]);
         ggml_prec_set_acc(out, prec);
         ggml_set_name(out, "out");
 
@@ -10483,8 +10483,8 @@ struct test_flash_attn_ext_kv_rows : public test_case {
     }
 };
 
-// GGML_OP_FLASH_ATTN_EXT with an indexed bias: mask[key, query] += table[indices[key, query], head, query]
-struct test_flash_attn_ext_indexed_bias : public test_case {
+// GGML_OP_FLASH_ATTN_EXT with an indexed bias: mask[key, query] += bias[bias_idxs[key, query], head, query]
+struct test_flash_attn_ext_bias_indexed : public test_case {
     const int64_t hs;
     const int64_t nh;       // K/V heads
     const int64_t gqa;
@@ -10511,7 +10511,7 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
         return 5e-4;
     }
 
-    test_flash_attn_ext_indexed_bias(int64_t hs = 128, int64_t nh = 2, int64_t gqa = 3, int64_t kv = 768, int64_t nb = 7, int64_t n_stream = 2,
+    test_flash_attn_ext_bias_indexed(int64_t hs = 128, int64_t nh = 2, int64_t gqa = 3, int64_t kv = 768, int64_t nb = 7, int64_t n_stream = 2,
                                      int64_t n_bins = 17, bool kv_rows = false, bool sinks = true, ggml_type type_KV = GGML_TYPE_F16,
                                      float logit_softcap = 0.0f, bool mask_row = false, bool causal = false, int64_t n_kv_max = 0)
         : hs(hs), nh(nh), gqa(gqa), kv(kv), nb(nb), n_stream(n_stream), n_bins(n_bins), kv_rows(kv_rows), sinks(sinks), type_KV(type_KV),
@@ -10535,19 +10535,19 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
             ggml_set_name(r, "r");
         }
 
-        ggml_tensor * table = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_bins, nh*gqa, nb*n_stream);
-        ggml_set_name(table, "table");
+        ggml_tensor * bias = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, n_bins, nh*gqa, nb*n_stream);
+        ggml_set_name(bias, "bias");
 
-        ggml_tensor * indices = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kv, nb*n_stream);
-        ggml_set_name(indices, "indices");
+        ggml_tensor * bias_idxs = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, kv, nb*n_stream);
+        ggml_set_name(bias_idxs, "bias_idxs");
 
         ggml_tensor * out = ggml_flash_attn_ext_rows(ctx, q, k, v, m, r, 1.0f/sqrtf(hs), 0.0f, logit_softcap);
         if (sinks) {
             ggml_tensor * s = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, nh*gqa);
             ggml_set_name(s, "s");
-            ggml_flash_attn_ext_add_sinks(out, s);
+            ggml_flash_attn_ext_set_sinks(out, s);
         }
-        ggml_flash_attn_ext_add_indexed_bias(out, table, indices);
+        ggml_flash_attn_ext_set_bias(out, bias, bias_idxs);
         ggml_flash_attn_ext_set_n_kv_max(out, n_kv_max);
         ggml_prec_set_acc(out, GGML_PREC_F32);
         ggml_set_name(out, "out");
@@ -10606,7 +10606,7 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
                 std::vector<ggml_fp16_t> h(f.size());
                 ggml_fp32_to_fp16_row(f.data(), h.data(), f.size());
                 ggml_backend_tensor_set(t, h.data(), 0, h.size()*sizeof(ggml_fp16_t));
-            } else if (strcmp(t->name, "indices") == 0) {
+            } else if (strcmp(t->name, "bias_idxs") == 0) {
                 std::vector<int32_t> idx(ggml_nelements(t));
                 std::uniform_int_distribution<int32_t> dis(0, n_bins - 1);
                 for (auto & i : idx) {
@@ -10621,7 +10621,7 @@ struct test_flash_attn_ext_indexed_bias : public test_case {
                     }
                 }
                 ggml_backend_tensor_set(t, idx.data(), 0, idx.size()*sizeof(int32_t));
-            } else if (strcmp(t->name, "table") == 0) {
+            } else if (strcmp(t->name, "bias") == 0) {
                 init_tensor_uniform(t, -4.0f, 4.0f);
             } else if (strcmp(t->name, "s") == 0) {
                 init_tensor_uniform(t, -10.0f, 10.0f);
@@ -14941,38 +14941,38 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     for (bool kv_rows : {false, true}) {
         for (int64_t nb : {1, 7, 65}) {
             for (int64_t n_stream : {1, 2}) {
-                test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, nb, n_stream, 17, kv_rows));
+                test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 768, nb, n_stream, 17, kv_rows));
             }
         }
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias( 64, 2, 3, 768,  7, 2,   17, kv_rows, false));
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 8, 3, 512, 65, 1, 1025, kv_rows));
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 1, 1, 17, kv_rows, true, GGML_TYPE_F8_E4M3));
+        test_cases.emplace_back(new test_flash_attn_ext_bias_indexed( 64, 2, 3, 768,  7, 2,   17, kv_rows, false));
+        test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 8, 3, 512, 65, 1, 1025, kv_rows));
+        test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 768, 1, 1, 17, kv_rows, true, GGML_TYPE_F8_E4M3));
         for (ggml_type type : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_0}) {
-            test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 1, 1, 17, kv_rows, true, type));
-            test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, 7, 2, 17, kv_rows, true, type));
+            test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 768, 1, 1, 17, kv_rows, true, type));
+            test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 768, 7, 2, 17, kv_rows, true, type));
         }
         for (int64_t nb : {1, 7}) {
-            test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 700, nb, 2, 17, kv_rows));
-            test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, nb, 2, 17, kv_rows, true,  GGML_TYPE_F16, 10.0f));
-            test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 768, nb, 2, 17, kv_rows, false, GGML_TYPE_F16, 0.0f, true));
+            test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 700, nb, 2, 17, kv_rows));
+            test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 768, nb, 2, 17, kv_rows, true,  GGML_TYPE_F16, 10.0f));
+            test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 768, nb, 2, 17, kv_rows, false, GGML_TYPE_F16, 0.0f, true));
         }
     }
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_BF16, GGML_TYPE_Q8_0}) {
         for (int64_t nb : {1, 4, 64}) {
-            test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 2048, nb, 2, 33, false, true, type, 0.0f, false, true));
+            test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 2048, nb, 2, 33, false, true, type, 0.0f, false, true));
         }
     }
     for (int64_t nb : {1, 4}) {
-        test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 4096, nb, 2, 33, false, true, GGML_TYPE_F16, 0.0f, false, false, 512));
+        test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 4096, nb, 2, 33, false, true, GGML_TYPE_F16, 0.0f, false, false, 512));
     }
-    test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(256, 2, 3, 768, 65, 2, 17));
+    test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(256, 2, 3, 768, 65, 2, 17));
     for (int64_t hs : {128, 256}) {
         for (int64_t nb : {1, 7, 65}) {
-            test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(hs, 2, 3, 1000, nb, 2, 17));
+            test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(hs, 2, 3, 1000, nb, 2, 17));
         }
     }
-    test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 8, 3, 1100, 256, 2, 33, false, true, GGML_TYPE_F16, 0.0f, false, true));
-    test_cases.emplace_back(new test_flash_attn_ext_indexed_bias(128, 2, 3, 1100,   7, 2, 33, false, true, GGML_TYPE_Q8_0));
+    test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 8, 3, 1100, 256, 2, 33, false, true, GGML_TYPE_F16, 0.0f, false, true));
+    test_cases.emplace_back(new test_flash_attn_ext_bias_indexed(128, 2, 3, 1100,   7, 2, 33, false, true, GGML_TYPE_Q8_0));
 
     // sparse mask with large batch size
     test_cases.emplace_back(new test_flash_attn_ext(512, 512, 1, { 8, 1}, 4096, 64, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16, {0, 1, 2, 3}, true, false,  512));

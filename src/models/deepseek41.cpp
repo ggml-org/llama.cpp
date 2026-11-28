@@ -714,7 +714,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
                 cb(kq_mask, "comp_kq_mask_sel", il);
             }
 
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, nullptr, layer.attn_sinks, nullptr, 0, kq_scale, il);
+            out = build_attn_mha(q, k_all, k_all, kq_mask, nullptr, nullptr, nullptr, layer.attn_sinks, nullptr, 0, kq_scale, il);
         } else {
             // dense attention over [window | all compressed rows], selection applied as a mask
             ggml_tensor * comp_k = ggml_view_4d(ctx0, comp_all, n_embd_head, 1, n_comp, n_stream,
@@ -741,7 +741,7 @@ ggml_tensor * llama_model_deepseek41::graph::build_attention41(
 
             // at most window + top-k visible columns per query: lets CUDA FA gather only those
             const int64_t n_kv_max = sparse ? std::min<int64_t>(raw_mask->ne[0], hparams.n_swa) + k_sel : 0;
-            out = build_attn_mha(q, k_all, k_all, nullptr, kq_mask, nullptr, layer.attn_sinks, nullptr, n_kv_max, kq_scale, il);
+            out = build_attn_mha(q, k_all, k_all, kq_mask, nullptr, nullptr, nullptr, layer.attn_sinks, nullptr, n_kv_max, kq_scale, il);
         }
         if (k_rot) {
             out = llama_mul_mat_hadamard(ctx0, out, k_rot);

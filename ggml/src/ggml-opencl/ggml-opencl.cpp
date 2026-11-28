@@ -13222,8 +13222,8 @@ static bool ggml_opencl_supports_op(ggml_backend_dev_t dev, const struct ggml_te
         case GGML_OP_MEAN:
             return op->src[0]->type == GGML_TYPE_F32;
         case GGML_OP_FLASH_ATTN_EXT: {
-            // K/V row lists and indexed bias are not supported
-            if (op->src[5] != nullptr || ggml_flash_attn_ext_has_indexed_bias(op)) {
+            // K/V row lists and bias are not supported
+            if (op->src[5] != nullptr || ggml_flash_attn_ext_has_bias(op)) {
                 return false;
             }
 #ifdef GGML_OPENCL_USE_ADRENO_KERNELS

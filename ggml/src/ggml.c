@@ -5615,7 +5615,7 @@ void ggml_flash_attn_ext_set_n_kv_max(
     ggml_set_op_params_i32(a, 4, n_kv_max);
 }
 
-void ggml_flash_attn_ext_add_sinks(
+void ggml_flash_attn_ext_set_sinks(
         struct ggml_tensor * a,
         struct ggml_tensor * sinks) {
     if (!sinks) {
@@ -5624,49 +5624,100 @@ void ggml_flash_attn_ext_add_sinks(
     }
 
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-    GGML_ASSERT(a->src[4] == NULL);
     GGML_ASSERT(a->src[0]->ne[2] == sinks->ne[0]);
     GGML_ASSERT(sinks->type == GGML_TYPE_F32);
 
     a->src[4] = sinks;
 }
 
-bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
-    return a->op == GGML_OP_FLASH_ATTN_EXT && ggml_get_op_params_i32(a, 5) != 0;
+// deprecated
+void ggml_flash_attn_ext_add_sinks(
+        struct ggml_tensor * a,
+        struct ggml_tensor * sinks) {
+    ggml_flash_attn_ext_set_sinks(a, sinks);
 }
 
-bool ggml_validate_flash_attn_ext_indexed_bias(const struct ggml_tensor * a) {
+// deprecated
+bool ggml_flash_attn_ext_has_indexed_bias(const struct ggml_tensor * a) {
+    return ggml_flash_attn_ext_bias_is_indexed(a);
+}
+
+static bool ggml_flash_attn_ext_set_bias_validate(const struct ggml_tensor * a) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-    const struct ggml_tensor * table   = a->src[6];
-    const struct ggml_tensor * indices = a->src[7];
-    if (!ggml_flash_attn_ext_has_indexed_bias(a)) {
-        return !table && !indices;
+
+    if (!ggml_flash_attn_ext_has_bias(a)) {
+        return a->src[7] == NULL;
     }
 
-    const struct ggml_tensor * q    = a->src[0];
-    const struct ggml_tensor * k    = a->src[1];
-    const struct ggml_tensor * mask = a->src[3];
-    const struct ggml_tensor * rows = a->src[5];
-    return q && k && a->src[2] && mask && table && indices &&
-        mask->type == GGML_TYPE_F16 && ggml_is_contiguous(mask) &&
-        mask->ne[0] == (rows ? rows->ne[0] : k->ne[1]) && mask->ne[1] == q->ne[1] &&
-        mask->ne[2] == 1 && mask->ne[3] == q->ne[3] &&
-        (!rows || (rows->type == GGML_TYPE_I32 && ggml_is_contiguous(rows) && ggml_is_matrix(rows) && rows->ne[1] == q->ne[3])) &&
-        table->type == GGML_TYPE_F32 && ggml_is_contiguous(table) && table->ne[0] > 0 && table->ne[1] == q->ne[2] &&
-        (q->ne[1] == 0 || q->ne[3] <= INT64_MAX/q->ne[1]) && table->ne[2] == q->ne[1]*q->ne[3] && table->ne[3] == 1 &&
-        indices->type == GGML_TYPE_I32 && ggml_is_contiguous(indices) && ggml_is_matrix(indices) &&
-        indices->ne[0] == mask->ne[0] && indices->ne[1] == table->ne[2];
+    const struct ggml_tensor * q         = a->src[0];
+    const struct ggml_tensor * k         = a->src[1];
+    const struct ggml_tensor * mask      = a->src[3];
+    const struct ggml_tensor * rows      = a->src[5];
+    const struct ggml_tensor * bias      = a->src[6];
+    const struct ggml_tensor * bias_idxs = a->src[7];
+
+    if (!q || !k || !a->src[2] || !mask) {
+        return false;
+    }
+    if (mask->type != GGML_TYPE_F16 || !ggml_is_contiguous(mask)) {
+        return false;
+    }
+    if (mask->ne[0] != (rows ? rows->ne[0] : k->ne[1]) || mask->ne[1] != q->ne[1]) {
+        return false;
+    }
+    if (mask->ne[2] != 1 || mask->ne[3] != q->ne[3]) {
+        return false;
+    }
+    if (rows && (rows->type != GGML_TYPE_I32 || !ggml_is_contiguous(rows) ||
+                !ggml_is_matrix(rows) || rows->ne[1] != q->ne[3])) {
+        return false;
+    }
+    if (bias->type != GGML_TYPE_F32 || !ggml_is_contiguous(bias)) {
+        return false;
+    }
+
+    if (!bias_idxs) {
+        // TODO: support dense bias in the backends
+        GGML_ASSERT(false);
+        return false;
+    }
+
+    if (bias->ne[0] == 0 || bias->ne[1] != q->ne[2] || bias->ne[3] != 1) {
+        return false;
+    }
+    if (q->ne[1] != 0 && q->ne[3] > INT64_MAX/q->ne[1]) {
+        return false;
+    }
+    if (bias->ne[2] != q->ne[1]*q->ne[3]) {
+        return false;
+    }
+    if (bias_idxs->type != GGML_TYPE_I32 || !ggml_is_contiguous(bias_idxs) || !ggml_is_matrix(bias_idxs)) {
+        return false;
+    }
+    if (bias_idxs->ne[0] != mask->ne[0] || bias_idxs->ne[1] != bias->ne[2]) {
+        return false;
+    }
+    return true;
 }
 
+void ggml_flash_attn_ext_set_bias(
+        struct ggml_tensor * a,
+        struct ggml_tensor * bias,
+        struct ggml_tensor * bias_idxs) {
+    GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
+    a->src[6] = bias;
+    a->src[7] = bias_idxs;
+    GGML_ASSERT(ggml_flash_attn_ext_set_bias_validate(a));
+}
+
+// deprecated
 void ggml_flash_attn_ext_add_indexed_bias(
         struct ggml_tensor * a,
-        struct ggml_tensor * table,
-        struct ggml_tensor * indices) {
+        struct ggml_tensor * bias,
+        struct ggml_tensor * bias_idxs) {
     GGML_ASSERT(a->op == GGML_OP_FLASH_ATTN_EXT);
-    a->src[6] = table;
-    a->src[7] = indices;
-    ggml_set_op_params_i32(a, 5, table != NULL);
-    GGML_ASSERT(ggml_validate_flash_attn_ext_indexed_bias(a));
+    GGML_ASSERT((bias == NULL) == (bias_idxs == NULL));
+    ggml_flash_attn_ext_set_bias(a, bias, bias_idxs);
 }
 
 // ggml_flash_attn_back

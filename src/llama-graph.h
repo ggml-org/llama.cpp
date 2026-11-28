@@ -1350,16 +1350,15 @@ struct llm_graph_context {
             ggml_tensor * q,       // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k,       // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v,       // [n_embd_head_v, n_head_v, n_tokens] (v_trans = false)
-            ggml_tensor * kq_b,
             ggml_tensor * kq_mask,
             ggml_tensor * kv_rows, // [n_kv, n_stream], k and v are shared by the streams
+            ggml_tensor * bias,    // [n_bins, n_head_q, n_tokens] or [n_kv, n_tokens, n_head_kv, n_stream]
+            ggml_tensor * bias_idxs,
             ggml_tensor * sinks,   // [n_head_q]
             ggml_tensor * v_mla,   // [n_embd_head_v_mla, n_embd_head_v, n_head_v]
                 int64_t   n_kv_max,
                   float   kq_scale,
                     int   il,
-            ggml_tensor * bias_table = nullptr,   // [n_bins, n_head_q, n_tokens]
-            ggml_tensor * bias_indices = nullptr,
             ggml_tensor * k_scale = nullptr,
             ggml_tensor * v_scale = nullptr) const;
 
@@ -1566,7 +1565,7 @@ struct llm_graph_context {
             ggml_tensor * q_cur, // [n_embd_head_q, n_head_q, n_tokens]
             ggml_tensor * k_cur, // [n_embd_head_k, n_head_k, n_tokens]
             ggml_tensor * v_cur, // [n_embd_head_v, n_head_v, n_tokens]
-            ggml_tensor * bias_table, // [n_bins, n_head_q, n_tokens]
+            ggml_tensor * bias, // [n_bins, n_head_q, n_tokens] or [n_kv, n_tokens, n_head_kv, n_stream]
             ggml_tensor * sinks, // [n_head_q]
                   float   kq_scale,
                     int   il) const;

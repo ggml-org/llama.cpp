@@ -589,7 +589,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * kv_rows = dst->src[5];
 
-    if (!ggml_validate_flash_attn_ext_indexed_bias(dst)) {
+    if (ggml_flash_attn_ext_has_bias(dst) && !ggml_flash_attn_ext_bias_is_indexed(dst)) {
         return BEST_FATTN_KERNEL_NONE;
     }
 
@@ -674,7 +674,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     }
 
     // the tile and vec kernels implement the indexed bias, the mma kernel does not
-    if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
+    if (ggml_flash_attn_ext_bias_is_indexed(dst)) {
         float logit_softcap;
         memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
         if (Q->ne[0] != 128 && !(Q->ne[0] == 64 && logit_softcap == 0.0f)) {
