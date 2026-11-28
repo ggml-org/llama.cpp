@@ -536,7 +536,7 @@ void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bo
     if (loadr == 0) {
         buf_b_d[ks * BN + buf_ib] = in_bounds ? float(blk.d) : 0.0f;
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
-        buf_b_s[ks * BN + buf_ib] = in_bounds ? float(blk.s) : 0.0f;
+        buf_b_s[ks * BN + buf_ib] = in_bounds ? float(blk.d) * float(blk.s) : 0.0f;
 #endif
     }
 }

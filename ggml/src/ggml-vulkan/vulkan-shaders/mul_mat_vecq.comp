@@ -35,7 +35,9 @@ void iter(inout FLOAT_TYPE temp[NUM_COLS][NUM_ROWS], const uint first_row, const
         const uint b_block_idx = (j*p.batch_stride_b + col) / QUANT_K_Q8_1 + b_offset;
         const uint b_block_idx_outer = b_block_idx / 4;
         const uint b_block_idx_inner = b_block_idx % 4;
+        // ds.y holds the sum of the quantized values; scale it by d here, in f32
         cache_b_ds = vec2(data_b[b_block_idx_outer].ds[b_block_idx_inner]);
+        cache_b_ds.y *= cache_b_ds.x;
 
 #if QUANT_R == 2
         // Assumes K_PER_ITER == 8
