@@ -4,6 +4,8 @@
 #include <sycl/ext/intel/esimd/xmx/dpas.hpp>
 #include <sycl/ext/intel/experimental/grf_size_properties.hpp>
 
+#include "xmx-compat.hpp"
+
 // One thread owns MR rows of one expert's weight and one BN-wide tile of the schedule, over the
 // whole K. Per k step (32 values) it loads the rows' stored bits, dequantizes them in registers to
 // the f16 A operand of dpas (RC = 8 rows x 16 k, row major) and multiplies it with the packed B,
@@ -31,25 +33,27 @@ static constexpr int GROUPED_GEMM_MR               = 32;  // rows of one thread 
 static constexpr int GROUPED_GEMM_RC               = 8;   // rows of one dpas
 static constexpr int GROUPED_GEMM_QK               = 32;  // values of one k step
 
-template <int NW_, int MR_, bool L2D_> struct grouped_gemm_arch {
-    static constexpr int  NW  = NW_;
+// HW: the architecture (ggml_sycl_xmx::xe2, xehpg), MR: the rows of one thread
+template <typename HW_, int MR_> struct grouped_gemm_arch {
+    using HW                  = HW_;
+    static constexpr int  NW  = HW::dpas_width;
     static constexpr int  MR  = MR_;
-    static constexpr bool L2D = L2D_;
+    static constexpr bool L2D = HW::block_2d;
 };
 
-using grouped_gemm_xe2   = grouped_gemm_arch<16, GROUPED_GEMM_MR, true>;
-using grouped_gemm_xehpg = grouped_gemm_arch<8, 16, false>;
+using grouped_gemm_xe2   = grouped_gemm_arch<ggml_sycl_xmx::xe2, GROUPED_GEMM_MR>;
+using grouped_gemm_xehpg = grouped_gemm_arch<ggml_sycl_xmx::xehpg, 16>;
 
 // An AOT build compiles each kernel only for the targets of its dpas width: GGML_SYCL_XMX_AOT_SG for
-// spir64_gen, FG_AOT_SG (fused-gemm.hpp) for intel_gpu_* targets. A build without XMX (GGML_SYCL_SUPPORT_XMX
-// off) compiles none of them
+// spir64_gen, FG_AOT_SG (fused-gemm.hpp) for intel_gpu_* targets, unless XMX is emulated (xmx-compat.hpp).
+// A build without XMX (GGML_SYCL_SUPPORT_XMX off) compiles none of them
 template <typename A> static constexpr bool grouped_gemm_built() {
 #if !defined(GGML_SYCL_SUPPORT_XMX)
     return false;
 #elif defined(GGML_SYCL_XMX_AOT_SG)
-    return A::NW == GGML_SYCL_XMX_AOT_SG;
+    return A::NW == GGML_SYCL_XMX_AOT_SG || ggml_sycl_xmx::emulated;
 #elif defined(FG_AOT_SG)
-    return A::NW == FG_AOT_SG;
+    return A::NW == FG_AOT_SG || ggml_sycl_xmx::emulated;
 #else
     return true;
 #endif
@@ -57,6 +61,7 @@ template <typename A> static constexpr bool grouped_gemm_built() {
 
 namespace grouped_gemm_esimd {
 using namespace sycl::ext::intel::esimd;
+namespace xmx = ggml_sycl_xmx::esimd;
 
 // f(std::integral_constant<int, I>) for I in [0, N): register selects at a runtime offset become
 // indirect accesses, so loops whose index picks registers are spelled out at compile time
@@ -80,7 +85,7 @@ struct field {
 
 // Where one thread's rows sit in an expert's slice, in either layout. nblocks counts the stored blocks
 // of the slice, bpr those of one row, bs is the size of one block.
-template <int MR, bool L2D> struct slice {
+template <int MR, typename HW> struct slice {
     const uint8_t * x;
     int             M;
     int             bpr;
@@ -114,16 +119,16 @@ template <int MR, bool L2D> struct slice {
     }
 
     // W dwords of each of the MR rows from byte `inner` (a multiple of 4) of field f of block ib, as
-    // [row][W]. SoA with 2D block loads (L2D): one message over the stream. Otherwise the rows' dwords
+    // [row][W]. SoA with 2D block loads (HW::block_2d): one message over the stream. Otherwise the rows' dwords
     // are gathered, as [W][row], at offsets rounded down to a dword (every field starts on an even
     // byte; the SoA streams are dword aligned), shifted by 16 bits where an AoS row's block starts on
     // 2 mod 4, and transposed with strided reads.
     template <int W> ESIMD_INLINE simd<uint32_t, MR * W> rows(const field & f, const int ib, const int inner) const {
-        if constexpr (L2D) {
+        if constexpr (HW::block_2d) {
             if (!aos) {
                 const unsigned pitch = (unsigned) (bpr * f.size);
-                return load_2d<uint32_t, W, MR>((const uint32_t *) (x + (size_t) nblocks * f.pre), pitch - 1, M - 1,
-                                                pitch - 1, (ib * f.size + inner) / 4, m0);
+                return xmx::load_2d<HW, uint32_t, W, MR>((const uint32_t *) (x + (size_t) nblocks * f.pre), pitch - 1,
+                                                         M - 1, pitch - 1, (ib * f.size + inner) / 4, m0);
             }
         }
         const simd<uint32_t, MR> o = at(f, ib, inner);
@@ -848,7 +853,7 @@ template <typename block_q_t, int KS, typename T, bool AOS, typename A> struct g
 
     ESIMD_INLINE void run(sycl::nd_item<1> it) const {
         using namespace sycl::ext::intel::esimd;
-        namespace xmx = sycl::ext::intel::esimd::xmx;
+        namespace xmx = ggml_sycl_xmx::esimd;
         constexpr int MR = A::MR;
         constexpr int NW = A::NW;
         constexpr int RC = GROUPED_GEMM_RC;
@@ -875,7 +880,7 @@ template <typename block_q_t, int KS, typename T, bool AOS, typename A> struct g
 
         // the slice of this expert
         const int             bpr = K / F::qk;
-        const grouped_gemm_esimd::slice<MR, A::L2D> sl  = {
+        const grouped_gemm_esimd::slice<MR, typename A::HW> sl  = {
             (const uint8_t *) src0_dd + (size_t) tile.expert * expert_stride,
             M,
             bpr,
@@ -940,7 +945,8 @@ template <typename block_q_t, int KS, typename T, bool AOS, typename A> struct g
             if constexpr (A::L2D) {
 #pragma unroll
                 for (int nt = 0; nt < NT; ++nt) {
-                    b[nt] = load_2d<uint32_t, NW, 16>(bp, bw - 1, K / 2 - 1, bw - 1, b0 + nt * NW, kb * 16);
+                    b[nt] = xmx::load_2d<typename A::HW, uint32_t, NW, 16>(bp, bw - 1, K / 2 - 1, bw - 1, b0 + nt * NW,
+                                                                           kb * 16);
                 }
             } else {
                 simd<uint32_t, 16 * BN> bm;
@@ -1082,6 +1088,15 @@ static void grouped_gemm_esimd_launch(const char *                        src0_d
     }
 }
 
+template <int NW> using grouped_gemm_arch_of = std::conditional_t<NW == 16, grouped_gemm_xe2, grouped_gemm_xehpg>;
+
+// the shapes the kernel takes: whole row groups and stored blocks, every K-split range non-empty
+// (also in mode 1, so both modes take the same shapes)
+template <typename block_q_t, typename A> static bool grouped_gemm_esimd_shape_ok(int M, int K, bool reordered) {
+    using F = grouped_gemm_esimd_a<block_q_t, A::MR>;
+    return M % A::MR == 0 && F::ok(K, !reordered) && K >= GROUPED_GEMM_QK * GGML_SYCL_GROUPED_GEMM_KSPLIT;
+}
+
 template <typename block_q_t, typename T, typename A>
 static bool grouped_gemm_esimd_run(const char *                        src0_dd,
                                    size_t                              expert_stride,
@@ -1095,11 +1110,9 @@ static bool grouped_gemm_esimd_run(const char *                        src0_dd,
                                    bool                                reordered,
                                    int64_t                             n_tiles,
                                    dpct::queue_ptr                     stream) {
-    using F = grouped_gemm_esimd_a<block_q_t, A::MR>;
-    // whole row groups and stored blocks, every K-split range non-empty (also in mode 1, so both
-    // modes take the same shapes); B is read with 2D block loads, which want 64-byte aligned
-    // surfaces and pitches, or with 16-byte aligned block loads of whole tiles
-    if (M % A::MR != 0 || !F::ok(K, !reordered) || K < GROUPED_GEMM_QK * GGML_SYCL_GROUPED_GEMM_KSPLIT ||
+    // B is read with 2D block loads, which want 64-byte aligned surfaces and pitches, or with 16-byte
+    // aligned block loads of whole tiles
+    if (!grouped_gemm_esimd_shape_ok<block_q_t, A>(M, K, reordered) ||
         !grouped_gemm_esimd_weights_ok(src0_dd, expert_stride, reordered && A::L2D) || ((uintptr_t) packed % 64) != 0 ||
         Npad % 16 != 0) {
         return false;
@@ -1130,23 +1143,18 @@ bool ggml_sycl_grouped_gemm_esimd(const char *                        src0_dd,
     static_assert(grouped_gemm_esimd_a<block_q_t>::supported == ggml_sycl_grouped_gemm_esimd_has<block_q_t>,
                   "the header's format list and the formats implemented here must agree");
     static_assert(NW == 8 || NW == 16, "the dpas widths of Xe-HPG and of Xe2 / Xe-HPC");
-    if constexpr (NW == 16) {
-        return grouped_gemm_esimd_run<block_q_t, T, grouped_gemm_xe2>(src0_dd, expert_stride, tiles, packed, dst, M,
-                                                                      Npad, K, dst_rows, reordered, n_tiles, stream);
-    } else {
-        return grouped_gemm_esimd_run<block_q_t, T, grouped_gemm_xehpg>(src0_dd, expert_stride, tiles, packed, dst, M,
-                                                                        Npad, K, dst_rows, reordered, n_tiles, stream);
-    }
+    return grouped_gemm_esimd_run<block_q_t, T, grouped_gemm_arch_of<NW>>(
+        src0_dd, expert_stride, tiles, packed, dst, M, Npad, K, dst_rows, reordered, n_tiles, stream);
 }
 
 #define GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, T, NW)                                               \
     template bool ggml_sycl_grouped_gemm_esimd<block_q_t, T, NW>(                                     \
         const char *, size_t, const ggml_sycl_grouped_gemm_tile *, const T *, float *, int, int, int, \
         const ggml_sycl_grouped_gemm_rows &, bool, int64_t, dpct::queue_ptr);
-#define GROUPED_GEMM_ESIMD_INSTANCE(block_q_t)                                \
-    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::half, 16)                  \
-    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::ext::oneapi::bfloat16, 16) \
-    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::half, 8)                   \
+#define GROUPED_GEMM_ESIMD_INSTANCE(block_q_t)                                       \
+    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::half, 16)                                    \
+    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::ext::oneapi::bfloat16, 16)                   \
+    GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::half, 8)                                     \
     GROUPED_GEMM_ESIMD_INSTANCE_T(block_q_t, sycl::ext::oneapi::bfloat16, 8)
 GROUPED_GEMM_ESIMD_INSTANCE(block_q8_0)
 GROUPED_GEMM_ESIMD_INSTANCE(block_iq4_nl)
