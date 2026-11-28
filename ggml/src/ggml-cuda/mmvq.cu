@@ -1,4 +1,5 @@
 #include "mmvq.cuh"
+#include "mmvq-gfx906.cuh"
 #include "quantize.cuh"
 #include "unary.cuh"
 #include "vecdotq.cuh"
@@ -1213,6 +1214,15 @@ static void mul_mat_vec_q_switch_ncols_dst(
     const int                     cc        = ggml_cuda_info().devices[device].cc;
     const int warp_size = ggml_cuda_info().devices[device].warp_size;
     const mmvq_parameter_table_id table_id  = get_device_table_id(cc);
+
+#if defined(GGML_USE_HIP)
+    if constexpr (type == GGML_TYPE_Q1_0 || type == GGML_TYPE_Q2_0) {
+        if (mul_mat_vec_q_gfx906_try<type>(vx, vy, ids, fusion, dst, ncols_x, nrows_x, ncols_dst, stride_row_x, stride_col_y,
+                stride_col_dst, nchannels_dst, nsamples_dst, cc, warp_size, stream)) {
+            return;
+        }
+    }
+#endif // defined(GGML_USE_HIP)
 
     const bool has_ids = ids != nullptr;
 
