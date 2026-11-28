@@ -41,8 +41,33 @@ aclDataType ggml_cann_type_mapping(ggml_type type) {
             return ACL_INT32;
         case GGML_TYPE_Q4_0:
             return ACL_INT4;
+        case GGML_TYPE_Q4_K:
+            // Transformed Q4_K stores signed int4 quants (plus separate f16
+            // scale and offset arrays), so it presents to aclnn as int4 too.
+            return ACL_INT4;
         case GGML_TYPE_Q8_0:
             return ACL_INT8;
+        case GGML_TYPE_Q5_K:
+        case GGML_TYPE_IQ4_XS:
+        case GGML_TYPE_IQ4_NL:
+            // 5-bit and codebook quants do not fit int4; transformed to int8.
+            return ACL_INT8;
+        case GGML_TYPE_Q6_K:
+        case GGML_TYPE_Q3_K:
+        case GGML_TYPE_IQ3_S:
+        case GGML_TYPE_Q4_1:
+        case GGML_TYPE_Q5_0:
+        case GGML_TYPE_Q5_1:
+        case GGML_TYPE_Q2_K:
+        case GGML_TYPE_IQ1_S:
+        case GGML_TYPE_IQ1_M:
+        case GGML_TYPE_IQ2_XXS:
+        case GGML_TYPE_IQ2_XS:
+        case GGML_TYPE_IQ2_S:
+        case GGML_TYPE_IQ3_XXS:
+            // Not expressible as per-32 affine int4/int8 antiquant (per-16
+            // scales, or codebook/lattice formats), so dequantised to f16.
+            return ACL_FLOAT16;
         case GGML_TYPE_I64:
             return ACL_INT64;
         default:
