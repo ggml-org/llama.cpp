@@ -216,6 +216,11 @@ if (GGML_SYCL_SUPPORT_XMX)
     add_compile_definitions(GGML_SYCL_SUPPORT_XMX)
 endif()
 
+if (GGML_SYCL_XMX_EMULATION)
+    # xmx-compat.hpp: dpas and joint_matrix in software, so kernels run on devices without their XMX shape
+    add_compile_definitions(GGML_SYCL_XMX_EMULATION)
+endif()
+
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
     # With AOT the option goes to ocloc inside -options (see GGML_SYCL_DEVICE_ARCH below): a bare
