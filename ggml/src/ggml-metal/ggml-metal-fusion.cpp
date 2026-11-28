@@ -73,14 +73,22 @@ ggml_metal_fusion_id ggml_metal_fusion_get_id(const ggml_metal_fusion * fusion) 
 
 // ---- helpers -------------------------------------------------------------
 
-// true if two tensors live in the same Metal buffer
-static bool ggml_metal_fusion_same_buffer(const ggml_tensor * a, const ggml_tensor * b) {
+// true if two tensors live in the same Metal buffer (in STRUCTURAL mode, only checks the backend buffer)
+static bool ggml_metal_fusion_same_buffer(const ggml_tensor * a, const ggml_tensor * b, ggml_metal_fusion_mode mode) {
     if (!a || !b) {
         return false;
     }
 
     ggml_backend_buffer_t ba = a->view_src ? a->view_src->buffer : a->buffer;
     ggml_backend_buffer_t bb = b->view_src ? b->view_src->buffer : b->buffer;
+
+    if (ba != bb) {
+        return false;
+    }
+
+    if (mode == GGML_METAL_FUSION_STRUCTURAL) {
+        return true;
+    }
 
     ggml_metal_buffer_t ca = (ggml_metal_buffer_t) ba->context;
     ggml_metal_buffer_t cb = (ggml_metal_buffer_t) bb->context;
@@ -103,14 +111,6 @@ static bool ggml_metal_fusion_overlap(const ggml_tensor * a, const ggml_tensor *
     return bid_a.offs <= bid_b.offs
         ? bid_b.offs - bid_a.offs < ggml_nbytes(a)
         : bid_a.offs - bid_b.offs < ggml_nbytes(b);
-}
-
-// true if t is or views a tensor in a buffer marked as weights, such as a bias; the model loader marks its buffers before
-// any graph is optimized, and tensors in unmarked or not yet allocated buffers count as non-weights in both phases
-static bool ggml_metal_tensor_is_weight(const struct ggml_tensor * t) {
-    const ggml_tensor * base = t->view_src != NULL ? t->view_src : t;
-
-    return base->buffer != NULL && ggml_backend_buffer_get_usage(base->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 }
 
 // ---- pattern checks ------------------------------------------------------
@@ -196,8 +196,7 @@ static bool ggml_metal_fusion_check_ssm_conv_silu(
     return true;
 }
 
-// ADD x N: each ADD reads the previous ADD as src0, and all addends must share layout
-// (and, in FULL mode, live in the same Metal buffer)
+// ADD x N: each ADD reads the previous ADD as src0, and all addends must share layout and buffer
 static bool ggml_metal_fusion_check_add_chain(
         const ggml_metal_fusion       * fusion,
         const ggml_tensor * const     * nodes,
@@ -219,14 +218,8 @@ static bool ggml_metal_fusion_check_add_chain(
             return false;
         }
 
-        if (ggml_metal_tensor_is_weight(nodes[j]->src[1]) != ggml_metal_tensor_is_weight(nodes[0]->src[1])) {
+        if (!ggml_metal_fusion_same_buffer(nodes[j]->src[1], nodes[0]->src[1], mode)) {
             return false;
-        }
-
-        if (mode == GGML_METAL_FUSION_FULL) {
-            if (!ggml_metal_fusion_same_buffer(nodes[j]->src[1], nodes[0]->src[1])) {
-                return false;
-            }
         }
     }
 
@@ -757,6 +750,14 @@ static bool ggml_metal_fusion_check_moe_reduce(
     }
 
     return true;
+}
+
+// true if t is or views a tensor in a buffer marked as weights, such as a bias; the model loader marks its buffers before
+// any graph is optimized, and tensors in unmarked or not yet allocated buffers count as non-weights in both phases
+static bool ggml_metal_tensor_is_weight(const struct ggml_tensor * t) {
+    const ggml_tensor * base = t->view_src != NULL ? t->view_src : t;
+
+    return base->buffer != NULL && ggml_backend_buffer_get_usage(base->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS;
 }
 
 static const struct ggml_tensor * ggml_metal_mul_mat_add_operand(const struct ggml_tensor * mm, const struct ggml_tensor * add) {
