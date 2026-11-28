@@ -153,10 +153,6 @@ static ggml_backend_buffer_type_t ggml_backend_meta_device_get_buffer_type(ggml_
 static ggml_backend_buffer_type_t ggml_backend_meta_device_get_host_buffer_type(ggml_backend_dev_t dev);
 
 static bool ggml_backend_meta_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
-    if (ggml_flash_attn_ext_has_indexed_bias(op)) {
-        return false;
-    }
-
     GGML_ASSERT(ggml_backend_dev_is_meta(dev));
     const ggml_backend_meta_device_context * meta_dev_ctx = (const ggml_backend_meta_device_context *) dev->context;
     return std::all_of(meta_dev_ctx->simple_devs.begin(), meta_dev_ctx->simple_devs.end(),
@@ -737,7 +733,10 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             const size_t nb_axis = tensor->src[0]->nb[axis];
             const size_t nb_next = tensor->src[0]->nb[axis+1];
             for (int dim = 0; dim < GGML_MAX_DIMS; dim++) {
-                if (tensor->ne[dim] == 1 || tensor->nb[dim] < nb_axis || tensor->nb[dim]*tensor->ne[dim] != nb_next) {
+                const size_t span = tensor->nb[dim]*tensor->ne[dim];
+                const bool span_full   = span == nb_next;
+                const bool span_repeat = src_ss[0].n_segments == 1 && span*src_ss[0].nr[0] == nb_next;
+                if (tensor->ne[dim] == 1 || tensor->nb[dim] < nb_axis || !(span_full || span_repeat)) {
                     continue;
                 }
                 bool others_ok = true;
@@ -843,6 +842,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
             GGML_ASSERT(src_ss[1].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
             GGML_ASSERT(src_ss[2].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
             GGML_ASSERT(tensor->src[4] == nullptr || src_ss[4].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            GGML_ASSERT(tensor->src[6] == nullptr || src_ss[6].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
+            GGML_ASSERT(tensor->src[7] == nullptr || src_ss[7].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
             return {GGML_BACKEND_SPLIT_AXIS_MIRRORED, {0}, {1}, 1};
         }
 
@@ -853,6 +854,8 @@ static struct ggml_backend_meta_split_state ggml_backend_meta_get_split_state(
                 src_ss[2].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED;
         GGML_ASSERT(kv_split || kv_mirrored);
         GGML_ASSERT(tensor->src[4] == nullptr || src_ss[4].axis == GGML_BACKEND_SPLIT_AXIS_0);
+        GGML_ASSERT(tensor->src[6] == nullptr || src_ss[6].axis == GGML_BACKEND_SPLIT_AXIS_1);
+        GGML_ASSERT(tensor->src[7] == nullptr || src_ss[7].axis == GGML_BACKEND_SPLIT_AXIS_MIRRORED);
         return {GGML_BACKEND_SPLIT_AXIS_1, {0}, {1}, 1};
     };
 
@@ -1330,12 +1333,13 @@ static enum ggml_status ggml_backend_meta_buffer_init_tensor_impl(ggml_backend_m
             t_ij->view_src = ggml_backend_meta_buffer_simple_tensor(tensor->view_src, j);
             if (t_ij->view_offs > 0 && split_dim >= 0 && split_dim < GGML_MAX_DIMS) {
                 GGML_ASSERT(tensor->ne[split_dim] != 0);
-                const int split_dim_view_src = ggml_backend_meta_get_split_state(tensor->view_src, /*assume_sync =*/ true).axis;
+                const ggml_tensor * view_src = tensor->src[0] != nullptr ? tensor->src[0] : tensor->view_src;
+                const int split_dim_view_src = ggml_backend_meta_get_split_state(view_src, /*assume_sync =*/ true).axis;
                 GGML_ASSERT(split_dim_view_src >= 0 && split_dim_view_src < GGML_MAX_DIMS);
 
                 // The offset can be internal to the data split, in those cases the view offset should not be scaled.
                 // If however, the offset is larger than the data split then it needs to be scaled proportionally.
-                bool split_internal_offset = t_ij->view_offs <= tensor->view_src->nb[split_dim_view_src];
+                bool split_internal_offset = t_ij->view_offs <= view_src->nb[split_dim_view_src];
                 for (int i = 0; i < GGML_MAX_DIMS; i++) {
                     const size_t dim_size = tensor->ne[i] * tensor->nb[i];
                     if (tensor->view_offs <= dim_size && dim_size < tensor->nb[split_dim]) {
