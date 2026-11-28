@@ -114,6 +114,11 @@ class ReaderTensor(NamedTuple):
 
 
 class GGUFReader:
+    """Read a GGUF file.
+
+    With strict=True, require consecutive tensor offsets with alignment padding and reject NUL bytes in metadata keys.
+    """
+
     # I - same as host, S - swapped
     byte_order: Literal['I', 'S'] = 'I'
     alignment: int = GGUF_DEFAULT_ALIGNMENT
@@ -134,7 +139,7 @@ class GGUFReader:
         GGUFValueType.BOOL:    np.bool_,
     }
 
-    def __init__(self, path: os.PathLike[str] | str, mode: Literal['r', 'r+', 'c'] = 'r'):
+    def __init__(self, path: os.PathLike[str] | str, mode: Literal['r', 'r+', 'c'] = 'r', *, strict: bool = False):
         self.data = np.memmap(path, mode = mode)
         offs = 0
 
@@ -175,7 +180,7 @@ class GGUFReader:
             raise ValueError(f'Tensor count {tensor_count} exceeds maximum {GGUF_MAX_ARRAY_ELEMENTS}')
         if kv_count > GGUF_MAX_ARRAY_ELEMENTS:
             raise ValueError(f'KV count {kv_count} exceeds maximum {GGUF_MAX_ARRAY_ELEMENTS}')
-        offs = self._build_fields(offs, kv_count)
+        offs = self._build_fields(offs, kv_count, strict=strict)
 
         # Build Tensor Info Fields
         offs, tensors_fields = self._build_tensor_info(offs, tensor_count)
@@ -191,7 +196,7 @@ class GGUFReader:
         if padding != 0:
             offs += int(self.alignment - padding)
         self.data_offset = offs
-        self._build_tensors(offs, tensors_fields)
+        self._build_tensors(offs, tensors_fields, strict=strict)
 
     _DT = TypeVar('_DT', bound = npt.DTypeLike)
 
@@ -303,10 +308,13 @@ class GGUFReader:
             [1, 3, 4, 5],
         )
 
-    def _build_fields(self, offs: int, count: int) -> int:
+    def _build_fields(self, offs: int, count: int, *, strict: bool) -> int:
         for _ in range(count):
             orig_offs = offs
             kv_klen, kv_kdata = self._get_str(offs)
+            key = str(bytes(kv_kdata), encoding = 'utf-8')
+            if strict and '\x00' in key:
+                raise ValueError(f'GGUF metadata key {key!r} contains a NUL byte')
             offs += int(kv_klen.nbytes + kv_kdata.nbytes)
             raw_kv_type = self._get(offs, np.uint32)
             offs += int(raw_kv_type.nbytes)
@@ -316,7 +324,7 @@ class GGUFReader:
             parts += field_parts
             self._push_field(ReaderField(
                 orig_offs,
-                str(bytes(kv_kdata), encoding = 'utf-8'),
+                key,
                 parts,
                 [idx + idxs_offs for idx in field_idxs],
                 field_types,
@@ -332,9 +340,11 @@ class GGUFReader:
             tensor_fields.append(field)
         return offs, tensor_fields
 
-    def _build_tensors(self, start_offs: int, fields: list[ReaderField]) -> None:
+    def _build_tensors(self, start_offs: int, fields: list[ReaderField], *, strict: bool) -> None:
         tensors = []
         tensor_names = set() # keep track of name to prevent duplicated tensors
+        alignment = int(self.alignment)
+        expected_offset = 0
         for field in fields:
             _name_len, name_data, _n_dims, dims, raw_dtype, offset_tensor = field.parts
             # check if there's any tensor having same name already in the list
@@ -350,7 +360,12 @@ class GGUFReader:
             np_dims = tuple(reversed(dims.tolist()))
             block_size, type_size = GGML_QUANT_SIZES[ggml_type]
             n_bytes = n_elems * type_size // block_size
-            data_offs = start_offs + int(offset_tensor[0])
+            tensor_offset = int(offset_tensor[0])
+            if strict:
+                if tensor_offset != expected_offset:
+                    raise ValueError(f'Tensor {tensor_name!r} has offset {tensor_offset}, expected {expected_offset}')
+                expected_offset += n_bytes + (-n_bytes % alignment)
+            data_offs = start_offs + tensor_offset
             if data_offs + n_bytes > self.data.nbytes:
                 raise ValueError(f'Tensor {tensor_name} data exceeds file size {self.data.nbytes}')
             item_type: npt.DTypeLike
