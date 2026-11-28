@@ -15694,6 +15694,13 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
         test_cases.emplace_back(new test_count_equal(GGML_TYPE_F32, {4, n, 1, 1}));
     }
 
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {256, 1, 1, 1}));
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {256, 512, 1, 1}));
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {4096, 1, 1, 1}));
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {4096, 512, 1, 1}));
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {8192, 1, 1, 1}));
+    test_cases.emplace_back(new test_rms_norm(GGML_TYPE_F32, {8192, 512, 1, 1}));
+
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32, 10, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {1024, 10, 1, 1}));
     test_cases.emplace_back(new test_argmax(GGML_TYPE_F32, {32000, 512, 1, 1}));
