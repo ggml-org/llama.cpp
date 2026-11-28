@@ -1,0 +1,253 @@
+#version 450
+
+#extension GL_EXT_control_flow_attributes : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int32 : require
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_arithmetic : require
+#extension GL_KHR_shader_subgroup_shuffle : require
+#extension GL_KHR_memory_scope_semantics : require
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_NV_cooperative_matrix2 : require
+
+// Mamba-2 selective scan in chunks of T tokens (SSD form), coopmat2.
+//
+// A workgroup owns ROWS rows of one head of one sequence and keeps their
+// state S [ROWS x D_STATE] in an accumulator. Per chunk, with cs the inclusive
+// cumulative sum of dt * A over the chunk:
+//   M = (C * B^T) .* exp(cs_t - cs_s) for s <= t            [T x T]
+//   y = exp(cs_t) * (S * C^T) + X_dt^T * M^T                [ROWS x T]
+//   S = exp(cs_last) * S + X_w^T * B                        [ROWS x D_STATE]
+// where X_dt[s] = dt_s * x_s and X_w[s] = exp(cs_last - cs_s) * X_dt[s].
+// The matrix operands are fp16. B, C and x must be 16-byte aligned.
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+layout(constant_id = 0) const uint WG_SIZE = 128;
+layout(constant_id = 1) const uint D_STATE = 128;
+layout(constant_id = 2) const uint T = 32;      // tokens per chunk, one per subgroup lane
+layout(constant_id = 3) const uint ROWS = 32;   // rows per workgroup
+layout(constant_id = 4) const uint PAD = 8;
+
+// Padded row strides of the shared arrays, in f16vec4.
+const uint D_STRIDE = (D_STATE + PAD) / 4;
+const uint ROWS_STRIDE = (ROWS + PAD) / 4;
+const uint T_STRIDE = (T + PAD) / 4;
+
+layout(binding = 0) readonly buffer Src0 { float s0[]; };
+layout(binding = 1) readonly buffer Src1 { vec4 x[]; };
+layout(binding = 2) readonly buffer Src2 { float dt[]; };
+layout(binding = 3) readonly buffer Src3 { float A[]; };
+layout(binding = 4) readonly buffer Src4 { vec4 B[]; };
+layout(binding = 5) readonly buffer Src5 { vec4 C[]; };
+layout(binding = 6) readonly buffer Src6 { int ids[]; };
+layout(binding = 7) writeonly buffer Dst { float d[]; };
+
+// The nb* strides and offsets are in bytes: indices divide them by 4 for
+// floats and by 16 for vec4s (x, B and C are read as vec4). off0 .. off6 are
+// the offsets of the sources from their bindings, and s_off the offset of the
+// states in d.
+layout(push_constant) uniform PushConstants {
+    uint nb02; uint nb03; uint nb12; uint nb13;
+    uint nb21; uint nb22; uint nb31;
+    uint nb42; uint nb43; uint nb52; uint nb53;
+    uint off0; uint off1; uint off2; uint off3; uint off4; uint off5; uint off6;
+    uint s_off;
+    uint n_head;
+    uint d_head;
+    uint n_group;
+    uint n_tok;
+    uint n_seq;
+    uint K;
+};
+
+// The operands are kept in f16vec4 arrays, so staging stores 8 bytes at a
+// time; coopMatLoad/Store offsets and strides are in f16vec4 units.
+shared f16vec4 sh_c[T * D_STRIDE];          // C [T x D_STATE]
+shared f16vec4 sh_b[T * D_STRIDE];          // B [T x D_STATE]
+shared f16vec4 sh_s[ROWS * D_STRIDE];       // S [ROWS x D_STATE]
+shared f16vec4 sh_x[2][T * ROWS_STRIDE];    // X_dt [T x ROWS], double-buffered: it is read after the second barrier
+shared f16vec4 sh_w[T * ROWS_STRIDE];       // X_w [T x ROWS]
+shared f16vec4 sh_m[T * T_STRIDE];          // M [T x T]
+shared float sh_cs[T];                      // cs_t
+shared float sh_ecs[T];                     // exp(cs_t)
+
+#define WG   gl_ScopeWorkgroup
+#define MUA  gl_MatrixUseA
+#define MUB  gl_MatrixUseB
+#define MACC gl_MatrixUseAccumulator
+#define ROW  gl_CooperativeMatrixLayoutRowMajor
+#define COL  gl_CooperativeMatrixLayoutColumnMajor
+
+float softplus(float v) {
+    return v <= 20.0 ? log(1.0 + exp(v)) : v;
+}
+
+float DecayMask(const in uint32_t r, const in uint32_t c, const in float cb) {
+    return c <= r ? cb * exp(sh_cs[r] - sh_cs[c]) : 0.0;
+}
+
+float ScaleCol(const in uint32_t r, const in uint32_t c, const in float v) {
+    return v * sh_ecs[c];
+}
+
+const uint NB = T * D_STATE / 4 / WG_SIZE;      // vec4 of B (and C) per thread and chunk
+const uint NX = T * ROWS / 4 / WG_SIZE;         // vec4 of x per thread and chunk
+
+// The next chunk's inputs, loaded into registers during the current chunk.
+vec4 next_b[NB], next_c[NB], next_x[NX];
+float next_dt;
+
+// Loads the inputs of the chunk starting at token t0. Reads past the last
+// token or row clamp to the last valid one; tokens past the end get dt = 0,
+// and rows past the end are not stored.
+void load_chunk(const uint t0, const uint B_base, const uint C_base, const uint x_base, const uint dt_base, const uint row0) {
+    const uint tid = gl_LocalInvocationIndex;
+    [[unroll]] for (uint i = 0; i < NB; ++i) {
+        const uint e = tid + i * WG_SIZE;
+        const uint t = min(t0 + e / (D_STATE / 4), n_tok - 1);
+        next_b[i] = B[B_base + t * (nb42 / 16) + e % (D_STATE / 4)];
+        next_c[i] = C[C_base + t * (nb52 / 16) + e % (D_STATE / 4)];
+    }
+    [[unroll]] for (uint i = 0; i < NX; ++i) {
+        const uint e = tid + i * WG_SIZE;
+        const uint t = min(t0 + e / (ROWS / 4), n_tok - 1);
+        const uint q = min(e % (ROWS / 4), (d_head - row0) / 4 - 1);
+        next_x[i] = x[x_base + t * (nb12 / 16) + q];
+    }
+    next_dt = dt[dt_base + min(t0 + gl_SubgroupInvocationID, n_tok - 1) * (nb21 / 4)];
+}
+
+void main() {
+    const uint tid = gl_LocalInvocationIndex;
+    const uint lane = gl_SubgroupInvocationID;
+
+    const uint head = gl_WorkGroupID.y;
+    const uint seq = gl_WorkGroupID.z;
+    const uint row0 = gl_WorkGroupID.x * ROWS;
+    const uint rows = min(ROWS, d_head - row0);
+    const uint group = head / (n_head / n_group);
+    const float a = A[(off3 + head * nb31) / 4];
+
+    const uint B_base = (off4 + seq * nb43 + group * D_STATE * 4) / 16;
+    const uint C_base = (off5 + seq * nb53 + group * D_STATE * 4) / 16;
+    const uint x_base = (off1 + seq * nb13 + (head * d_head + row0) * 4) / 16;
+    const uint dt_base = (off2 + seq * nb22) / 4 + head;
+    const uint stride_y = n_head * d_head;
+    const uint y_base = seq * n_tok * stride_y + head * d_head + row0;
+
+    // Loads of rows past the end return zero; stores past the end of the
+    // rows or tokens are skipped.
+    tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> layout_s = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+    layout_s = setTensorLayoutDimensionNV(layout_s, rows, D_STATE);
+    tensorLayoutNV<2, gl_CooperativeMatrixClampModeConstantNV> layout_y = createTensorLayoutNV(2, gl_CooperativeMatrixClampModeConstantNV);
+    layout_y = setTensorLayoutDimensionNV(layout_y, n_tok, rows);
+    layout_y = setTensorLayoutStrideNV(layout_y, stride_y, 1);
+    tensorViewNV<2, false, 1, 0> transpose = createTensorViewNV(2, false, 1, 0);
+
+    coopmat<float, WG, ROWS, D_STATE, MACC> S;
+    coopMatLoadTensorNV(S, s0, (off0 + uint(ids[off6 / 4 + seq]) * nb03 + head * nb02) / 4 + row0 * D_STATE, sliceTensorLayoutNV(layout_s, 0, ROWS, 0, D_STATE));
+
+    load_chunk(0, B_base, C_base, x_base, dt_base, row0);
+
+    uint buf = 0; // sh_x buffer of the current chunk
+    for (uint t0 = 0; t0 < n_tok; t0 += T) {
+        const uint valid = min(T, n_tok - t0);
+
+        // Decay scan, one token per lane (T is the subgroup size): dts is the
+        // token's dt (0 past the end) and cs_t = sum_{s <= t} dt_s * A is the
+        // log of the decay from the start of the chunk through token t, so
+        // exp(cs_t - cs_s) is the decay from token s to token t and cs_last
+        // covers the whole chunk.
+        // Every subgroup computes the same scan: the X staging below needs
+        // dt_t and cs_t for arbitrary tokens t, and reading them from its own
+        // subgroup with subgroupShuffle avoids a barrier between the scan and
+        // the staging. (The staged data is only read after the barrier
+        // below.) Subgroup 0 also stores cs and exp(cs) for the callbacks,
+        // which run after that barrier.
+        const float dts = lane < valid ? softplus(next_dt) : 0.0;
+        const float cs = subgroupInclusiveAdd(dts * a);
+        const float cs_last = subgroupShuffle(cs, T - 1);
+        if (gl_SubgroupID == 0) {
+            sh_cs[lane] = cs;
+            sh_ecs[lane] = exp(cs);
+        }
+
+        // Stage B and C as fp16, row t holding token t.
+        [[unroll]] for (uint i = 0; i < NB; ++i) {
+            const uint e = tid + i * WG_SIZE;
+            const uint o = (e / (D_STATE / 4)) * D_STRIDE + e % (D_STATE / 4);
+            sh_b[o] = f16vec4(next_b[i]);
+            sh_c[o] = f16vec4(next_c[i]);
+        }
+
+        // Stage X_dt = x * dt_t, the chunk's inputs for y += X_dt^T * M^T, and
+        // X_w = X_dt * exp(cs_last - cs_t), the same inputs decayed from token t
+        // to the end of the chunk, for the state update. next_x[i] holds rows
+        // 4q .. 4q + 3 of token t (see load_chunk), and dt_t and cs_t come from
+        // lane t, which scanned token t. Tokens past the end have dt_t = 0, so
+        // they add nothing.
+        [[unroll]] for (uint i = 0; i < NX; ++i) {
+            const uint e = tid + i * WG_SIZE;
+            const uint t = e / (ROWS / 4), q = e % (ROWS / 4);
+            const float dt_t = subgroupShuffle(dts, t);
+            const float cs_t = subgroupShuffle(cs, t);
+            sh_x[buf][t * ROWS_STRIDE + q] = f16vec4(next_x[i] * dt_t);
+            sh_w[t * ROWS_STRIDE + q] = f16vec4(next_x[i] * (exp(cs_last - cs_t) * dt_t));
+        }
+
+        if (t0 + T < n_tok) {
+            load_chunk(t0 + T, B_base, C_base, x_base, dt_base, row0);
+        }
+
+        coopMatStore(coopmat<float16_t, WG, ROWS, D_STATE, MACC>(S), sh_s, 0, D_STRIDE, ROW);
+        barrier();
+
+        // M = (C * B^T) .* decay [T x T]
+        {
+            coopmat<float, WG, T, T, MACC> cb = coopmat<float, WG, T, T, MACC>(0.0);
+            coopmat<float16_t, WG, T, D_STATE, MUA> c;
+            coopmat<float16_t, WG, D_STATE, T, MUB> b;
+            coopMatLoad(c, sh_c, 0, D_STRIDE, ROW);
+            coopMatLoad(b, sh_b, 0, D_STRIDE, COL);
+            cb = coopMatMulAdd(c, b, cb);
+            coopMatPerElementNV(cb, cb, DecayMask);
+            coopMatStore(coopmat<float16_t, WG, T, T, MACC>(cb), sh_m, 0, T_STRIDE, ROW);
+        }
+
+        // y = exp(cs_t) * (S * C^T) [ROWS x T]
+        coopmat<float, WG, ROWS, T, MACC> y = coopmat<float, WG, ROWS, T, MACC>(0.0);
+        {
+            coopmat<float16_t, WG, ROWS, D_STATE, MUA> s;
+            coopmat<float16_t, WG, D_STATE, T, MUB> c;
+            coopMatLoad(s, sh_s, 0, D_STRIDE, ROW);
+            coopMatLoad(c, sh_c, 0, D_STRIDE, COL);
+            y = coopMatMulAdd(s, c, y);
+        }
+        coopMatPerElementNV(y, y, ScaleCol);
+
+        // S = exp(cs_last) * S + X_w^T * B
+        {
+            coopmat<float16_t, WG, ROWS, T, MUA> w;
+            coopmat<float16_t, WG, T, D_STATE, MUB> b;
+            coopMatLoad(w, sh_w, 0, ROWS_STRIDE, COL);
+            coopMatLoad(b, sh_b, 0, D_STRIDE, ROW);
+            S *= exp(cs_last);
+            S = coopMatMulAdd(w, b, S);
+        }
+
+        barrier();
+
+        // y += X_dt^T * M^T
+        {
+            coopmat<float16_t, WG, ROWS, T, MUA> xm;
+            coopmat<float16_t, WG, T, T, MUB> m;
+            coopMatLoad(xm, sh_x[buf], 0, ROWS_STRIDE, COL);
+            coopMatLoad(m, sh_m, 0, T_STRIDE, COL);
+            y = coopMatMulAdd(xm, m, y);
+        }
+        coopMatStoreTensorNV(y, d, y_base, sliceTensorLayoutNV(layout_y, t0, T, 0, ROWS), transpose);
+        buf ^= 1;
+    }
+
+    coopMatStoreTensorNV(S, d, (s_off + seq * nb03 + head * nb02) / 4 + row0 * D_STATE, sliceTensorLayoutNV(layout_s, 0, ROWS, 0, D_STATE));
+}

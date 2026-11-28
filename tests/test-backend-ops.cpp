@@ -5650,6 +5650,12 @@ struct test_ssm_conv_concat_fusion : public test_case {
 };
 
 // GGML_OP_SSM_SCAN
+//
+// x, B and C are separate tensors, or with xbc_overlap overlapping views of one
+// tensor, or with xbc_graph views of one xBC tensor laid out like the Mamba-2
+// graph: rows [xbc_off | x | B | C | pad], sequence-major with seq_major, and
+// more state slots in s than sequences. s, dt, A and ids are views that start
+// off elements into their tensors.
 struct test_ssm_scan : public test_case {
     const ggml_type type;
 
@@ -5662,9 +5668,15 @@ struct test_ssm_scan : public test_case {
     const bool    xbc_overlap;
     const int64_t K;
     const bool    weak_decay;
+    const bool    xbc_graph;
+    const int64_t off;
+    const int64_t xbc_off;
+    const int64_t pad;
+    const bool    seq_major;
 
     std::string vars() override {
-        return VARS_TO_STR10(type, d_state, head_dim, n_head, n_group, n_seq_tokens, n_seqs, xbc_overlap, K, weak_decay);
+        return VARS_TO_STR15(type, d_state, head_dim, n_head, n_group, n_seq_tokens, n_seqs, xbc_overlap, K, weak_decay,
+                             xbc_graph, off, xbc_off, pad, seq_major);
     }
 
     test_ssm_scan(ggml_type type = GGML_TYPE_F32,
@@ -5676,23 +5688,41 @@ struct test_ssm_scan : public test_case {
             int64_t n_seqs = 32,
             bool xbc_overlap = false,
             int64_t K = 1,
-            bool weak_decay = false)
-        : type(type), d_state(d_state), head_dim(head_dim), n_head(n_head), n_group(n_group), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), xbc_overlap(xbc_overlap), K(K), weak_decay(weak_decay) {}
+            bool weak_decay = false,
+            bool xbc_graph = false,
+            int64_t off = 0,
+            int64_t xbc_off = 0,
+            int64_t pad = 0,
+            bool seq_major = false)
+        : type(type), d_state(d_state), head_dim(head_dim), n_head(n_head), n_group(n_group), n_seq_tokens(n_seq_tokens), n_seqs(n_seqs), xbc_overlap(xbc_overlap), K(K), weak_decay(weak_decay),
+          xbc_graph(xbc_graph), off(off), xbc_off(xbc_off), pad(pad), seq_major(seq_major) {}
 
     double max_nmse_err() override {
         // SSD path (head_dim > 1) uses FP16 intermediates (M matrix, X_dt); Mamba-1 is pure FP32.
         return (head_dim > 1) ? 2e-7 : 1e-7;
     }
 
+    int64_t n_slots() const {
+        return xbc_graph ? n_seqs + 2 : n_seqs;
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
-        ggml_tensor * s   = ggml_new_tensor_4d(ctx, type, d_state,  head_dim,     n_head,       n_seqs);
-        ggml_tensor * dt  = ggml_new_tensor_3d(ctx, type, n_head,   n_seq_tokens, n_seqs);
-        ggml_tensor * A   = ggml_new_tensor_2d(ctx, type, (head_dim > 1) ? 1 : d_state, n_head);
+        const size_t f = ggml_type_size(type);
         ggml_tensor * x;
         ggml_tensor * B;
         ggml_tensor * C;
 
-        if (xbc_overlap) {
+        if (xbc_graph) {
+            const int64_t d_inner = head_dim * n_head;
+            const int64_t row = xbc_off + d_inner + 2 * n_group * d_state + pad;
+            ggml_tensor * xbc = seq_major ? ggml_new_tensor_3d(ctx, type, row, n_seqs, n_seq_tokens)
+                                          : ggml_new_tensor_3d(ctx, type, row, n_seq_tokens, n_seqs);
+            const size_t nb_tok = seq_major ? xbc->nb[2] : xbc->nb[1];
+            const size_t nb_seq = seq_major ? xbc->nb[1] : xbc->nb[2];
+            x = ggml_view_4d(ctx, xbc, head_dim, n_head,  n_seq_tokens, n_seqs, head_dim * f, nb_tok, nb_seq, xbc_off * f);
+            B = ggml_view_4d(ctx, xbc, d_state,  n_group, n_seq_tokens, n_seqs, d_state  * f, nb_tok, nb_seq, (xbc_off + d_inner) * f);
+            C = ggml_view_4d(ctx, xbc, d_state,  n_group, n_seq_tokens, n_seqs, d_state  * f, nb_tok, nb_seq, (xbc_off + d_inner + n_group * d_state) * f);
+        } else if (xbc_overlap) {
             ggml_tensor * xbc = ggml_new_tensor_4d(ctx, type, d_state, n_head, n_seq_tokens, 2 * n_seqs);
             x = ggml_view_4d(ctx, xbc, head_dim, n_head, n_seq_tokens, n_seqs,
                              xbc->nb[1], xbc->nb[2], xbc->nb[3], xbc->nb[3]);
@@ -5705,7 +5735,19 @@ struct test_ssm_scan : public test_case {
             B = ggml_new_tensor_4d(ctx, type, d_state,  n_group, n_seq_tokens, n_seqs);
             C = ggml_new_tensor_4d(ctx, type, d_state,  n_group, n_seq_tokens, n_seqs);
         }
-        ggml_tensor * ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32,  n_seqs);
+
+        const int64_t A_ne0 = (head_dim > 1) ? 1 : d_state;
+        ggml_tensor * s_all   = ggml_new_tensor_1d(ctx, type, off + d_state * head_dim * n_head * n_slots());
+        ggml_tensor * dt_all  = ggml_new_tensor_1d(ctx, type, off + n_head * n_seq_tokens * n_seqs);
+        ggml_tensor * A_all   = ggml_new_tensor_1d(ctx, type, off + A_ne0 * n_head);
+        ggml_tensor * ids_all = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, off + n_seqs);
+        ggml_set_name(A_all, "A");
+        ggml_tensor * s   = ggml_view_4d(ctx, s_all, d_state, head_dim, n_head, n_slots(),
+                                         d_state * f, d_state * head_dim * f, d_state * head_dim * n_head * f, off * f);
+        ggml_tensor * dt  = ggml_view_3d(ctx, dt_all, n_head, n_seq_tokens, n_seqs, n_head * f, n_head * n_seq_tokens * f, off * f);
+        ggml_tensor * A   = ggml_view_2d(ctx, A_all, A_ne0, n_head, A_ne0 * f, off * f);
+        ggml_tensor * ids = ggml_view_1d(ctx, ids_all, n_seqs, off * sizeof(int32_t));
+
         ggml_tensor * out = ggml_ssm_scan(ctx, s, x, dt, A, B, C, ids, K);
         return out;
     }
@@ -5715,21 +5757,23 @@ struct test_ssm_scan : public test_case {
         std::random_device rd;
         std::default_random_engine rng(rd());
         for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
-            if (t->type == GGML_TYPE_I32) {
-                if (ggml_is_view_op(t->op)) { continue; }
-                // ids: permutation of [0..n_seqs)
-                for (int64_t r = 0; r < ggml_nrows(t); r++) {
-                    std::vector<int32_t> data(t->ne[0]);
-                    for (int i = 0; i < t->ne[0]; i++) {
-                        data[i] = i;
-                    }
-                    std::shuffle(data.begin(), data.end(), rng);
-                    ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
-                }
-            } else if (ggml_is_view_op(t->op)) {
+            if (ggml_is_view_op(t->op)) {
                 continue;
-            } else if (t->ne[1] == n_head && t->ne[2] == 1) {
-                // A {1 or d_state, n_head}: negative decay (2-D tensor, ne[2]==1 distinguishes from 3-D/4-D tensors)
+            }
+            if (t->type == GGML_TYPE_I32) {
+                // ids: distinct random state slots
+                std::vector<int32_t> slots(n_slots());
+                for (size_t i = 0; i < slots.size(); i++) {
+                    slots[i] = (int32_t) i;
+                }
+                std::shuffle(slots.begin(), slots.end(), rng);
+                std::vector<int32_t> data(ggml_nelements(t), 0);
+                for (int64_t i = 0; i < n_seqs; i++) {
+                    data[off + i] = slots[i];
+                }
+                ggml_backend_tensor_set(t, data.data(), 0, ggml_nbytes(t));
+            } else if (strcmp(t->name, "A") == 0) {
+                // negative decay
                 init_tensor_uniform(t, weak_decay ? -0.02f : -1.0f, weak_decay ? -0.005f : -0.5f);
             } else {
                 init_tensor_uniform(t);
@@ -13355,6 +13399,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ssm_scan_rollback(GGML_TYPE_F32, 96, 64, 16, 8, 8, 2, /*K=*/3)); // d_state=96 rollback snapshots match prefix states
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 32, 4)); // Mamba-2
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64,  8, 2, 32, 4)); // Falcon-H1
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 8, 2)); // Mamba-2
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 31, 2)); // Mamba-2
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64, 8, 2, 9, 2)); // Falcon-H1
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 128, 4, 4, 16, 2, true)); // x/B/C overlap
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 256, 1)); // Nemotron-9B SSD path
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 128, 1, 512, 1)); // Nemotron-9B SSD multi-chunk (2 aligned chunks)
@@ -13366,6 +13413,25 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 65, 2)); // SSD one chunk + 1-token sequential tail
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 128, 2)); // SSD multi-chunk, no tail (exercises the chunk-to-chunk state handoff)
     test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 128, 2, false, /*K=*/1, /*weak_decay=*/true)); // SSD multi-chunk, carried state not numerically negligible
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, 2048, 1)); // Mamba-2
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64,  8, 2, 300, 2)); // Falcon-H1
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 16, 16, 2, 64, 2)); // head_dim 16
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 48, 16, 2, 64, 2)); // head_dim 48
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 64, 16, 8, 16, 2)); // Nemotron-3-Puzzle
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 48, 16, 8, 16, 2)); // head_dim 48
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 48, 16, 8, 64, 2)); // head_dim 48
+
+    // Mamba-2 with the inputs laid out like the model graph, then with unaligned offsets and strides.
+    for (int64_t n_tok : {4, 16, 100}) {
+        test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, n_tok, 2, false, 1, false, /*xbc_graph=*/true));
+        test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, n_tok, 2, false, 1, false, true, /*off=*/1));        // s, dt, A and ids
+        test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, n_tok, 2, false, 1, false, true, 0, /*xbc_off=*/1)); // x, B and C
+        test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, n_tok, 2, false, 1, false, true, 0, 0, /*pad=*/1));  // token stride
+        test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 64, 16, 2, n_tok, 3, false, 1, false, true, 0, 0, 0, /*seq_major=*/true));
+    }
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 256, 64, 8, 2, 40, 2, false, 1, false, true, 1));        // Falcon-H1
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 128, 80, 8, 1, 40, 2, false, 1, false, true, 1, 4, 4)); // Nemotron-9B
+    test_cases.emplace_back(new test_ssm_scan(GGML_TYPE_F32, 96, 64, 16, 8, 40, 2, false, 1, false, true, 1));        // Nemotron-3-Puzzle
 
     // ssm_scan + cache cpy fusion
     test_cases.emplace_back(new test_ssm_scan_cache_fusion(GGML_TYPE_F32, 128, 64, 16, 2, 4, 1, 4));
