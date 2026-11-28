@@ -297,6 +297,13 @@ json server_chat_convert_responses_to_chatcmpl(const json & response_body) {
         }
     }
 
+    if (response_body.contains("tool_choice")) {
+        const json & choice = response_body.at("tool_choice");
+        if (choice.contains("name") && choice.value("type", json()) == "function") {
+            chatcmpl_body["tool_choice"] = {{"type", "function"}, {"function", {{"name", choice.at("name")}}}};
+        }
+    }
+
     if (response_body.contains("max_output_tokens")) {
         chatcmpl_body.erase("max_output_tokens");
         chatcmpl_body["max_tokens"] = response_body["max_output_tokens"];
