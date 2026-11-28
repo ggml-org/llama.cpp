@@ -1,7 +1,10 @@
 set(TARGET llama-app)
 
 add_executable(${TARGET} llama.cpp download.cpp)
-set_target_properties(${TARGET} PROPERTIES OUTPUT_NAME llama)
+set_target_properties(${TARGET} PROPERTIES
+    OUTPUT_NAME llama
+    PDB_NAME ${TARGET}
+)
 
 target_link_libraries(${TARGET} PRIVATE
     llama-server-impl
