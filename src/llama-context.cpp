@@ -2381,9 +2381,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             }
 
             for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-                const auto & seq_id = ubatch.seq_id[i][0];
-
-                pos_min[seq_id] = std::min(pos_min[seq_id], ubatch.pos[i]);
+                for (int32_t j = 0; j < ubatch.n_seq_id[i]; ++j) {
+                    const auto seq_id = ubatch.seq_id[i][j];
+                    pos_min[seq_id] = std::min(pos_min[seq_id], ubatch.pos[i]);
+                }
             }
 
             for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {

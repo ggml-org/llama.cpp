@@ -118,6 +118,90 @@ struct case_seq_rm_isolated : ctx_test {
     }
 };
 
+struct case_decode_abort : ctx_test {
+    explicit case_decode_abort(bool shared) : shared(shared) {}
+
+    const char * name() const override { return shared ? "abort_shared" : "abort"; }
+
+    const char * description() const override {
+        return "aborted decoding removes failed positions from every affected sequence and can be retried";
+    }
+
+    std::string skip_reason(model_run & mr) const override {
+        if (mr.is_recurrent() || !llama_model_has_decoder(mr.model)) {
+            return "requires an attention-only decoder";
+        }
+        return ctx_test::skip_reason(mr);
+    }
+
+    case_result run(model_run & mr) const override {
+        CTX_REQUIRE(mr.tokens.size() >= 3, "requires at least three input tokens");
+
+        ctx_opts opts;
+        opts.n_ctx      = 256;
+        opts.n_batch    = 8;
+        opts.n_ubatch   = 8;
+        opts.n_seq_max  = 2;
+        opts.kv_unified = 1;
+
+        for (llama_pos n_prefix : { 0, 1 }) {
+            auto ctx = mr.ctx(opts);
+            auto ref = mr.ctx(opts);
+            CTX_REQUIRE(ctx && ref, "failed to create contexts");
+
+            const int n_seq = shared ? 2 : 1;
+            if (n_prefix > 0) {
+                for (llama_seq_id seq = 0; seq < n_seq; ++seq) {
+                    CTX_REQUIRE(decode_seq(ctx.get(), mr.tokens, 0, n_prefix, seq, false), "prefix decode failed");
+                    CTX_REQUIRE(decode_seq(ref.get(), mr.tokens, 0, n_prefix, seq, false), "reference prefix decode failed");
+                }
+            }
+
+            common_batch batch(ctx.get());
+            common_batch batch_ref(ref.get());
+            for (auto * cur : { &batch, &batch_ref }) {
+                cur->add(mr.tokens[n_prefix], n_prefix, 0, true);
+                if (shared) {
+                    CTX_REQUIRE(cur->add_seq(0, 1), "failed to share the token");
+                }
+            }
+
+            bool aborted = false;
+            llama_set_abort_callback(ctx.get(), [](void * data) {
+                *static_cast<bool *>(data) = true;
+                return true;
+            }, &aborted);
+            const int status = llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get());
+            llama_set_abort_callback(ctx.get(), nullptr, nullptr);
+
+            if (!aborted && status == 0) {
+                return case_result::skip("backend did not invoke the abort callback; run with -ngl 0");
+            }
+            CTX_REQUIRE(aborted && status == 2, "decode was not aborted");
+
+            const auto mem = llama_get_memory(ctx.get());
+            for (llama_seq_id seq = 0; seq < n_seq; ++seq) {
+                CTX_REQUIRE(llama_memory_seq_pos_min(mem, seq) == (n_prefix > 0 ? 0 : -1), "abort changed the prefix start");
+                CTX_REQUIRE(llama_memory_seq_pos_max(mem, seq) == n_prefix - 1, "abort left failed positions or removed the prefix");
+            }
+
+            CTX_REQUIRE(llama_process(ctx.get(), LLAMA_PROCESS_TYPE_DECODE, batch.get()) == 0, "retry failed");
+            CTX_REQUIRE(llama_process(ref.get(), LLAMA_PROCESS_TYPE_DECODE, batch_ref.get()) == 0, "reference decode failed");
+            for (llama_seq_id seq = 0; seq < n_seq; ++seq) {
+                CTX_REQUIRE(decode_one(ctx.get(), mr.tokens[n_prefix + 1], n_prefix + 1, seq), "continuation failed");
+                CTX_REQUIRE(decode_one(ref.get(), mr.tokens[n_prefix + 1], n_prefix + 1, seq), "reference continuation failed");
+                std::vector<float> actual, expected;
+                CTX_REQUIRE(get_current_logits(ctx.get(), actual) && get_current_logits(ref.get(), expected), "missing logits");
+                CTX_REQUIRE(compare_logits(actual.data(), expected.data(), actual.size()).nmse() <= NMSE_THRESHOLD, "retry changed the logits");
+            }
+        }
+
+        return case_result::pass();
+    }
+
+    bool shared;
+};
+
 // - load the state saved by the baseline case
 // - replay its last token
 // - generate again and compare against the baseline logits
@@ -849,6 +933,8 @@ std::vector<ctx_test_ptr> make_kv_cases() {
 
     cases.push_back(std::make_unique<case_baseline>());
     cases.push_back(std::make_unique<case_seq_rm_isolated>());
+    cases.push_back(std::make_unique<case_decode_abort>(false));
+    cases.push_back(std::make_unique<case_decode_abort>(true));
     cases.push_back(std::make_unique<case_state_load>());
     cases.push_back(std::make_unique<case_seq_cp>(false));
     cases.push_back(std::make_unique<case_seq_cp>(true));
