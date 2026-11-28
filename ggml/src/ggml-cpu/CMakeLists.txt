@@ -81,6 +81,15 @@ function(ggml_add_cpu_backend_variant_impl tag_name)
         target_link_libraries(${GGML_CPU_NAME} PRIVATE ${GGML_OPENMP_TARGET_C} ${GGML_OPENMP_TARGET_CXX})
     endif()
 
+    if (GGML_MKL_FP16)
+        list(APPEND GGML_CPU_SOURCES ggml-cpu/fp16-mkl.cpp ggml-cpu/fp16-mkl.h)
+        target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_MKL_FP16)
+        target_include_directories(${GGML_CPU_NAME} PRIVATE ${GGML_MKL_FP16_INCLUDE_DIR})
+        target_link_libraries(${GGML_CPU_NAME} PRIVATE ${GGML_MKL_FP16_LIBRARY} Threads::Threads ${CMAKE_DL_LIBS} m)
+        get_filename_component(_fp16_mkl_libdir "${GGML_MKL_FP16_LIBRARY}" DIRECTORY)
+        set_property(TARGET ${GGML_CPU_NAME} APPEND PROPERTY BUILD_RPATH "${_fp16_mkl_libdir}")
+    endif()
+
     if (GGML_LLAMAFILE)
         target_compile_definitions(${GGML_CPU_NAME} PRIVATE GGML_USE_LLAMAFILE)
 
