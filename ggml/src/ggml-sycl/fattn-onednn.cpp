@@ -127,6 +127,7 @@ bool ggml_sycl_flash_attn_ext_onednn_supported(const ggml_tensor * dst, bool use
 #if GGML_SYCL_DNNL
 
 #include "dnnl.hpp"
+#include "dnnl_version.h"
 #include "dnnl_sycl.hpp"
 #include "oneapi/dnnl/dnnl_graph.hpp"   // graph API lives only under oneapi/dnnl/, not at the include root
 
@@ -163,6 +164,17 @@ static void permute_sdpa_out_sycl(const sycl::half * out, float * dst,
         dst[e + h * d + t * d * H + b * d * H * q] = (float) out[gid];
     });
 }
+
+#if DNNL_VERSION_MAJOR == 3 && DNNL_VERSION_MINOR < 14
+// oneDNN < 3.14 keys its SDPA kernel cache on uninitialised stack bytes, so an equal problem can recompile (~1 s).
+// Fixed by https://github.com/uxlfoundation/oneDNN/pull/5656; remove once the minimum oneDNN is 3.14.
+__attribute__((noinline)) static void ggml_sycl_dnnl_clear_stack() {
+    volatile unsigned char buf[64 * 1024];   // 2x the smallest size measured to work
+    for (size_t i = sizeof(buf); i > 0; --i) {
+        buf[i - 1] = 0;
+    }
+}
+#endif
 
 // Build + compile the contiguous-input GQA SDPA graph (MatMul->Divide->[Add]->SoftMax->MatMul), f32 out.
 // The Add node is only present with a mask.
@@ -232,6 +244,9 @@ static sdpa_partition build_sdpa(const engine & eng, int H, int Hkv, int q, int 
     }
     E.ins      = parts[0].get_input_ports();
     E.out      = parts[0].get_output_ports()[0];
+#if DNNL_VERSION_MAJOR == 3 && DNNL_VERSION_MINOR < 14
+    ggml_sycl_dnnl_clear_stack();
+#endif
     E.cp       = parts[0].compile(E.ins, {E.out}, eng);
     E.out      = E.cp.query_logical_tensor(E.out.get_id());
     E.id_q     = query.get_id(); E.id_k = key.get_id(); E.id_v = value.get_id();
