@@ -274,6 +274,9 @@ typedef decltype(kernel_reglu<float>) kernel_reglu_t;
 
 template [[host_name("kernel_reglu_f32")]] kernel kernel_reglu_t kernel_reglu<float>;
 template [[host_name("kernel_reglu_f16")]] kernel kernel_reglu_t kernel_reglu<half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_reglu_bf16")]] kernel kernel_reglu_t kernel_reglu<bfloat>;
+#endif
 
 template<typename T>
 kernel void kernel_geglu(
@@ -303,6 +306,9 @@ typedef decltype(kernel_geglu<float>) kernel_geglu_t;
 
 template [[host_name("kernel_geglu_f32")]] kernel kernel_geglu_t kernel_geglu<float>;
 template [[host_name("kernel_geglu_f16")]] kernel kernel_geglu_t kernel_geglu<half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_geglu_bf16")]] kernel kernel_geglu_t kernel_geglu<bfloat>;
+#endif
 
 template<typename T>
 kernel void kernel_swiglu(
@@ -332,6 +338,9 @@ typedef decltype(kernel_swiglu<float>) kernel_swiglu_t;
 
 template [[host_name("kernel_swiglu_f32")]] kernel kernel_swiglu_t kernel_swiglu<float>;
 template [[host_name("kernel_swiglu_f16")]] kernel kernel_swiglu_t kernel_swiglu<half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_swiglu_bf16")]] kernel kernel_swiglu_t kernel_swiglu<bfloat>;
+#endif
 
 template<typename T>
 kernel void kernel_swiglu_oai(
@@ -421,6 +430,9 @@ typedef decltype(kernel_geglu_erf<float>) kernel_geglu_erf_t;
 
 template [[host_name("kernel_geglu_erf_f32")]] kernel kernel_geglu_erf_t kernel_geglu_erf<float>;
 template [[host_name("kernel_geglu_erf_f16")]] kernel kernel_geglu_erf_t kernel_geglu_erf<half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_geglu_erf_bf16")]] kernel kernel_geglu_erf_t kernel_geglu_erf<bfloat>;
+#endif
 
 template<typename T>
 kernel void kernel_geglu_quick(
@@ -450,3 +462,6 @@ typedef decltype(kernel_geglu_quick<float>) kernel_geglu_quick_t;
 
 template [[host_name("kernel_geglu_quick_f32")]] kernel kernel_geglu_quick_t kernel_geglu_quick<float>;
 template [[host_name("kernel_geglu_quick_f16")]] kernel kernel_geglu_quick_t kernel_geglu_quick<half>;
+#if defined(GGML_METAL_HAS_BF16)
+template [[host_name("kernel_geglu_quick_bf16")]] kernel kernel_geglu_quick_t kernel_geglu_quick<bfloat>;
+#endif
