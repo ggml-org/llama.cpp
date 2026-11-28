@@ -195,5 +195,20 @@ size_t moe_m2_gemm_kernel_i8i5(size_t           blk_len,
                                size_t           count_n,
                                size_t           k_blks,
                                size_t           ldc);
+
+// flash attention tiles on vfwmadot (fp16 x fp16 -> fp32)
+void flash_attn_qk_tile_f16(float *          kq,
+                            int64_t          ld_kq,
+                            const _Float16 * qp,
+                            int64_t          q_c_stride,
+                            const _Float16 * kp,
+                            int64_t          dk);
+
+void flash_attn_pv_tile_f16(float *          vkq,
+                            const float *    ms,
+                            const float *    p,
+                            int64_t          ld_p,
+                            const _Float16 * vp,
+                            int64_t          dv);
 }  // namespace ime2
 }  // namespace spacemit_kernels
