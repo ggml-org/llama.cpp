@@ -22,9 +22,22 @@ void ggml_zdnn_load_weights(ggml_backend_zdnn_buffer * buffer, const ggml_tensor
 
 bool ggml_zdnn_ztensor_in_alloc(const ggml_tensor * tensor);
 
+void ggml_zdnn_q_weights_desc(zdnn_tensor_desc * pre_tfm_desc,
+                              zdnn_tensor_desc * tfm_desc,
+                        const ggml_tensor      * tensor);
+
 void ggml_zdnn_init_tensor_desc(zdnn_tensor_desc & pre_tfm_desc,
                                 zdnn_tensor_desc & tfm_desc,
                           const ggml_tensor      * tensor);
+
+// how quantized weights are stacked in their ztensor, see ggml_zdnn_q_weights_desc
+struct ggml_zdnn_q_layout {
+    int64_t n_stacks;  // n_groups per matrix, times the matrices along ne2
+    int64_t n_groups;  // groups along ne0 of each matrix
+    int64_t gs;        // values per group, all of ne0 when not stacked
+};
+
+ggml_zdnn_q_layout ggml_zdnn_q_weights_layout(const ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor);
 
 void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor);
 

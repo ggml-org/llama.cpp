@@ -82,21 +82,20 @@ struct ggml_backend_zdnn_context {
 // Scratch buffers
 //
 
-// the ztensor uses the memory of scratch, so scratch must outlive it
-static inline void ggml_zdnn_init_scratch_ztensor(ggml_backend_zdnn_context     * ctx,
-                                                  zdnn_tensor_desc              * pre_tfm_desc,
-                                                  zdnn_tensor_desc              * tfm_desc,
-                                                  zdnn_ztensor                  * ztensor,
-                                                  ggml_zdnn_pool_alloc<uint8_t> & scratch) {
-
-    const uint64_t size = zdnn_getsize_ztensor(tfm_desc);
+// the ztensor uses the memory of scratch buffer, so scratch buffer must outlive it
+// the caller takes buffer from the pool before the workers start, so workers can call this
+static inline void ggml_zdnn_init_scratch_ztensor(zdnn_tensor_desc * pre_tfm_desc,
+                                                  zdnn_tensor_desc * tfm_desc,
+                                                  zdnn_ztensor     * ztensor,
+                                                  void             * buffer) {
 
     zdnn_init_quantized_ztensor(pre_tfm_desc, tfm_desc, 1.0f, 0.0f, ztensor);
-    ztensor->buffer      = scratch.alloc(ctx->pool, size);
-    ztensor->buffer_size = size;
+    ztensor->buffer      = buffer;
+    ztensor->buffer_size = zdnn_getsize_ztensor(tfm_desc);
 }
 
-// same as ggml_zdnn_init_scratch_ztensor, for a DLFLOAT16 ztensor
+// the DLFLOAT16 ztensor uses the memory of scratch buffer, so scratch buffer must outlive it
+// scratch is taken from the pool here, and the pool is not thread safe, so only the main thread can call this
 static inline void ggml_zdnn_init_scratch_ztensor_dlf16(ggml_backend_zdnn_context     * ctx,
                                                         zdnn_tensor_desc              * pre_tfm_desc,
                                                         zdnn_tensor_desc              * tfm_desc,
