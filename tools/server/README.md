@@ -1320,6 +1320,18 @@ In *router mode* the query param `?model={model_id}` has to be set. This endpoin
 }
 ```
 
+### POST `/prompt-cache/clear`: Clear the shared RAM prompt cache.
+
+Available in single-model inference mode. The operation clears the entries stored by `--cache-ram`. Slot state stays available for reuse. To start a test from a cold slot, erase that slot as well and wait for both calls to complete before sending a new inference request.
+
+**Response format**
+
+```json
+{
+    "success": true
+}
+```
+
 ### GET `/lora-adapters`: Get list of all LoRA adapters
 
 This endpoint returns the loaded LoRA adapters. You can add adapters using `--lora` when starting the server, for example: `--lora my_adapter_1.gguf --lora my_adapter_2.gguf ...`

@@ -3343,6 +3343,16 @@ private:
                     res->n_erased = n_erased;
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_PROMPT_CACHE_CLEAR:
+                {
+                    if (prompt_cache) {
+                        prompt_cache->states.clear();
+                    }
+
+                    auto res = std::make_unique<server_task_result_prompt_cache_clear>();
+                    res->id = task.id;
+                    queue_results.send(std::move(res));
+                } break;
             case SERVER_TASK_TYPE_GET_LORA:
                 {
                     // TODO @ngxson : make lora_adapters a dedicated member of server_context
@@ -5873,6 +5883,30 @@ void server_routes::init_routes() {
         }
 
         res->error(format_error_response("Invalid action", ERROR_TYPE_INVALID_REQUEST));
+        return res;
+    };
+
+    this->post_prompt_cache_clear = [this](const server_http_req & req) {
+        auto res = create_response();
+        auto & rd = res->rd;
+        {
+            server_task task(SERVER_TASK_TYPE_PROMPT_CACHE_CLEAR);
+            task.id = rd.get_new_id();
+            rd.post_task(std::move(task));
+        }
+
+        auto result = rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        res->ok(result->to_json());
         return res;
     };
 

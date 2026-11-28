@@ -182,6 +182,44 @@ def test_slot_restore_draft_state():
     assert timings[0]["draft_n_accepted"] == timings[1]["draft_n_accepted"]
 
 
+@pytest.mark.parametrize("clear_shared_cache", [False, True])
+def test_prompt_cache_clear(clear_shared_cache: bool):
+    server.n_slots = 1
+    server.n_ctx = 128
+    server.n_predict = 8
+    server.cache_ram = 64
+    server.start()
+
+    first = {
+        "prompt": "Once upon a time, a little fox walked through the forest. " * 3,
+        "cache_prompt": True,
+    }
+    second = {
+        "prompt": "Across the ocean, a captain watched the waves from her ship. " * 3,
+        "cache_prompt": True,
+    }
+    res = server.make_request("POST", "/completion", data=first)
+    assert res.status_code == 200
+    prompt_tokens = res.body["timings"]["prompt_n"]
+
+    res = server.make_request("POST", "/completion", data=second)
+    assert res.status_code == 200
+    res = server.make_request("POST", "/slots/0?action=erase")
+    assert res.status_code == 200
+    assert res.body["n_erased"] > 0
+
+    if clear_shared_cache:
+        res = server.make_request("POST", "/prompt-cache/clear")
+        assert res.status_code == 200
+        assert res.body["success"] is True
+
+    res = server.make_request("POST", "/completion", data=first)
+    assert res.status_code == 200
+    expected_cached = 0 if clear_shared_cache else prompt_tokens - 1
+    assert res.body["timings"]["cache_n"] == expected_cached
+    assert res.body["timings"]["prompt_n"] == prompt_tokens - expected_cached
+
+
 def test_slot_erase():
     global server
     server.start()

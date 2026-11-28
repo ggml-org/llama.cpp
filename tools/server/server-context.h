@@ -117,6 +117,7 @@ struct server_routes {
     server_http_context::handler_t get_metrics;
     server_http_context::handler_t get_slots;
     server_http_context::handler_t post_slots;
+    server_http_context::handler_t post_prompt_cache_clear;
     server_http_context::handler_t get_props;
     server_http_context::handler_t post_props;
     server_http_context::handler_t post_infill;
