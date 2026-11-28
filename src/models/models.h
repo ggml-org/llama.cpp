@@ -2705,7 +2705,7 @@ struct llama_model_inkling2_loop : public llama_model_inkling2 {
     void post_arch_tensors(llama_model_loader & ml) override;
 
     int n_layer_phys() const override { return n_phys; }
-    int layer_phys(int il) const;
+    int layer_phys(int il) const override;
 
     int      n_phys     = 0;
     uint32_t core_start = 0;

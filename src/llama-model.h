@@ -1060,6 +1060,14 @@ struct llama_model {
     // apply Hadamard transform to the lightning indexer keys
     virtual bool lid_k_hdmd() const { return false; }
 
+    // the layer whose weights cache slot il uses
+    // looped architectures run some layers more than once and give each later pass its own cache slot
+    virtual int layer_phys(int il) const { return il; }
+
+    // number of layers that hold weights, the unit of n_gpu_layers and tensor_split
+    // cache slots that alias another layer follow the device of that layer
+    int n_layer_offload() const;
+
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
 
     virtual void load_stats  (llama_model_loader & ml) = 0;
