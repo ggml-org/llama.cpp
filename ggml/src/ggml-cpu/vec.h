@@ -73,6 +73,7 @@ void ggml_vec_dot_f16(int n, float * GGML_RESTRICT s, size_t bs, ggml_fp16_t * G
 void ggml_vec_dot_f16_f32(int n, float * GGML_RESTRICT s, size_t bs, const ggml_fp16_t * GGML_RESTRICT x, size_t bx, const float * GGML_RESTRICT y, size_t by, int nrc);
 
 void ggml_vec_silu_f32(const int n, float * y, const float * x);
+void ggml_vec_exp_f32(const int n, float * y, const float * x);
 ggml_float ggml_vec_cvar_f32(const int n, float * y, const float * x, const float mean); //it will also center y ( y = y - mean )
 ggml_float ggml_vec_soft_max_f32(const int n, float * y, const float * x, float max);
 ggml_float ggml_vec_log_soft_max_f32(const int n, float * y, const float * x, float max);
@@ -982,7 +983,6 @@ inline static void ggml_vec_hardsigmoid_f16 (const int n, ggml_fp16_t * y, const
         y[i] = GGML_CPU_FP32_TO_FP16(fminf(1.0f, fmaxf(0.0f, (GGML_CPU_FP16_TO_FP32(x[i]) + 3.0f) / 6.0f)));
     }
 }
-inline static void ggml_vec_exp_f32 (const int n, float * y, const float * x) { for (int i = 0; i < n; ++i) y[i] = expf(x[i]); }
 inline static void ggml_vec_exp_f16 (const int n, ggml_fp16_t * y, const ggml_fp16_t * x) {
     for (int i = 0; i < n; ++i) {
         y[i] = GGML_CPU_FP32_TO_FP16(expf(GGML_CPU_FP16_TO_FP32(x[i])));

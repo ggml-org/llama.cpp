@@ -497,6 +497,47 @@ void ggml_vec_silu_f32(const int n, float * y, const float * x) {
     }
 }
 
+void ggml_vec_exp_f32(const int n, float * y, const float * x) {
+    int i = 0;
+#if defined(__AVX512F__) && defined(__AVX512DQ__)
+    for (; i + 15 < n; i += 16) {
+        _mm512_storeu_ps(y + i, ggml_v_expf(_mm512_loadu_ps(x + i)));
+    }
+#elif defined(__AVX2__) && defined(__FMA__)
+    for (; i + 7 < n; i += 8) {
+        _mm256_storeu_ps(y + i, ggml_v_expf(_mm256_loadu_ps(x + i)));
+    }
+#elif defined(__SSE2__)
+    for (; i + 3 < n; i += 4) {
+        _mm_storeu_ps(y + i, ggml_v_expf(_mm_loadu_ps(x + i)));
+    }
+#elif defined(__ARM_FEATURE_SVE) && defined(__aarch64__)
+    const int vlen = svcntw();
+    for (; i < n; i += vlen) {
+        const svbool_t pg = svwhilelt_b32_s32(i, n);
+        svst1_f32(pg, y + i, ggml_v_expf(pg, svld1_f32(pg, x + i)));
+    }
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+    for (; i + 3 < n; i += 4) {
+        vst1q_f32(y + i, ggml_v_expf(vld1q_f32(x + i)));
+    }
+#elif defined(__VXE__) || defined(__VXE2__)
+    for (; i + 3 < n; i += 4) {
+        vec_xst(ggml_v_expf(vec_xl(0, x + i)), 0, y + i);
+    }
+#elif defined(__riscv_v)
+    for (int vl; i < n; i += vl) {
+        vl = __riscv_vsetvl_e32m2(n - i);
+        vfloat32m2_t vx = __riscv_vle32_v_f32m2(&x[i], vl);
+        vfloat32m2_t vy = ggml_v_expf_m2(vx, vl);
+        __riscv_vse32_v_f32m2(&y[i], vy, vl);
+    }
+#endif
+    for (; i < n; ++i) {
+        y[i] = expf(x[i]);
+    }
+}
+
 void ggml_vec_swiglu_f32(const int n, float * y, const float * x, const float * g) {
     int i = 0;
 #if defined(__AVX512F__) && defined(__AVX512DQ__)
