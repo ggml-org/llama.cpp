@@ -65,6 +65,46 @@ def test_with_and_without_draft():
     assert res.body["tokens"] == tokens_no_draft
 
 
+def test_stop_inside_draft_same_cache_as_without_draft():
+    global server
+    prompt = "I believe the meaning of life is"
+    request = {
+        "prompt": prompt,
+        "temperature": 0.0,
+        "n_predict": 32,
+    }
+
+    def get_cache_state(content):
+        res = []
+        for word in dict.fromkeys(content.split()):
+            stopped = server.make_request("POST", "/completion", data={**request, "stop": [" " + word]})
+            assert stopped.status_code == 200
+            # the next request continues the text, so it reuses the tokens cached by the stopped one
+            nxt = server.make_request("POST", "/completion", data={**request, "prompt": prompt + content, "n_predict": 1})
+            assert nxt.status_code == 200
+            res.append((word, stopped.body["tokens_cached"], nxt.body["timings"]["cache_n"]))
+        return res
+
+    server.model_draft = None  # disable draft model
+    server.spec_type = None
+    server.start()
+    res = server.make_request("POST", "/completion", data=request)
+    assert res.status_code == 200
+    content = res.body["content"]
+    state_no_draft = get_cache_state(content)
+    server.stop()
+
+    create_server()
+    server.start()
+    res = server.make_request("POST", "/completion", data=request)
+    assert res.status_code == 200
+    assert res.body["content"] == content
+    assert res.body["timings"]["draft_n_accepted"] > 0
+    state_draft = get_cache_state(content)
+
+    assert state_draft == state_no_draft
+
+
 def test_different_draft_min_draft_max():
     global server
     test_values = [
