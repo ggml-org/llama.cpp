@@ -442,7 +442,8 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
 
     switch (op->op) {
         case GGML_OP_FLASH_ATTN_EXT:
-            return ggml_validate_flash_attn_ext_indexed_bias(op);
+            // Q is read as F32 (a BF16 Q is not supported yet)
+            return op->src[0]->type == GGML_TYPE_F32 && ggml_validate_flash_attn_ext_indexed_bias(op);
         case GGML_OP_CPY:
         case GGML_OP_SET_ROWS:
             return
@@ -487,9 +488,86 @@ static bool ggml_backend_cpu_device_supports_op(ggml_backend_dev_t dev, const st
                     ((src0->type == GGML_TYPE_F16 || ggml_is_quantized(src0->type)) && src0->ne[2] == src1->ne[2] && src0->ne[3] == src1->ne[3])) &&
                 src1->type == GGML_TYPE_F32 && op->type == GGML_TYPE_F32;
         case GGML_OP_CONV_2D:
-            return ggml_is_contiguous(op->src[0]);
+            return ggml_is_contiguous(op->src[0]) &&
+                   (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) && src1->type == GGML_TYPE_F32;
+        case GGML_OP_CONV_TRANSPOSE_1D:
+        case GGML_OP_CONV_TRANSPOSE_2D:
+        case GGML_OP_CONV_2D_DW:
+        case GGML_OP_CONV_3D:
+            // the kernel is F32 or F16, the input is read as F32
+            return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) && src1->type == GGML_TYPE_F32;
+        case GGML_OP_IM2COL:
+            // the result type picks the kernel, and only the F16 one reads an F16 input
+            return (op->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32) ||
+                   (op->type == GGML_TYPE_F16 && (src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_F16));
+        case GGML_OP_IM2COL_3D:
+            return (op->type == GGML_TYPE_F32 || op->type == GGML_TYPE_F16) && src1->type == GGML_TYPE_F32;
         case GGML_OP_SSM_SCAN:
+            // every input except ids is read as F32
+            for (int i = 0; i < 6; ++i) {
+                if (op->src[i]->type != GGML_TYPE_F32) {
+                    return false;
+                }
+            }
             return ggml_get_op_params_i32(op, 0) == 1 || op->src[3]->ne[0] == 1;
+        case GGML_OP_ADD:
+        case GGML_OP_SUB:
+        case GGML_OP_MUL:
+        case GGML_OP_DIV:
+            // a BF16 src1 only with a BF16 src0 and result (no F32 + BF16 kernel yet, e.g. for a residual add)
+            return src1->type != GGML_TYPE_BF16 || (src0->type == GGML_TYPE_BF16 && op->type == GGML_TYPE_BF16);
+        case GGML_OP_RMS_NORM:
+            return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16) && op->type == src0->type;
+        case GGML_OP_SOFT_MAX:
+        case GGML_OP_ARGSORT:
+        case GGML_OP_TOP_K:
+        case GGML_OP_SUM_ROWS:
+        case GGML_OP_MEAN:
+        case GGML_OP_ARGMAX:
+        case GGML_OP_REPEAT_BACK:
+        case GGML_OP_NORM:
+        case GGML_OP_GROUP_NORM:
+        case GGML_OP_L2_NORM:
+        case GGML_OP_PAD:
+        case GGML_OP_ROLL:
+        case GGML_OP_TIMESTEP_EMBEDDING:
+        case GGML_OP_ADD_REL_POS:
+            // the kernels take an F32 src0 only
+            return src0->type == GGML_TYPE_F32;
+        case GGML_OP_ADD_ID:
+            return src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32;
+        case GGML_OP_SET:
+            return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_I32) && src1->type == src0->type;
+        case GGML_OP_COUNT_EQUAL:
+            return src0->type == GGML_TYPE_I32 && src1->type == GGML_TYPE_I32;
+        case GGML_OP_SILU_BACK:
+        case GGML_OP_SIGMOID_BACK:
+            return (src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16) && src1->type == src0->type;
+        case GGML_OP_POOL_1D:
+        case GGML_OP_POOL_2D:
+            return src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16;
+        case GGML_OP_POOL_2D_BACK:
+            // the gradient is read as F32, the forward input only by MAX (as F32)
+            return src0->type == GGML_TYPE_F32 && (src1->type == GGML_TYPE_F32 || ggml_get_op_params_i32(op, 0) == GGML_OP_POOL_AVG);
+        case GGML_OP_GET_REL_POS:
+            // the result is F16, the values are copied without conversion
+            return src0->type == GGML_TYPE_F16;
+        case GGML_OP_RWKV_WKV6:
+        case GGML_OP_GATED_LINEAR_ATTN:
+        case GGML_OP_RWKV_WKV7:
+        case GGML_OP_RMS_NORM_BACK:
+        case GGML_OP_SSM_CONV:
+        case GGML_OP_CROSS_ENTROPY_LOSS:
+        case GGML_OP_CROSS_ENTROPY_LOSS_BACK:
+        case GGML_OP_OPT_STEP_ADAMW:
+        case GGML_OP_OPT_STEP_SGD:
+            // the kernels read every input as F32
+            for (int i = 0; i < GGML_MAX_SRC && op->src[i]; ++i) {
+                if (op->src[i]->type != GGML_TYPE_F32) {
+                    return false;
+                }
+            }
+            return true;
         default:
             return true;
     }

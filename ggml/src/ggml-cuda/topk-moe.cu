@@ -505,6 +505,11 @@ bool ggml_cuda_should_use_topk_moe(const ggml_tensor * gating_op,
         return false;
     }
 
+    // the fused kernel reads and writes F32 only
+    if (weights->type != GGML_TYPE_F32 || logits->type != GGML_TYPE_F32) {
+        return false;
+    }
+
     if (gating_op->op == GGML_OP_SOFT_MAX) {
         const ggml_tensor * softmax  = gating_op;
         float               scale    = 1.0f;

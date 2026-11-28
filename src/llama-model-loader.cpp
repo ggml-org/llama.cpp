@@ -1146,6 +1146,11 @@ static bool weight_buft_supported(const llama_hparams & hparams, ggml_tensor * w
             {
                 op_tensor = ggml_scale(ctx, w, 1.0f);
             } break;
+        case GGML_OP_CPY:
+            {
+                // w is read through views (ggml_cont) and cast to F32 if it is not F32
+                op_tensor = ggml_cast(ctx, w, GGML_TYPE_F32);
+            } break;
         default:
             GGML_ABORT("%s: missing test for op %s for tensor %s", __func__, ggml_op_name(op), w->name);
     }
@@ -1407,7 +1412,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
                     LLAMA_LOG_DEBUG("tensor %s (%zu MiB %s) buffer type overridden to %s\n",
                             tensor_name.c_str(),
                             ggml_nbytes(t_meta) / 1024 / 1024, ggml_type_name(t_meta->type),
-                            ggml_backend_buft_name(buft));
+                            buft ? ggml_backend_buft_name(buft) : "none");
                     break;
                 }
             }
