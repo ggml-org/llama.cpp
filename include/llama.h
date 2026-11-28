@@ -1147,6 +1147,7 @@ extern "C" {
     // in the order they have appeared in the batch.
     // Rows: number of tokens for which llama_batch.logits[i] != 0
     // Cols: n_vocab
+    // May return NULL for a backend-sampled row not read before a later llama_set_sampler() call.
     // TODO: deprecate in favor of llama_get_logits_ith() (ref: https://github.com/ggml-org/llama.cpp/pull/14853#issuecomment-3113143522)
     LLAMA_API float * llama_get_logits(struct llama_context * ctx);
 
@@ -1257,6 +1258,10 @@ extern "C" {
     // Returns NULL if no candidates were sampled.
     LLAMA_API llama_token * llama_get_sampled_candidates_ith      (struct llama_context * ctx, int32_t i);
     LLAMA_API uint32_t      llama_get_sampled_candidates_count_ith(struct llama_context * ctx, int32_t i);
+
+    // Full-vocabulary logits for the ith token, also when a backend sampler ran for it. Valid until the next decode.
+    // Returns NULL for invalid ids, and may return NULL for a backend-sampled row not read before a later llama_set_sampler() call.
+    LLAMA_API float * llama_get_raw_logits_ith(struct llama_context * ctx, int32_t i);
 
     //
     // Vocab

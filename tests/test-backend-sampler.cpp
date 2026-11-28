@@ -1582,6 +1582,80 @@ static void test_set_sampler(const test_params & params) {
     printf("backend set sampler test PASSED\n");
 }
 
+static int n_sched_reserve = 0;
+
+static void count_sched_reserve(ggml_log_level /*level*/, const char * text, void * /*user_data*/) {
+    if (strstr(text, "sched_reserve: reserving ...") != nullptr) {
+        n_sched_reserve++;
+    }
+    fputs(text, stderr);
+}
+
+static void test_set_sampler_reserve(const test_params & params) {
+    const int seq_id = 0;
+    const auto * vocab = llama_model_get_vocab(params.model.get());
+
+    auto first_token = [&](const std::string & piece) {
+        std::vector<llama_token> tokens(16);
+        llama_tokenize(vocab, piece.c_str(), piece.size(), tokens.data(), tokens.size(), false, false);
+        return tokens[0];
+    };
+    const llama_token token_a = first_token("World");
+    const llama_token token_b = first_token("Hello");
+    GGML_ASSERT(token_a != token_b);
+
+    // chains of the same shape that sample different tokens (the bias wins over any logit)
+    auto make_chain = [&](llama_token token, int32_t top_k) {
+        llama_logit_bias bias = { token, +1000.0f };
+        llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
+        llama_sampler_chain_add(chain, llama_sampler_init_logit_bias(llama_vocab_n_tokens(vocab), 1, &bias));
+        if (top_k > 0) {
+            llama_sampler_chain_add(chain, llama_sampler_init_top_k(top_k));
+        }
+        llama_sampler_chain_add(chain, llama_sampler_init_greedy());
+        return llama_sampler_ptr(chain);
+    };
+
+    llama_sampler_ptr chain_a = make_chain(token_a, 0);
+    std::vector<llama_sampler_seq_config> backend_sampler_configs = {{ seq_id, chain_a.get() }};
+    test_context test_ctx(params, backend_sampler_configs);
+    llama_context * ctx = test_ctx.ctx.get();
+
+    llama_log_set(count_sched_reserve, nullptr);
+
+    GGML_ASSERT(test_ctx.decode({{seq_id, "Hello"}}));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == token_a);
+    GGML_ASSERT(test_ctx.decode_token(token_a, seq_id));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == token_a);
+    const int n_reserve = n_sched_reserve;
+
+    // a new chain of the same shape does not need a new reserve
+    llama_set_sampler(ctx, seq_id, nullptr);
+    chain_a.reset();
+    llama_sampler_ptr chain_b = make_chain(token_b, 0);
+    llama_set_sampler(ctx, seq_id, chain_b.get());
+    GGML_ASSERT(test_ctx.decode_token(token_a, seq_id));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == token_b);
+    GGML_ASSERT(n_sched_reserve == n_reserve);
+
+    // removing the sampler does not need a new reserve
+    llama_set_sampler(ctx, seq_id, nullptr);
+    GGML_ASSERT(test_ctx.decode_token(token_b, seq_id));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == LLAMA_TOKEN_NULL);
+    GGML_ASSERT(n_sched_reserve == n_reserve);
+
+    // a chain of another shape needs a new reserve
+    llama_sampler_ptr chain_c = make_chain(token_a, 5);
+    llama_set_sampler(ctx, seq_id, chain_c.get());
+    GGML_ASSERT(test_ctx.decode_token(token_b, seq_id));
+    GGML_ASSERT(llama_get_sampled_token_ith(ctx, test_ctx.idx_for_seq(seq_id)) == token_a);
+    GGML_ASSERT(n_sched_reserve == n_reserve + 1);
+
+    llama_log_set(nullptr, nullptr);
+
+    printf("backend set sampler reserve test PASSED\n");
+}
+
 static void test_cpu_mixed(const test_params & params) {
     // Sequence 0 uses backend sampling
     struct llama_sampler_chain_params chain_params_0 = llama_sampler_chain_default_params();
@@ -2060,6 +2134,126 @@ static void test_multi_output_cpu_suffix(const test_params & params) {
     printf("backend multi-output CPU suffix test PASSED\n");
 }
 
+static bool is_digits(const std::string & s) {
+    return !s.empty() && std::all_of(s.begin(), s.end(), [](unsigned char c) { return c >= '0' && c <= '9'; });
+}
+
+// greedy over the full logits: no token the digits grammar allows scores higher than the sampled one
+static void check_digits_greedy(const test_context & test_ctx, int32_t idx, llama_token token) {
+    const float * logits = llama_get_raw_logits_ith(test_ctx.ctx.get(), idx);
+    GGML_ASSERT(logits != nullptr);
+    for (llama_token t = 0; t < test_ctx.n_vocab; ++t) {
+        if (is_digits(test_ctx.token_to_piece(t, false))) {
+            GGML_ASSERT(logits[t] <= logits[token]);
+        }
+    }
+}
+
+static void test_grammar(const test_params & params) {
+    const llama_seq_id seq_id = 0;
+
+    // digits only, so the backend token mostly does not fit and the CPU resampling runs
+    common_params_sampling sp;
+    sp.temp             = 0.0f;
+    sp.samplers         = {COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TEMPERATURE};
+    sp.backend_sampling = true;
+    sp.grammar          = {COMMON_GRAMMAR_TYPE_USER, "root ::= [0-9]+"};
+
+    common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+    GGML_ASSERT(sp.backend_sampling && "a grammar must not disable backend sampling");
+
+    std::vector<llama_sampler_seq_config> configs = {{ seq_id, common_sampler_get(sampler.get()) }};
+    test_context test_ctx(params, configs);
+    auto * ctx = test_ctx.ctx.get();
+
+    GGML_ASSERT(test_ctx.decode({{seq_id, "The year was"}}));
+
+    int n_resampled = 0;
+    for (int step = 0; step < 8; ++step) {
+        const int32_t idx = test_ctx.idx_for_seq(seq_id);
+
+        const llama_token token_backend = llama_get_sampled_token_ith(ctx, idx);
+        GGML_ASSERT(token_backend != LLAMA_TOKEN_NULL);
+
+        const llama_token token = common_sampler_sample(sampler.get(), ctx, idx);
+        printf("step %d: backend token %d '%s', sampled token %d '%s'\n", step,
+                token_backend, test_ctx.token_to_piece(token_backend, false).c_str(),
+                token,         test_ctx.token_to_piece(token,         false).c_str());
+
+        if (llama_vocab_is_eog(test_ctx.vocab, token)) {
+            break;
+        }
+
+        GGML_ASSERT(is_digits(test_ctx.token_to_piece(token, false)));
+
+        if (token != token_backend) {
+            n_resampled++;
+            check_digits_greedy(test_ctx, idx, token);
+        }
+
+        common_sampler_accept(sampler.get(), token, true);
+        GGML_ASSERT(test_ctx.decode_token(token, seq_id));
+    }
+
+    // the prompt does not continue with digits, so at least the first token is resampled
+    GGML_ASSERT(n_resampled > 0);
+
+    printf("backend grammar test PASSED (%d resampled)\n", n_resampled);
+}
+
+static void test_grammar_cpu_suffix(const test_params & params) {
+    const llama_seq_id seq_id = 0;
+
+    // top-k runs on the backend and top-n-sigma (CPU only) after it, so the CPU gets only the top candidate
+    common_params_sampling sp;
+    sp.temp             = 0.0f;
+    sp.top_k            = 1;
+    sp.top_n_sigma      = 1.0f;
+    sp.samplers         = {COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TOP_N_SIGMA, COMMON_SAMPLER_TYPE_TEMPERATURE};
+    sp.backend_sampling = true;
+    sp.grammar          = {COMMON_GRAMMAR_TYPE_USER, "root ::= [0-9]+"};
+
+    common_sampler_ptr sampler(common_sampler_init(params.model.get(), sp));
+
+    std::vector<llama_sampler_seq_config> configs = {{ seq_id, common_sampler_get(sampler.get()) }};
+    test_context test_ctx(params, configs);
+    auto * ctx = test_ctx.ctx.get();
+
+    GGML_ASSERT(test_ctx.decode({{seq_id, "The year was"}}));
+
+    for (int step = 0; step < 4; ++step) {
+        const int32_t idx = test_ctx.idx_for_seq(seq_id);
+
+        GGML_ASSERT(llama_get_sampled_token_ith(ctx, idx) == LLAMA_TOKEN_NULL);
+        GGML_ASSERT(llama_get_sampled_candidates_count_ith(ctx, idx) == 1);
+
+        const llama_token candidate = llama_get_sampled_candidates_ith(ctx, idx)[0];
+
+        // even steps take the rejection path, odd steps the grammar-first path
+        const llama_token token = common_sampler_sample(sampler.get(), ctx, idx, step % 2 == 1);
+        printf("step %d: backend candidate %d '%s', sampled token %d '%s'\n", step,
+                candidate, test_ctx.token_to_piece(candidate, false).c_str(),
+                token,     test_ctx.token_to_piece(token,     false).c_str());
+
+        // the prompt does not continue with digits, so the first token must come from outside the candidates
+        if (step == 0) {
+            GGML_ASSERT(!is_digits(test_ctx.token_to_piece(candidate, false)));
+        }
+
+        if (llama_vocab_is_eog(test_ctx.vocab, token)) {
+            break;
+        }
+
+        GGML_ASSERT(is_digits(test_ctx.token_to_piece(token, false)));
+        check_digits_greedy(test_ctx, idx, token);
+
+        common_sampler_accept(sampler.get(), token, true);
+        GGML_ASSERT(test_ctx.decode_token(token, seq_id));
+    }
+
+    printf("backend grammar CPU suffix test PASSED\n");
+}
+
 struct backend_test_case {
     std::string name;
     void (*fn)(const test_params &);
@@ -2086,12 +2280,16 @@ static const backend_test_case BACKEND_TESTS[] = {
     { "test_mixed",                  test_mixed,                  true },
     { "test_cpu_mixed",              test_cpu_mixed,              true },
     { "test_set_sampler",            test_set_sampler,            true },
+    { "test_set_sampler_reserve",    test_set_sampler_reserve,    true },
     // multiple outputs per sequence
     { "test_multi_output_limit",                  test_multi_output_limit,               true },
     { "test_multi_output_multi_sequence_dist",    test_multi_output_multi_sequence_dist, true },
     { "test_multi_output_dist_transaction",       test_multi_output_dist_transaction,    true },
     { "test_multi_output_sampling_chain",         test_multi_output_sampling_chain,      true },
     { "test_multi_output_cpu_suffix",             test_multi_output_cpu_suffix,          true },
+    // grammar
+    { "test_grammar",                             test_grammar,                          true },
+    { "test_grammar_cpu_suffix",                  test_grammar_cpu_suffix,               true },
 };
 
 // TODO: add usage, examples
