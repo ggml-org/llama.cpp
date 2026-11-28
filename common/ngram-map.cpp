@@ -503,7 +503,7 @@ void common_ngram_map_draft(common_ngram_map & map,
     int n_draft_tokens = std::min((int) m, (int) curr_key.values[slot_max].n_accepted);
 
     for (int i = 0; i < n_draft_tokens; ++i) {
-        draft.push_back(inp[match_pos + n + i]);
+        draft.push_back(inp[curr_key.values[slot_max].value_idx + i]);
     }
 
     LOG_DBG("%s: key_offset = %zu, slot_max = %d, key_num = %d, draft.size = %zu\n", __func__,
