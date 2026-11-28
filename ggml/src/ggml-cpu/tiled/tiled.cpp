@@ -612,6 +612,16 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
     if (src0->extra != NULL) {
         return false;
     }
+
+    if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_Q8_K) {
+        return false;
+    }
+
+    if (src1->type == GGML_TYPE_Q8_K && !ggml_is_contiguous(src1)) {
+        // We can handle noncontiguous floats because we're repacking to q8_k anyways
+        return false;
+    }
+
     // Supported quant types for src0
     switch (src0->type) {
         case GGML_TYPE_Q6_K:
@@ -631,15 +641,6 @@ static bool ggml_tiled_supported(const struct ggml_tensor * src0,
         default:
             return false;
     }
-    if (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_Q8_K) {
-        return false;
-    }
-
-    if (src1->type == GGML_TYPE_Q8_K && !ggml_is_contiguous(src1)) {
-        // We can handle noncontiguous floats because we're repacking to q8_k anyways
-        return false;
-    }
-    return true;
 }
 #endif
 
