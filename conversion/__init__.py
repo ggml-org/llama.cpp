@@ -78,6 +78,8 @@ TEXT_MODEL_MAP: dict[str, str] = {
     "DistilBertForMaskedLM": "bert",
     "DistilBertForSequenceClassification": "bert",
     "DistilBertModel": "bert",
+    "DiffusionGemma4ModelForBlockDiffusion": "diffusion_gemma",
+    "DiffusionGemmaForBlockDiffusion": "diffusion_gemma",
     "DomynEdgeForCausalLM": "domynedge",
     "Dots1ForCausalLM": "dots1",
     "Dots3NoteForCausalLM": "dots3",
