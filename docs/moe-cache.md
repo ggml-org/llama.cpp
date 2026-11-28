@@ -5,7 +5,10 @@ When the experts of MoE layers stay in host memory (`-cmoe`, `-ncmoe`, `-ot`), t
 | Argument | |
 |---|---|
 | `--moe-cache-mib N` | cache size in MiB, split among the GPUs like the layers (default: 0, disabled) |
+| `--moe-cache-host-mib N` | RAM cache size in MiB for experts read from the GGUF files (default: 0, disabled) |
 | `--moe-cache-cpu-share F` | share of the cache misses computed on the CPU from the host experts instead of uploaded, once the cache is full (default: 0) |
+
+`--moe-cache-host-mib` adds a RAM cache between the GGUF files and the device cache. Use it with `--moe-cache-mib`, `-cmoe` is not required. Existing mmap-backed weights remain the fallback for large batches, CPU and partially offloaded layers, CPU share, and steps that do not fit in the RAM cache.
 
 The cache hits run on the device. With `--moe-cache-cpu-share F` the CPU computes a share `F` of the misses while the device computes the hits and uploads the other misses into the cache. This is faster when the CPU reads the host experts faster than the device can upload them, for example with fast RAM, a PCIe 4 link or experts that are not in pinned memory. The host experts are pinned with `-lm none`, `-lm mlock` and `-lm dio`, unless `--no-host`, but not when they are mmap'd (the default). The device uploads pinned experts at the full speed of the link, so the CPU share often does not help then. Until the cache is full every miss is uploaded, so the cache fills as fast as without the CPU share. The best share depends on the machine, the model and the cache size.
 
