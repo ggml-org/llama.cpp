@@ -207,7 +207,8 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool has_mask,
         bool has_sinks,
         bool has_bias,
-        bool has_scap);
+        bool has_scap,
+        bool has_indexed_bias);
 
 struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
         ggml_metal_library_t lib,
@@ -217,6 +218,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_bias,
         bool    has_scap,
         bool    has_kvpad,
+        bool    has_indexed_bias,
         int32_t nsg,
         bool    use_kv_f16,
         int32_t ns10,
@@ -240,6 +242,7 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_att
         bool    has_kvpad,
         bool    has_sparse,
         bool    has_rows,
+        bool    has_indexed_bias,
         int32_t nqpsg,
         int32_t ne,
         int32_t nsg,

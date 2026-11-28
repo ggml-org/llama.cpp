@@ -479,6 +479,9 @@ typedef struct {
     float    m1;
     int32_t  n_head_log2;
     float    logit_softcap;
+    int32_t  bias_n_bins;
+    int32_t  bias_n_keys;
+    int32_t  bias_query_stride;
 } ggml_metal_kargs_flash_attn_ext;
 
 typedef struct {
@@ -515,6 +518,9 @@ typedef struct {
     int32_t  n_head_log2;
     float    logit_softcap;
     int32_t  n_kv_max_padded;
+    int32_t  bias_n_bins;
+    int32_t  bias_n_keys;
+    int32_t  bias_query_stride;
 } ggml_metal_kargs_flash_attn_ext_vec;
 
 typedef struct {

@@ -1752,7 +1752,14 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_FLASH_ATTN_EXT:
             if (ggml_flash_attn_ext_has_indexed_bias(op)) {
-                return false;
+                const struct ggml_tensor * bias_table   = op->src[6];
+                const struct ggml_tensor * bias_indices = op->src[7];
+
+                if (!op->src[3] || !bias_table || !bias_indices ||
+                    bias_table->type != GGML_TYPE_F32 || !ggml_is_contiguous(bias_table) ||
+                    bias_indices->type != GGML_TYPE_I32 || !ggml_is_contiguous(bias_indices)) {
+                    return false;
+                }
             }
             // K/V row lists (ggml_flash_attn_ext_rows): one list of cache rows per q slice
             if (op->src[5] != NULL) {
