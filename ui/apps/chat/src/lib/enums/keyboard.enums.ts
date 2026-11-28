@@ -24,6 +24,7 @@ export enum KeyboardKey {
 	PAGE_UP = 'PageUp',
 	SPACE = ' ',
 	TAB = 'Tab',
+	W_LOWER = 'w',
 	X_LOWER = 'x',
 	X_UPPER = 'X'
 }
