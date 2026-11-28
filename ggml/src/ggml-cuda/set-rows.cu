@@ -362,6 +362,16 @@ void set_rows_cuda<half, int32_t>(ggml_backend_cuda_context & ctx, const ggml_te
             nb1, nb2, nb3,
             stream
         );
+    } else if (dst->type == GGML_TYPE_F32) {
+        set_rows_cuda(
+            src0_d, src1_d, (float*)dst->data,
+            ne00, ne01, ne02, ne03,
+            ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03,
+            nb10, nb11, nb12,
+            nb1, nb2, nb3,
+            stream
+        );
     } else {
         GGML_ABORT("unsupported type %s", ggml_type_name(dst->type));
     }
@@ -387,6 +397,16 @@ void set_rows_cuda<half, int64_t>(ggml_backend_cuda_context & ctx, const ggml_te
             nb1, nb2, nb3,
             stream
         );
+    } else if (dst->type == GGML_TYPE_F32) {
+        set_rows_cuda(
+            src0_d, src1_d, (float*)dst->data,
+            ne00, ne01, ne02, ne03,
+            ne10, ne11, ne12, ne13,
+            nb01, nb02, nb03,
+            nb10, nb11, nb12,
+            nb1, nb2, nb3,
+            stream
+        );
     } else {
         GGML_ABORT("unsupported type %s", ggml_type_name(dst->type));
     }
@@ -396,7 +416,8 @@ void ggml_cuda_op_set_rows(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     const ggml_tensor * src1 = dst->src[1];
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16 || (src0->type == GGML_TYPE_F16 && dst->type == GGML_TYPE_F16));
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_BF16 ||
+                (src0->type == GGML_TYPE_F16 && (dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_F32)));
     GGML_ASSERT(src1->type == GGML_TYPE_I64 || src1->type == GGML_TYPE_I32);
 
     if (src0->type == GGML_TYPE_F32) {
