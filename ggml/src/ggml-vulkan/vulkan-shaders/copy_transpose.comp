@@ -7,7 +7,8 @@
 #define TILE_DIM 32
 layout(local_size_x = 32, local_size_y = 8, local_size_z = 1) in;
 
-shared uint sh[TILE_DIM][TILE_DIM + 1];
+// SH_TYPE is uint to move raw bits, or float for a converting copy.
+shared SH_TYPE sh[TILE_DIM][TILE_DIM + 1];
 
 void iter(uvec3 wg_id) {
     const uint tile_col = wg_id.x;
@@ -30,7 +31,7 @@ void iter(uvec3 wg_id) {
         const uint i01 = tile_row * TILE_DIM + tid_col;
         if (i00 < p.ne00 && i01 < p.ne01 && i02 < p.ne02 && i03 < p.ne03) {
             const uint src_idx = i00 * p.nb00 + i01 * p.nb01 + i02 * p.nb02 + i03 * p.nb03;
-            sh[tid_row + 8 * y][tid_col] = uint(data_a[get_aoffset() + src_idx]);
+            sh[tid_row + 8 * y][tid_col] = SH_TYPE(data_a[get_aoffset() + src_idx]);
         }
     }
 

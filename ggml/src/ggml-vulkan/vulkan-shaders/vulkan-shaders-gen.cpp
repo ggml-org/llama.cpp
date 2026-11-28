@@ -907,8 +907,9 @@ void process_shaders() {
     string_to_spv("cpy_f32_i32", "copy.comp", {{"A_TYPE", "float"}, {"D_TYPE", "int"}});
     string_to_spv("cpy_i32_f32", "copy.comp", {{"A_TYPE", "int"}, {"D_TYPE", "float"}});
 
-    string_to_spv("cpy_transpose_16", "copy_transpose.comp", {{"A_TYPE", "uint16_t"}, {"D_TYPE", "uint16_t"}});
-    string_to_spv("cpy_transpose_32", "copy_transpose.comp", {{"A_TYPE", "uint"}, {"D_TYPE", "uint"}});
+    string_to_spv("cpy_transpose_16", "copy_transpose.comp", {{"A_TYPE", "uint16_t"}, {"D_TYPE", "uint16_t"}, {"SH_TYPE", "uint"}});
+    string_to_spv("cpy_transpose_32", "copy_transpose.comp", {{"A_TYPE", "uint"}, {"D_TYPE", "uint"}, {"SH_TYPE", "uint"}});
+    string_to_spv("cpy_transpose_f32_f16", "copy_transpose.comp", {{"A_TYPE", "float"}, {"D_TYPE", "float16_t"}, {"SH_TYPE", "float"}});
     string_to_spv("cpy_transpose_02_16", "copy_transpose_02.comp", {{"A_TYPE", "uint16_t"}, {"D_TYPE", "uint16_t"}});
     string_to_spv("cpy_transpose_02_32", "copy_transpose_02.comp", {{"A_TYPE", "uint"}, {"D_TYPE", "uint"}});
 
@@ -1193,6 +1194,12 @@ void process_shaders() {
             }
         }
     }
+#if defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    string_to_spv("conv2d_halo_f16_f32", "conv_halo.comp", {}, true, true, false);
+    string_to_spv("conv3d_halo_f16_f32", "conv_halo.comp", {{"CONV3D", "1"}}, true, true, false);
+    string_to_spv("conv2d_halo_n8_f16_f32", "conv_halo.comp", {{"FRAG_N8", "1"}}, true, true, false);
+    string_to_spv("conv3d_halo_n8_f16_f32", "conv_halo.comp", {{"CONV3D", "1"}, {"FRAG_N8", "1"}}, true, true, false);
+#endif
 
     for (auto unroll : {false, true}) {
         for (auto a_f16 : {false, true}) {

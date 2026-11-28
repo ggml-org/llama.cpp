@@ -1974,6 +1974,47 @@ static bool ggml_vk_amd_large_tile_supported(const vk_device& device) {
     return major > 2 || (major == 2 && build >= 416);
 }
 
+// Use KHR cooperative matrices on coopmat2 devices too. The coopmat2 shader measured slower overall.
+static bool ggml_vk_conv_halo_cm1(const vk_device & device) {
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    return device->coopmat_support && device->coopmat_support_16x16x16_f16acc &&
+           device->subgroup_size_control && (device->subgroup_size == 32 || device->subgroup_size == 64);
+#else
+    GGML_UNUSED(device);
+    return false;
+#endif
+}
+
+// Splits the coopmat1 halo accumulator (bs_k channels x nt columns) between
+// the subgroups as a grid, giving each a wm x wn tile of whole 16 x fn
+// fragments. Keeps as many subgroups busy as possible. Among such grids it
+// picks the one with the least data loaded per subgroup and tap (wm / 16
+// fragments from the filter plus wn / fn from the box), which is the
+// squarest tile.
+static void ggml_vk_conv_halo_cm1_tile(uint32_t bs_k, uint32_t nt, uint32_t fn, uint32_t subgroups, uint32_t & wm, uint32_t & wn) {
+    const uint32_t frag_rows = bs_k / 16;
+    const uint32_t frag_cols = nt / fn;
+    uint32_t best_busy = 0, best_loads = 0;
+    for (uint32_t row_splits = 1; row_splits <= frag_rows; ++row_splits) {
+        if (frag_rows % row_splits != 0 || row_splits > subgroups) {
+            continue;
+        }
+        uint32_t col_splits = std::min(subgroups / row_splits, frag_cols);
+        while (frag_cols % col_splits != 0) {
+            col_splits--;
+        }
+        const uint32_t busy  = row_splits * col_splits;
+        // in units of 8 x 16 halves
+        const uint32_t loads = 2 * frag_rows / row_splits + (frag_cols / col_splits) * fn / 8;
+        if (busy > best_busy || (busy == best_busy && loads < best_loads)) {
+            best_busy  = busy;
+            best_loads = loads;
+            wm = bs_k / row_splits;
+            wn = nt / col_splits;
+        }
+    }
+}
+
 void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     VK_LOG_DEBUG("ggml_vk_load_shaders(" << device->name << ")");
 
@@ -3751,6 +3792,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 
     ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_32, "cpy_transpose_32", cpy_transpose_32_len, cpy_transpose_32_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_16, "cpy_transpose_16", cpy_transpose_16_len, cpy_transpose_16_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
+    ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_f32_f16, "cpy_transpose_f32_f16", cpy_transpose_f32_f16_len, cpy_transpose_f32_f16_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_02_32, "cpy_transpose_02_32", cpy_transpose_02_32_len, cpy_transpose_02_32_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_cpy_transpose_02_16, "cpy_transpose_02_16", cpy_transpose_02_16_len, cpy_transpose_02_16_data, "main", 2, sizeof(vk_op_unary_push_constants), {1, 1, 1}, {}, 1);
 
@@ -4449,6 +4491,7 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
             spec_constants_cpy.push_back(conv2d_csh_store); \
             spec_constants_cpy.push_back(conv2d_WM); \
             spec_constants_cpy.push_back(conv2d_WN); \
+            spec_constants_cpy.push_back(state.split_k); \
             ggml_vk_create_pipeline( \
                 device, c.second, #name #type_suffix, \
                 name##type_suffix##spv_suffix##_len, name##type_suffix##spv_suffix##_data, "main", 3, \
@@ -4526,6 +4569,32 @@ void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
 #undef CREATE_CONV3D
     }
 
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    if (ggml_vk_conv_halo_cm1(device)) {
+        // spv: { 16-pixel fragments, 8-pixel fragments }
+        auto create_halo = [&](std::map<vk_conv_halo_key, vk_pipeline> & pipelines, const char * name,
+                               const std::array<size_t, 2> & spv_lens, const std::array<const void *, 2> & spv_datas, uint32_t pc_size) {
+            for (auto & c : pipelines) {
+                const vk_conv_halo_key & k = c.first;
+                const uint32_t fn = k[11];
+                const uint32_t variant = fn == 8 ? 1 : 0;
+                uint32_t wm = 0, wn = 0;
+                ggml_vk_conv_halo_cm1_tile(k[0], k[1] * k[2], fn, 256 / device->subgroup_size, wm, wn);
+                const std::vector<uint32_t> spec = { 256, k[0], 16, k[1], k[2], k[3], k[4], k[5], k[6], k[7], k[8], k[9], k[10], wm, wn };
+                ggml_vk_create_pipeline(device, c.second, name, spv_lens[variant], spv_datas[variant], "main", 3, pc_size, { k[0], 1, 1 },
+                                        spec, 1, true, true, device->subgroup_size);
+            }
+        };
+        create_halo(device->pipeline_conv2d_halo_f16_f32, "conv2d_halo_f16_f32",
+                    { conv2d_halo_f16_f32_cm1_len, conv2d_halo_n8_f16_f32_cm1_len },
+                    { conv2d_halo_f16_f32_cm1_data, conv2d_halo_n8_f16_f32_cm1_data },
+                    sizeof(vk_op_conv2d_push_constants));
+        create_halo(device->pipeline_conv3d_halo_f16_f32, "conv3d_halo_f16_f32",
+                    { conv3d_halo_f16_f32_cm1_len, conv3d_halo_n8_f16_f32_cm1_len },
+                    { conv3d_halo_f16_f32_cm1_data, conv3d_halo_n8_f16_f32_cm1_data },
+                    sizeof(vk_op_conv3d_push_constants));
+    }
+#endif
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f32, "conv2d_dw_whcn_f32", conv2d_dw_whcn_f32_len, conv2d_dw_whcn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_cwhn_f32, "conv2d_dw_cwhn_f32", conv2d_dw_cwhn_f32_len, conv2d_dw_cwhn_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
     ggml_vk_create_pipeline(device, device->pipeline_conv2d_dw_whcn_f16_f32, "conv2d_dw_whcn_f16_f32", conv2d_dw_whcn_f16_f32_len, conv2d_dw_whcn_f16_f32_data, "main", 3, sizeof(vk_op_conv2d_dw_push_constants), {512, 1, 1}, {}, 1);
@@ -5402,6 +5471,9 @@ vk_device ggml_vk_get_device(size_t idx) {
                         }
                         if (prop.MSize == 16 && prop.NSize == 16 && prop.KSize == 16) {
                             device->coopmat_support_16x16x16_f16acc = true;
+                        }
+                        if (prop.MSize == 16 && prop.NSize == 8 && prop.KSize == 16) {
+                            device->coopmat_support_16x8x16_f16acc = true;
                         }
                     }
                 } else if ((vk::ComponentTypeKHR)prop.AType      == vk::ComponentTypeKHR::eSint8 &&
@@ -9704,7 +9776,7 @@ void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx, const
     }
 }
 
-static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, uint32_t K, uint32_t NPQ) {
+static vk_conv_shapes ggml_vk_conv_base_shape(ggml_backend_vk_context * ctx, uint32_t K, uint32_t NPQ) {
     auto n_tiles = [&](vk_conv_shapes s) {
         return CEIL_DIV(K, vk_conv_block_sizes[s].K)
             * CEIL_DIV(NPQ, vk_conv_block_sizes[s].NPQ);
@@ -9736,43 +9808,76 @@ static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, u
     }
 }
 
-static vk_conv_shapes ggml_vk_conv3d_select_shape(ggml_backend_vk_context * ctx, const ggml_tensor * kernel, const ggml_tensor * dst, uint32_t & split_k) {
+// On coopmat2, use split-K to fill the GPU while keeping larger tiles.
+static vk_conv_shapes ggml_vk_conv_select_shape(ggml_backend_vk_context * ctx, const ggml_tensor * kernel, const ggml_tensor * dst, uint32_t & split_k) {
     split_k = 1;
-    const uint32_t K = ggml_get_op_params_i32(dst, 11);
-    const uint32_t NPQ = ggml_get_op_params_i32(dst, 10) * dst->ne[0] * dst->ne[1] * dst->ne[2];
-    const vk_conv_shapes fallback = ggml_vk_conv_select_shape(ctx, K, NPQ);
+    const bool is_3d = dst->op == GGML_OP_CONV_3D;
+    uint32_t K, NPQ;
+    uint64_t crs;
+    if (is_3d) {
+        K   = ggml_get_op_params_i32(dst, 11);
+        NPQ = ggml_get_op_params_i32(dst, 10) * dst->ne[0] * dst->ne[1] * dst->ne[2];
+        crs = (uint64_t)ggml_get_op_params_i32(dst, 9) * kernel->ne[0] * kernel->ne[1] * kernel->ne[2];
+    } else {
+        K   = (uint32_t)dst->ne[2];
+        NPQ = (uint32_t)(dst->ne[3] * dst->ne[1] * dst->ne[0]);
+        crs = (uint64_t)kernel->ne[0] * kernel->ne[1] * kernel->ne[2];
+    }
+    const vk_conv_shapes fallback = ggml_vk_conv_base_shape(ctx, K, NPQ);
     const uint32_t shader_core_count = ctx->device->shader_core_count;
+    if (!ctx->device->coopmat2 || shader_core_count == 0 || K == 0 || NPQ == 0) {
+        return fallback;
+    }
+    auto n_tiles = [&](vk_conv_shapes s) {
+        return (uint64_t)CEIL_DIV(K, vk_conv_block_sizes[s].K) * CEIL_DIV(NPQ, vk_conv_block_sizes[s].NPQ);
+    };
+    const auto & limits = ctx->device->properties.limits;
     // Slowdowns were observed on DGX Spark with drivers older than R615.
     const bool driver_supported = ctx->device->driver_id != vk::DriverId::eNvidiaProprietary ||
                                   (ctx->device->properties.driverVersion >> 22) >= 615;
-    if (!ctx->device->coopmat2 || shader_core_count == 0 || K == 0 || NPQ == 0 || !driver_supported) {
-        return fallback;
-    }
-    const auto & block = vk_conv_block_sizes[CONV_SHAPE_256x128];
-    const auto & limits = ctx->device->properties.limits;
     // Use the largest cm2 padding and include the dummy Csh[8].
+    const auto & large = vk_conv_block_sizes[CONV_SHAPE_256x128];
     const uint32_t pad = 8, csh_elems = 8;
-    const uint32_t shmem = (block.K * (block.CRS + pad) + block.CRS * (block.NPQ + pad) + csh_elems) * sizeof(uint16_t);
-    if (shmem > limits.maxComputeSharedMemorySize) {
+    const uint32_t shmem = (large.K * (large.CRS + pad) + large.CRS * (large.NPQ + pad) + csh_elems) * sizeof(uint16_t);
+    const bool large_ok = driver_supported && shmem <= limits.maxComputeSharedMemorySize;
+
+    vk_conv_shapes shape;
+    if (is_3d) {
+        if (!large_ok) {
+            return fallback;
+        }
+        shape = CONV_SHAPE_256x128;
+        // Keep full channel tiles when the grid already fills the GPU.
+        if (n_tiles(shape) >= shader_core_count) {
+            return K % vk_conv_block_sizes[shape].K == 0 ? shape : fallback;
+        }
+        static const bool disable_split_k = getenv("GGML_VK_DISABLE_CONV3D_SPLIT_K") != nullptr;
+        // Do not use a tile with more than half its output channels padded.
+        if (disable_split_k || K < vk_conv_block_sizes[shape].K / 2) {
+            return fallback;
+        }
+    } else {
+        static const bool disable_split_k = getenv("GGML_VK_DISABLE_CONV2D_SPLIT_K") != nullptr;
+        // Only layers that would get a small tile change.
+        if (dst->op != GGML_OP_CONV_2D || disable_split_k || K <= 64 || fallback == CONV_SHAPE_128x128) {
+            return fallback;
+        }
+        shape = K % 256 == 0 && large_ok ? CONV_SHAPE_256x128 : CONV_SHAPE_128x128;
+        if (n_tiles(shape) >= shader_core_count) {
+            return K % vk_conv_block_sizes[shape].K == 0 ? shape : fallback;
+        }
+    }
+
+    if (!ggml_is_contiguous(dst) || get_misalign_bytes(ctx, dst) != 0) {
         return fallback;
     }
+    const auto & block = vk_conv_block_sizes[shape];
     const uint32_t channel_tiles = CEIL_DIV(K, block.K);
-    const uint64_t n_tiles = (uint64_t)channel_tiles * CEIL_DIV(NPQ, block.NPQ);
-    // Keep full channel tiles when the grid already fills the GPU.
-    if (n_tiles >= shader_core_count) {
-        return K % block.K == 0 ? CONV_SHAPE_256x128 : fallback;
-    }
-    static const bool disable_split_k = getenv("GGML_VK_DISABLE_CONV3D_SPLIT_K") != nullptr;
-    // Do not use a tile with more than half its output channels padded.
-    if (disable_split_k || K < block.K / 2 || !ggml_is_contiguous(dst) || get_misalign_bytes(ctx, dst) != 0) {
-        return fallback;
-    }
     // Use power-of-two splits to give each core at least one workgroup.
     uint64_t splits = 1;
-    while (n_tiles * splits < shader_core_count) {
+    while (n_tiles(shape) * splits < shader_core_count) {
         splits *= 2;
     }
-    const uint64_t crs = (uint64_t)ggml_get_op_params_i32(dst, 9) * kernel->ne[0] * kernel->ne[1] * kernel->ne[2];
     const uint64_t operand_bytes = block.K * ggml_type_size(kernel->type) + block.NPQ * sizeof(float);
     const uint64_t scratch_bytes = 2 * sizeof(float) * block.K * block.NPQ;
     // Do not add more scratch bytes than the estimated operand load bytes.
@@ -9787,7 +9892,7 @@ static vk_conv_shapes ggml_vk_conv3d_select_shape(ggml_backend_vk_context * ctx,
         return fallback;
     }
     split_k = (uint32_t)splits;
-    return CONV_SHAPE_256x128;
+    return shape;
 }
 
 static vk_pipeline ggml_vk_rms_norm_pipeline(const std::array<vk_pipeline, 3> & pipelines, int64_t ncols) {
@@ -9845,6 +9950,201 @@ static vk_pipeline ggml_vk_float_pipeline(const vk_pipeline (&pipelines)[3], con
         return nullptr;
     }
     return pipelines[ggml_vk_float_type_idx(dst->type)];
+}
+
+// Each workgroup computes bs_k output channels for an out_rows x out_cols tile
+// of one output depth slice.
+struct vk_conv_halo_params {
+    uint32_t bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h;
+    uint32_t filter_copy; // transpose filter to make output channels contiguous
+    uint32_t KD, pad_d;
+    uint32_t fn;        // accumulator fragment width in pixels: 16, or 8 (FRAG_N8)
+    uint32_t tiles;     // number of output tiles, over all batches and depth slices
+    uint32_t split_k;
+
+    vk_conv_halo_key key() const {
+        return { bs_k, out_rows, out_cols, KW, KH, a_pad, pad_w, pad_h, filter_copy, KD, pad_d, fn };
+    }
+};
+
+// Decides whether the halo shader handles this convolution and, if so, picks
+// its tile shape, split-K and filter staging. The shader needs stride 1, dilation 1,
+// padding smaller than the filter, a contiguous f16 or f32 filter, f32 input
+// and output, and input channels in blocks of 16.
+static bool ggml_vk_conv_halo_params(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1,
+                                     const ggml_tensor * dst, vk_conv_halo_params & hp) {
+#if defined(VK_KHR_cooperative_matrix) && defined(GGML_VULKAN_COOPMAT_GLSLC_SUPPORT)
+    static const bool disabled = getenv("GGML_VK_DISABLE_CONV_HALO") != nullptr;
+    const bool is_3d = dst->op == GGML_OP_CONV_3D;
+    if (disabled || (dst->op != GGML_OP_CONV_2D && !is_3d) || !ggml_vk_conv_halo_cm1(ctx->device) ||
+        (src0->type != GGML_TYPE_F16 && src0->type != GGML_TYPE_F32) || src1->type != GGML_TYPE_F32 || dst->type != GGML_TYPE_F32 ||
+        !ggml_is_contiguous(src0)) {
+        return false;
+    }
+    const int32_t * op = dst->op_params;
+    int32_t s[3], pd[3], dl[3]; // width, height, depth
+    uint32_t Cin, Cout, N, OD;
+    if (is_3d) {
+        // op params: s0, s1, s2, p0, p1, p2, d0, d1, d2, IC, N, OC
+        for (int i = 0; i < 3; ++i) {
+            s[i] = op[i];
+            pd[i] = op[3 + i];
+            dl[i] = op[6 + i];
+        }
+        Cin = (uint32_t)op[9];
+        N = (uint32_t)op[10];
+        Cout = (uint32_t)op[11];
+        hp.KD = (uint32_t)src0->ne[2];
+        OD = (uint32_t)dst->ne[2];
+    } else {
+        // op params: s0, s1, p0, p1, d0, d1
+        s[0] = op[0]; s[1] = op[1]; s[2] = 1;
+        pd[0] = op[2]; pd[1] = op[3]; pd[2] = 0;
+        dl[0] = op[4]; dl[1] = op[5]; dl[2] = 1;
+        Cin = (uint32_t)src1->ne[2];
+        Cout = (uint32_t)dst->ne[2];
+        N = (uint32_t)dst->ne[3];
+        hp.KD = 1;
+        OD = 1;
+    }
+    hp.KW = (uint32_t)src0->ne[0];
+    hp.KH = (uint32_t)src0->ne[1];
+    const uint32_t ksize[3] = { hp.KW, hp.KH, hp.KD };
+    // Stride 1, dilation 1, and padding smaller than the filter, in every dimension.
+    for (int i = 0; i < 3; ++i) {
+        if (s[i] != 1 || dl[i] != 1 || pd[i] < 0 || (uint32_t)pd[i] >= ksize[i]) {
+            return false;
+        }
+    }
+    hp.pad_w = (uint32_t)pd[0];
+    hp.pad_h = (uint32_t)pd[1];
+    hp.pad_d = (uint32_t)pd[2];
+    // All spatial taps in the pass must fit in shared memory together.
+    const uint32_t taps = hp.KW * hp.KH;
+    if (Cin % 16 != 0 || taps > 16 || hp.KW > 9) {
+        return false;
+    }
+    // 1x1 filters have nothing to reuse; conv2d_mm/conv3d_mm are faster.
+    if (taps == 1) {
+        return false;
+    }
+    const uint32_t OW = (uint32_t)dst->ne[0], OH = (uint32_t)dst->ne[1];
+    // The transpose pays for itself at about 8K output positions. 3D also needs it to align filter slices to 8 bytes.
+    const uint64_t npq = (uint64_t)N * OD * OH * OW;
+    hp.filter_copy = is_3d || npq >= 8192 ? 1 : 0;
+    // The in-place path loads 8-byte packets of f16 weights.
+    if (!hp.filter_copy && (src0->type != GGML_TYPE_F16 || get_misalign_bytes(ctx, src0) % 8 != 0)) {
+        hp.filter_copy = 1;
+    }
+    if (hp.filter_copy && (uint64_t)Cin * ROUNDUP_POW2(Cout, 8) * taps * hp.KD * sizeof(ggml_fp16_t) > ctx->device->properties.limits.maxStorageBufferRange) {
+        return false;
+    }
+    // Match conv_halo.comp: the filter and input box share storage with the output staging tile.
+    const size_t limit = ctx->device->properties.limits.maxComputeSharedMemorySize;
+    auto shmem = [&](uint32_t cols, uint32_t rows, uint32_t bs_k, uint32_t pad) {
+        const size_t filter = hp.filter_copy ? (size_t)taps * 16 * (bs_k + pad) * 2 : (size_t)taps * bs_k * (16 + pad) * 2;
+        const size_t pass = filter + (size_t)(rows + hp.KH - 1) * (cols + hp.KW - 1) * 24 * 2;
+        const size_t out = (size_t)bs_k * (rows * cols + 8) * 2;
+        return std::max(pass, out);
+    };
+    // A small spatial tile can fit all channels in one workgroup and avoid padding to a multiple of 64.
+    const uint32_t bs_k_all = Cout > 64 && Cout <= 128 && Cout % 64 != 0 ? ROUNDUP_POW2(Cout, 16) : 0;
+    auto fit = [&](uint32_t cols, uint32_t rows, uint32_t & bs_k, uint32_t & a_pad) {
+        if (bs_k_all && cols * rows <= 128) {
+            bs_k = bs_k_all;
+            a_pad = 8;
+            if (shmem(cols, rows, bs_k, a_pad) <= limit) {
+                return true;
+            }
+        }
+        bs_k = Cout <= 32 ? 32 : 64;
+        for (;;) {
+            // Padding avoids up to eight-way bank conflicts in the copied layout. The in-place layout can tolerate two-way conflicts.
+            a_pad = hp.filter_copy || shmem(cols, rows, bs_k, 8) <= limit ? 8 : 0;
+            if (shmem(cols, rows, bs_k, a_pad) <= limit) {
+                return true;
+            }
+            if (bs_k <= 32) {
+                return false;
+            }
+            bs_k = 32;
+        }
+    };
+    // Output tile: the shape with the lowest padded area (output pixels and
+    // channels) times its cost per output.
+    const uint32_t sms = ctx->device->shader_core_count > 0 ? ctx->device->shader_core_count : 32;
+    double best = 0;
+    const uint32_t shapes[10][2] = { { 32, 8 }, { 16, 16 }, { 8, 32 }, { 56, 4 }, { 16, 8 }, { 8, 16 }, { 32, 4 }, { 8, 8 }, { 16, 4 }, { 32, 2 } };
+    for (const auto & shape : shapes) {
+        // 8-pixel fragments need 16x8x16 cooperative matrices.
+        if (shape[0] % 16 != 0 && !ctx->device->coopmat_support_16x8x16_f16acc) {
+            continue;
+        }
+        // The 56 x 4 tile saves padding for widths 49 to 56 when the grid is large enough.
+        if (shape[0] == 56 && (uint64_t)CEIL_DIV(Cout, 64) * N * OD * CEIL_DIV(OH, shape[1]) * CEIL_DIV(OW, shape[0]) < sms / 2) {
+            continue;
+        }
+        uint32_t bs_k, a_pad;
+        if (!fit(shape[0], shape[1], bs_k, a_pad)) {
+            continue;
+        }
+        const uint32_t nt = shape[0] * shape[1];
+        const double cost = (shape[0] % 16 != 0 ? 1.15 : 1.0) * (nt >= 192 ? 1.0 : nt >= 128 ? 1.2 : 1.4) * (bs_k < 64 && Cout > 32 ? 1.15 : 1.0);
+        const double area = (double)CEIL_DIV(OW, shape[0]) * shape[0] * CEIL_DIV(OH, shape[1]) * shape[1] * cost * CEIL_DIV(Cout, bs_k) * bs_k / Cout;
+        if (best == 0 || area < best) {
+            best = area;
+            hp.out_cols = shape[0];
+            hp.out_rows = shape[1];
+            hp.bs_k = bs_k;
+            hp.a_pad = a_pad;
+        }
+    }
+    if (best == 0) {
+        return false;
+    }
+    hp.fn = hp.out_cols % 16 == 0 ? 16 : 8;
+    const uint64_t slices = (uint64_t)N * OD;
+    auto tiles_for = [&](uint32_t rows) {
+        return (uint64_t)CEIL_DIV(Cout, hp.bs_k) * slices * CEIL_DIV(OH, rows) * CEIL_DIV(OW, hp.out_cols);
+    };
+    // For in-place filters, a smaller channel tile can fill the SMs without writing split-K partials.
+    if (tiles_for(hp.out_rows) < 2 * sms && hp.bs_k == 64 && !hp.filter_copy && taps * hp.KD > 1 && Cin / 16 * hp.KD >= 8) {
+        hp.bs_k = 32;
+        hp.a_pad = shmem(hp.out_cols, hp.out_rows, 32, 8) <= limit ? 8 : 0;
+    }
+    // Use split-K to target two workgroups per SM, then shrink the tiles if the grid is still too small.
+    const uint32_t stages = Cin / 16 * hp.KD;
+    hp.split_k = 1;
+    if (tiles_for(hp.out_rows) < 2 * sms) {
+        hp.split_k = (uint32_t)std::max<uint64_t>(1, std::min<uint64_t>(2 * sms / tiles_for(hp.out_rows), stages / 4));
+        while (tiles_for(hp.out_rows) * hp.split_k < sms / 2 && hp.out_rows > 2) {
+            hp.out_rows /= 2;
+        }
+        if (tiles_for(hp.out_rows) * hp.split_k < sms && hp.bs_k > 32) {
+            hp.bs_k = 32;
+            hp.a_pad = hp.filter_copy || shmem(hp.out_cols, hp.out_rows, 32, 8) <= limit ? 8 : 0;
+        }
+    }
+    // Split-K scratch uses the dense output layout with no descriptor offset.
+    if (hp.split_k > 1 && (!ggml_is_contiguous(dst) || get_misalign_bytes(ctx, dst) != 0)) {
+        hp.split_k = 1;
+    }
+    hp.tiles = (uint32_t)(slices * CEIL_DIV(OH, hp.out_rows) * CEIL_DIV(OW, hp.out_cols));
+    return true;
+#else
+    GGML_UNUSED(ctx); GGML_UNUSED(src0); GGML_UNUSED(src1); GGML_UNUSED(dst); GGML_UNUSED(hp);
+    return false;
+#endif
+}
+
+static vk_pipeline ggml_vk_conv_halo_pipeline(ggml_backend_vk_context * ctx, const vk_conv_halo_params & hp, bool is_3d) {
+    std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
+    auto & pipelines = is_3d ? ctx->device->pipeline_conv3d_halo_f16_f32 : ctx->device->pipeline_conv2d_halo_f16_f32;
+    vk_pipeline & slot = pipelines[hp.key()];
+    if (!slot) {
+        slot = std::make_shared<vk_pipeline_struct>();
+    }
+    return slot;
 }
 
 static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * dst, ggml_op op) {
@@ -10341,9 +10641,14 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
     case GGML_OP_CONV_2D:
     case GGML_OP_CONV_TRANSPOSE_2D:
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            vk_conv_halo_params hp;
+            if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+                return ggml_vk_conv_halo_pipeline(ctx, hp, false);
+            }
             uint32_t K = dst->ne[2]; // Cout
             uint32_t NPQ = dst->ne[3] * dst->ne[1] * dst->ne[0]; // N * OH * OW
-            vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, K, NPQ);
+            uint32_t split_k;
+            vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
 
             bool transpose = dst->op == GGML_OP_CONV_TRANSPOSE_2D;
             uint32_t KW = (uint32_t)src0->ne[0];
@@ -10365,7 +10670,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
                                       (CRS % BS_CRS == 0) &&
                                       (NPQ % BS_NPQ == 0)) ? 1u : 0u;
 
-            vk_conv2d_pipeline_state conv2d_pipeline_state(s0, s1, p0, p1, d0, d1, KW, KH, aligned);
+            vk_conv2d_pipeline_state conv2d_pipeline_state(s0, s1, p0, p1, d0, d1, KW, KH, aligned, split_k);
 
             std::map<vk_conv2d_pipeline_state, vk_pipeline> *pipelines = nullptr;
             if (op == GGML_OP_CONV_2D) {
@@ -10414,12 +10719,16 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
         return nullptr;
     case GGML_OP_CONV_3D:
         if (src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32) {
+            vk_conv_halo_params hp;
+            if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+                return ggml_vk_conv_halo_pipeline(ctx, hp, true);
+            }
             const uint32_t OC = (uint32_t)ggml_get_op_params_i32(dst, 11);
             const uint32_t IC = (uint32_t)ggml_get_op_params_i32(dst, 9);
             const uint32_t N  = (uint32_t)ggml_get_op_params_i32(dst, 10);
             const uint32_t NPQ = N * dst->ne[2] * dst->ne[1] * dst->ne[0];
             uint32_t split_k;
-            const vk_conv_shapes shape = ggml_vk_conv3d_select_shape(ctx, src0, dst, split_k);
+            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
 
             const uint32_t KW = (uint32_t)src0->ne[0];
             const uint32_t KH = (uint32_t)src0->ne[1];
@@ -10716,11 +11025,17 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
     case GGML_OP_CONV_2D:
     case GGML_OP_CONV_TRANSPOSE_2D:
         if constexpr (std::is_same_v<PC, vk_op_conv2d_push_constants>) {
-            const uint32_t NPQ = pc.N * pc.OH * pc.OW;
-            const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, pc.Cout, NPQ);
-            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, vk_conv_block_sizes[shape].NPQ);
-
-            elements = { pc.Cout, NPQ_blocks, 1 };
+            vk_conv_halo_params hp;
+            if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+                elements = { CEIL_DIV(pc.Cout, hp.bs_k) * hp.bs_k * hp.split_k, hp.tiles, 1 };
+            } else {
+                const uint32_t NPQ = pc.N * pc.OH * pc.OW;
+                const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
+                const auto & block = vk_conv_block_sizes[shape];
+                const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
+                const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.Cout, block.K) * block.K * split_k : pc.Cout;
+                elements = { channel_groups, NPQ_blocks, 1 };
+            }
             if (elements[1] > 512) {
                 elements[2] = CEIL_DIV(elements[1], 512);
                 elements[1] = 512;
@@ -10731,13 +11046,18 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         break;
     case GGML_OP_CONV_3D:
         if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
-            const uint32_t NPQ = pc.N * pc.OD * pc.OH * pc.OW;
-            const vk_conv_shapes shape = ggml_vk_conv3d_select_shape(ctx, src0, dst, split_k);
-            const auto & block = vk_conv_block_sizes[shape];
-            const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
-            const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.OC, block.K) * block.K * split_k : pc.OC;
+            vk_conv_halo_params hp;
+            if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+                elements = { CEIL_DIV(pc.OC, hp.bs_k) * hp.bs_k * hp.split_k, hp.tiles, 1 };
+            } else {
+                const uint32_t NPQ = pc.N * pc.OD * pc.OH * pc.OW;
+                const vk_conv_shapes shape = ggml_vk_conv_select_shape(ctx, src0, dst, split_k);
+                const auto & block = vk_conv_block_sizes[shape];
+                const uint32_t NPQ_blocks = CEIL_DIV(NPQ, block.NPQ);
+                const uint32_t channel_groups = split_k > 1 ? CEIL_DIV(pc.OC, block.K) * block.K * split_k : pc.OC;
 
-            elements = { channel_groups, NPQ_blocks, 1 };
+                elements = { channel_groups, NPQ_blocks, 1 };
+            }
             if (elements[1] > 512) {
                 elements[2] = CEIL_DIV(elements[1], 512);
                 elements[1] = 512;
@@ -10868,7 +11188,80 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         break;
     }
 
-    if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
+    if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants> || std::is_same_v<PC, vk_op_conv2d_push_constants>) {
+        vk_conv_halo_params hp;
+        if (ggml_vk_conv_halo_params(ctx, src0, src1, dst, hp)) {
+            vk_subbuffer out_buf = dst_buf;
+            if (hp.split_k > 1) {
+                const size_t scratch_size = ggml_nbytes(dst) * hp.split_k;
+                if (ctx->prealloc_size_split_k < scratch_size) {
+                    ctx->prealloc_size_split_k = scratch_size;
+                    ggml_vk_preallocate_buffers(ctx, subctx);
+                }
+                if (ctx->prealloc_split_k_need_sync) {
+                    ggml_vk_sync_buffers(ctx, subctx);
+                }
+                out_buf = { ctx->prealloc_split_k, 0, scratch_size };
+                pc.dst_offset = 0;
+                ggml_pipeline_request_descriptor_sets(ctx, ctx->device->pipeline_matmul_split_k_reduce, 1);
+            }
+            auto reduce = [&]() {
+                if (hp.split_k > 1) {
+                    ggml_vk_sync_buffers(ctx, subctx);
+                    const uint32_t ne = (uint32_t)ggml_nelements(dst);
+                    const std::array<uint32_t, 2> reduce_pc = { ne, hp.split_k };
+                    ggml_vk_dispatch_pipeline(ctx, subctx, ctx->device->pipeline_matmul_split_k_reduce, { out_buf, dst_buf }, reduce_pc, { ne, 1, 1 });
+                    ctx->prealloc_split_k_need_sync = true;
+                }
+            };
+            if (!hp.filter_copy) {
+                ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { src0_buf, src1_buf, out_buf }, pc, elements);
+                reduce();
+                return;
+            }
+            // Transpose [OC][IC][KD][KH][KW] to f16 [IC][KD][KH][KW][OCP].
+            // Round OC up to 8 to align each row to 16 bytes. The transpose leaves the padding unwritten.
+            uint32_t IC, OC;
+            if constexpr (std::is_same_v<PC, vk_op_conv3d_push_constants>) {
+                IC = pc.IC;
+                OC = pc.OC;
+            } else {
+                IC = pc.Cin;
+                OC = pc.Cout;
+            }
+            const uint32_t rows = IC * hp.KW * hp.KH * hp.KD;
+            const uint32_t ocp = ROUNDUP_POW2(OC, 8);
+            const uint64_t size = (uint64_t)rows * ocp * sizeof(ggml_fp16_t);
+            if (ctx->prealloc_size_x < size) {
+                ctx->prealloc_size_x = size;
+                ggml_vk_preallocate_buffers(ctx, subctx);
+            }
+            vk_pipeline cpy = src0->type == GGML_TYPE_F32 ? ctx->device->pipeline_cpy_transpose_f32_f16 : ctx->device->pipeline_cpy_transpose_16;
+            ggml_pipeline_request_descriptor_sets(ctx, cpy, 1);
+            if (ctx->prealloc_x_need_sync) {
+                ggml_vk_sync_buffers(ctx, subctx);
+            }
+            vk_op_unary_push_constants cp{};
+            cp.ne = OC * rows;
+            cp.ne00 = OC; cp.ne01 = rows; cp.ne02 = 1; cp.ne03 = 1;
+            cp.nb00 = rows; cp.nb01 = 1;
+            cp.ne10 = OC; cp.ne11 = rows; cp.ne12 = 1; cp.ne13 = 1;
+            cp.nb10 = 1; cp.nb11 = ocp;
+            cp.misalign_offsets = pc.knl_offset << 16;
+            init_pushconst_fastdiv(cp);
+            // The transpose loops over tiles beyond the grid limit.
+            const auto & max_groups = ctx->device->properties.limits.maxComputeWorkGroupCount;
+            const std::array<uint32_t, 3> cpy_elements = { std::min(CEIL_DIV(OC, 32u), max_groups[0]),
+                                                           std::min(CEIL_DIV(rows, 32u), max_groups[1]), 1 };
+            vk_subbuffer knl = { ctx->prealloc_x, 0, size };
+            ggml_vk_dispatch_pipeline(ctx, subctx, cpy, { src0_buf, knl }, cp, cpy_elements);
+            ggml_vk_sync_buffers(ctx, subctx);
+            pc.knl_offset = 0;
+            ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { knl, src1_buf, out_buf }, pc, elements);
+            ctx->prealloc_x_need_sync = true;
+            reduce();
+            return;
+        }
         if (split_k > 1) {
             const uint32_t ne = (uint32_t)ggml_nelements(dst);
             const size_t scratch_size = ggml_nbytes(dst) * split_k;

@@ -1,0 +1,380 @@
+#version 450
+#extension GL_EXT_control_flow_attributes : enable
+#extension GL_KHR_cooperative_matrix : require
+#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require
+#extension GL_KHR_memory_scope_semantics : enable
+#extension GL_KHR_shader_subgroup_basic : enable
+
+// One workgroup computes BS_K output channels for an OUT_ROWS x OUT_COLS tile at output depth od.
+// One pass covers BS_C input channels starting at c0 and one filter depth slice kd (zero in 2D).
+// The pass sums one matrix product per spatial tap t = (kh, kw):
+//
+//   acc [BS_K x NT] += A [BS_K x (TAPS * BS_C)] * B [(TAPS * BS_C) x NT]
+//
+//   A = [ A(0,0) | A(0,1) | ... | A(KH-1,KW-1) ]   Each tap is BS_K x BS_C.
+//   B = [ B(0,0)       ]                            Each tap is BS_C x NT.
+//       [ B(0,1)       ]
+//       [ ...          ]
+//       [ B(KH-1,KW-1) ]
+//
+//   NT = OUT_ROWS * OUT_COLS, j = r * OUT_COLS + x for output tile pixel (r, x)
+//   A(kh,kw)[k][c] = filter[k0 + k][c0 + c][kd][kh][kw]
+//   B(kh,kw)[c][j] = input[c0 + c][od + kd - PAD_D][oh0 + r + kh - PAD_H][ow0 + x + kw - PAD_W]
+//
+// Shared memory holds the filter slices and one input box for the pass.
+//
+//   smem: [ A(0,0) | A(0,1) | ... | A(KH-1,KW-1) | box pixel 0 | box pixel 1 | ... ]
+//           ^ 0      ^ A_TAP                       ^ HS_BASE
+//
+// Each filter slice starts at t * A_TAP. The layout within a slice depends on FILTER_COPY.
+//   Filter copy:     [BS_C][BS_K + A_PAD] halves, column-major A, stride AT4.
+//   Original filter: [BS_K][BS_C + A_PAD] halves, row-major A, stride AS4.
+// The input box is [HALO_H][HALO_W][BS_C + 8] halves, with channels contiguous in each pixel.
+// Pixel (y, x) starts at smem[HS_BASE + (y * HALO_W + x) * CS4]. All strides and offsets above use f16vec4.
+//
+// Example with 64 output channels, 16 input channels, a 2 x 16 output tile, a 3 x 3 filter and FN = 8.
+// The logical A is 64 x 144, B is 144 x 32, and acc is 64 x 32. The shared input box is 4 x 18 pixels.
+//
+//   Box x     0..7      8..15     16..17
+//   y = 0     oooooooo  oooooooo  ++
+//   y = 1     oooooooo  oooooooo  ++
+//   y = 2     ++++++++  ++++++++  ++
+//   y = 3     ++++++++  ++++++++  ++
+//
+//   o = input under the output tile, + = halo input
+//   Acc column    0..7       8..15      16..23     24..31
+//   Output pixel  row 0 x0   row 0 x8   row 1 x0   row 1 x8   (8 pixels each)
+//
+// Each subgroup MMA multiplies a 16 x 16 filter fragment by 16 x FN input values for FN neighboring output pixels.
+// For each tap, shift the B load by kh * HALO_W + kw pixels within the same box.
+// For the fragment starting at output (row 0, x8), the reads are:
+//
+//   Tap       Box row   Box x    Linear box pixels
+//   (0, 0)    0         8..15    8..15
+//   (0, 2)    0         10..17   10..17
+//   (1, 0)    1         8..15    26..33
+//   (2, 2)    2         10..17   46..53
+//
+// Every accumulator column belongs to the output tile. The shifted loads reuse the box across taps.
+// After the last pass, the accumulator reuses smem from offset 0 as [BS_K][NT + 8] halves with row stride OS4.
+
+layout(binding = 0) readonly buffer A4 { uvec4 knl4[]; };    // Filter copy, 8 output channels per packet
+layout(binding = 0) readonly buffer A2 { uvec2 knl2[]; };    // Original filter, 4 halves per packet
+layout(binding = 1) readonly buffer B { float src_data[]; };
+layout(binding = 2) writeonly buffer D { float dst_data[]; };
+
+#ifdef CONV3D
+#include "conv3d_push_constants.glsl"
+uint in_depth()  { return p.ID; }
+uint out_depth() { return p.OD; }
+uint src_index(const uint n, const uint c, const uint d, const uint h, const uint w) {
+    return p.src_offset + (n * p.IC + c) * p.nb13 + d * p.nb12 + h * p.nb11 + w;
+}
+uint src_cstride() { return p.nb13; }
+uint src_dstride() { return p.nb12; }
+uint dst_index(const uint n, const uint k, const uint d, const uint h, const uint w) {
+    return p.dst_offset + (n * p.OC + k) * p.nb3 + d * p.nb2 + h * p.nb1 + w;
+}
+#else
+#include "conv2d_push_constants.glsl"
+uint in_depth()  { return 1; }
+uint out_depth() { return 1; }
+uint src_index(const uint n, const uint c, const uint d, const uint h, const uint w) {
+    return p.src_offset + n * p.nb13 + c * p.nb12 + h * p.nb11 + w;
+}
+uint src_cstride() { return p.nb12; }
+uint src_dstride() { return 0; }
+uint dst_index(const uint n, const uint k, const uint d, const uint h, const uint w) {
+    return p.dst_offset + n * p.nb3 + k * p.nb2 + h * p.nb1 + w;
+}
+#endif
+
+layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
+layout(constant_id = 1) const uint BS_K     = 64;  // output channels per workgroup
+layout(constant_id = 2) const uint BS_C     = 16;  // input channels per pass
+layout(constant_id = 3) const uint OUT_ROWS = 8;
+layout(constant_id = 4) const uint OUT_COLS = 14;
+layout(constant_id = 5) const uint KW       = 3;
+layout(constant_id = 6) const uint KH       = 3;
+layout(constant_id = 7) const uint A_PAD    = 8;   // filter padding in halves
+layout(constant_id = 8) const uint PAD_W    = 0;
+layout(constant_id = 9) const uint PAD_H    = 0;
+layout(constant_id = 10) const uint FILTER_COPY = 1;
+layout(constant_id = 11) const uint KD      = 1;
+layout(constant_id = 12) const uint PAD_D   = 0;
+layout(constant_id = 13) const uint WM      = 32;  // output channels per subgroup, a multiple of 16
+layout(constant_id = 14) const uint WN      = 32;  // accumulator columns per subgroup, a multiple of FN
+
+const uint TAPS     = KW * KH;
+#ifdef FRAG_N8
+const uint FN       = 8;                          // accumulator fragment width in pixels
+#else
+const uint FN       = 16;
+#endif
+const uint CB       = OUT_COLS / FN;              // fragments per tile row
+const uint HALO_W   = OUT_COLS + KW - 1;
+const uint HALO_H   = OUT_ROWS + KH - 1;
+const uint NT       = OUT_ROWS * OUT_COLS;        // accumulator columns
+const uint HALO_POS = HALO_H * HALO_W;
+// Shared strides are in f16vec4. Padding distributes matrix loads across banks.
+// coopMatLoad strides and start offsets must be 16-byte aligned.
+const uint CS4      = (BS_C + 8) / 4;             // box pixel stride
+const uint AT4      = (BS_K + A_PAD) / 4;         // filter column stride (copy)
+const uint AS4      = (BS_C + A_PAD) / 4;         // filter row stride (in place)
+const uint CG       = BS_C / 8;                   // 8-channel groups per box pixel
+const uint KG       = BS_K / 8;                   // 8-channel groups per filter column
+
+// Each tap's filter slice is column-major from the copy and row-major from the original filter.
+const uint A_TAP    = FILTER_COPY != 0 ? BS_C * AT4 : BS_K * AS4;
+const uint HS_BASE  = TAPS * A_TAP;
+const uint PASS_LEN = HS_BASE + HALO_POS * CS4;
+const uint OS4      = (NT + 8) / 4;               // output staging row stride, padded against bank conflicts
+const uint SMEM_LEN = PASS_LEN > BS_K * OS4 ? PASS_LEN : BS_K * OS4;
+shared f16vec4 smem[SMEM_LEN];
+
+// Threads take box pixels in width order and copied filter packets in output-channel order to coalesce loads.
+uint tid = gl_LocalInvocationID.x;
+const uint WG = gl_WorkGroupSize.x;
+const uint HALO_ITEMS = HALO_POS * CG;
+const uint HALO_IT    = (HALO_ITEMS + WG - 1) / WG;
+const uint A_ITEMS    = TAPS * BS_C * KG;
+const uint A_IT       = (A_ITEMS + WG - 1) / WG;
+const uint CG4        = BS_C / 4;
+const uint AR_ITEMS   = BS_K * CG4;
+const uint AR_IT      = (AR_ITEMS + WG - 1) / WG;
+
+float hv[HALO_IT][8];
+uvec4 aq[A_IT];
+uvec2 ar[AR_IT][TAPS];
+
+// Precompute addresses and bounds once. Each pass adds a uniform channel and depth offset.
+uint hbase[HALO_IT];
+bool hin[HALO_IT];
+uint abase[A_IT];
+bool ain[A_IT];
+uint arbase[AR_IT];
+bool arin[AR_IT];
+
+uint n, od, oh0, ow0, k0;
+uint split_off;
+
+void setupItems() {
+    [[unroll]] for (uint it = 0; it < HALO_IT; ++it) {
+        const uint i = it * WG + tid;
+        const uint pos = i % HALO_POS;
+        const uint cg = i / HALO_POS;
+        const uint y = pos / HALO_W;
+        const uint x = pos - y * HALO_W;
+        // Unsigned wraparound lets one bounds check handle both sides of the padding.
+        const uint h = oh0 + y - PAD_H, w = ow0 + x - PAD_W;
+        hin[it] = i < HALO_ITEMS && h < p.IH && w < p.IW;
+        hbase[it] = src_index(n, cg * 8, od - PAD_D, h, w);
+    }
+    // A partial packet reads row padding. Its extra channels are discarded on store.
+    const uint ocp = (p.OC + 7) & ~7u;
+    [[unroll]] for (uint it = 0; it < A_IT; ++it) {
+        const uint i = it * WG + tid;
+        const uint g = i % KG;
+        const uint c = (i / KG) % BS_C;
+        const uint t = i / (KG * BS_C);
+        ain[it] = i < A_ITEMS && k0 + g * 8 < p.OC;
+        abase[it] = ((c * KD * TAPS + t) * ocp + k0 + g * 8) / 8;
+    }
+#ifndef CONV3D
+    [[unroll]] for (uint it = 0; it < AR_IT; ++it) {
+        const uint i = it * WG + tid;
+        const uint kl = i / CG4;
+        const uint cg = i - kl * CG4;
+        arin[it] = i < AR_ITEMS && k0 + kl < p.OC;
+        arbase[it] = (p.knl_offset + (k0 + kl) * p.nb03 + cg * 4 * p.nb02) / 4;
+    }
+#endif
+}
+
+void loadStage(const uint s) {
+    const uint c0 = (s / KD) * BS_C;
+    const uint kd = s - (s / KD) * KD;
+    const uint d = od + kd - PAD_D;
+    const bool dok = d < in_depth();
+    const uint soff = c0 * src_cstride() + kd * src_dstride();
+    [[unroll]] for (uint it = 0; it < HALO_IT; ++it) {
+        const bool inb = hin[it] && dok;
+        const uint base = hbase[it] + soff;
+        [[unroll]] for (uint c = 0; c < 8; ++c) {
+            hv[it][c] = inb ? src_data[base + c * src_cstride()] : 0.0;
+        }
+    }
+#ifndef CONV3D
+    if (FILTER_COPY == 0) {
+        // Four input channels span TAPS contiguous packets in the original filter.
+        [[unroll]] for (uint it = 0; it < AR_IT; ++it) {
+            const bool kin = arin[it];
+            const uint base2 = arbase[it] + c0 * p.nb02 / 4;
+            [[unroll]] for (uint t = 0; t < TAPS; ++t) {
+                ar[it][t] = kin ? knl2[base2 + t] : uvec2(0);
+            }
+        }
+        return;
+    }
+#endif
+    const uint aoff = (c0 * KD + kd) * TAPS * ((p.OC + 7) & ~7u) / 8;
+    [[unroll]] for (uint it = 0; it < A_IT; ++it) {
+        aq[it] = ain[it] ? knl4[abase[it] + aoff] : uvec4(0);
+    }
+}
+
+void storeStage() {
+    [[unroll]] for (uint it = 0; it < HALO_IT; ++it) {
+        const uint i = it * WG + tid;
+        if (i < HALO_ITEMS) {
+            const uint pos = i % HALO_POS;
+            const uint cg = i / HALO_POS;
+            smem[HS_BASE + pos * CS4 + cg * 2 + 0] = f16vec4(hv[it][0], hv[it][1], hv[it][2], hv[it][3]);
+            smem[HS_BASE + pos * CS4 + cg * 2 + 1] = f16vec4(hv[it][4], hv[it][5], hv[it][6], hv[it][7]);
+        }
+    }
+#ifndef CONV3D
+    if (FILTER_COPY == 0) {
+        // Transpose each packet group from [channel][tap] to [tap][channel].
+        [[unroll]] for (uint it = 0; it < AR_IT; ++it) {
+            const uint i = it * WG + tid;
+            if (i < AR_ITEMS) {
+                const uint kl = i / CG4;
+                const uint cg = i - kl * CG4;
+                [[unroll]] for (uint t = 0; t < TAPS; ++t) {
+                    float16_t h[4];
+                    [[unroll]] for (uint c = 0; c < 4; ++c) {
+                        const uint e = c * TAPS + t;
+                        h[c] = unpackFloat2x16(ar[it][e / 4][(e % 4) / 2])[e % 2];
+                    }
+                    smem[(t * BS_K + kl) * AS4 + cg] = f16vec4(h[0], h[1], h[2], h[3]);
+                }
+            }
+        }
+        return;
+    }
+#endif
+    [[unroll]] for (uint it = 0; it < A_IT; ++it) {
+        const uint i = it * WG + tid;
+        if (i < A_ITEMS) {
+            const uint g = i % KG;
+            const uint c = (i / KG) % BS_C;
+            const uint t = i / (KG * BS_C);
+            const uint o = t * A_TAP + c * AT4 + g * 2;
+            smem[o + 0] = f16vec4(unpackFloat2x16(aq[it].x), unpackFloat2x16(aq[it].y));
+            smem[o + 1] = f16vec4(unpackFloat2x16(aq[it].z), unpackFloat2x16(aq[it].w));
+        }
+    }
+}
+
+// Each subgroup owns a WM x WN tile of 16 x FN fragments. Extra subgroups help with staging.
+const uint FR       = WM / 16;
+const uint FC       = WN / FN;
+const uint WARPS_N  = NT / WN;
+const uint WARPS    = (BS_K / WM) * WARPS_N;
+coopmat<float16_t, gl_ScopeSubgroup, 16, FN, gl_MatrixUseAccumulator> acc[FR * FC];
+uint warp_r, warp_c;
+// Box position of the first pixel of each of this subgroup's fragments.
+uint bpos[FC];
+
+void mmaStage() {
+    if (gl_SubgroupID >= WARPS) {
+        return;
+    }
+    [[unroll]] for (uint t = 0; t < TAPS; ++t) {
+        const uint kh = t / KW;
+        const uint kw = t - kh * KW;
+        coopmat<float16_t, gl_ScopeSubgroup, 16, 16, gl_MatrixUseA> a[FR];
+        [[unroll]] for (uint i = 0; i < FR; ++i) {
+            if (FILTER_COPY != 0) {
+                coopMatLoad(a[i], smem, t * A_TAP + (warp_r * WM + i * 16) / 4, AT4, gl_CooperativeMatrixLayoutColumnMajor);
+            } else {
+                coopMatLoad(a[i], smem, t * A_TAP + (warp_r * WM + i * 16) * AS4, AS4, gl_CooperativeMatrixLayoutRowMajor);
+            }
+        }
+        [[unroll]] for (uint j = 0; j < FC; ++j) {
+            coopmat<float16_t, gl_ScopeSubgroup, 16, FN, gl_MatrixUseB> b;
+            coopMatLoad(b, smem, HS_BASE + (bpos[j] + kh * HALO_W + kw) * CS4, CS4,
+                        gl_CooperativeMatrixLayoutColumnMajor);
+            [[unroll]] for (uint i = 0; i < FR; ++i) {
+                acc[j * FR + i] = coopMatMulAdd(a[i], b, acc[j * FR + i]);
+            }
+        }
+    }
+}
+
+void storeOut(const uint r, const uint c, const float16_t e) {
+    const uint row = c / OUT_COLS;
+    const uint col = c - row * OUT_COLS;
+    const uint oh = oh0 + row, ow = ow0 + col, k = k0 + r;
+    if (oh < p.OH && ow < p.OW && k < p.OC) {
+        dst_data[dst_index(n, k, od, oh, ow) + split_off] = float(e);
+    }
+}
+
+void main() {
+    // Advance depth first so workgroups for neighboring output slices can reuse input slices in L2.
+    const uint tiles_w = (p.OW + OUT_COLS - 1) / OUT_COLS;
+    const uint tiles_h = (p.OH + OUT_ROWS - 1) / OUT_ROWS;
+    const uint per_slice = tiles_w * tiles_h;
+    const uint tile = gl_WorkGroupID.y + gl_WorkGroupID.z * 512;
+    od = tile % out_depth();
+    const uint ns = tile / out_depth();
+    n = ns / per_slice;
+    const uint rem = ns - n * per_slice;
+    oh0 = (rem / tiles_w) * OUT_ROWS;
+    ow0 = (rem - (rem / tiles_w) * tiles_w) * OUT_COLS;
+    const uint kblocks = (p.OC + BS_K - 1) / BS_K;
+    const uint split = gl_WorkGroupID.x / kblocks;
+    const uint nsplit = gl_NumWorkGroups.x / kblocks;
+    k0 = (gl_WorkGroupID.x - split * kblocks) * BS_K;
+    split_off = split * p.N * p.OC * out_depth() * p.OH * p.OW;
+    if (n >= p.N) {
+        return;
+    }
+
+    warp_r = gl_SubgroupID / WARPS_N;
+    warp_c = gl_SubgroupID - warp_r * WARPS_N;
+    [[unroll]] for (uint i = 0; i < FR * FC; ++i) {
+        acc[i] = coopmat<float16_t, gl_ScopeSubgroup, 16, FN, gl_MatrixUseAccumulator>(0.0);
+    }
+    [[unroll]] for (uint j = 0; j < FC; ++j) {
+        const uint f = warp_c * FC + j;
+        const uint r = f / CB;
+        bpos[j] = r * HALO_W + (f - r * CB) * FN;
+    }
+    setupItems();
+
+    // Each split covers a contiguous range of passes and writes its own output for the reduce pass.
+    // Load after MMA to limit register pressure and let another workgroup on the SM hide load latency.
+    const uint stages = (p.IC / BS_C) * KD;
+    const uint s_begin = split * stages / nsplit;
+    const uint s_end = (split + 1) * stages / nsplit;
+    loadStage(s_begin);
+    storeStage();
+    barrier();
+    [[dont_unroll]] for (uint s = s_begin; s + 1 < s_end; ++s) {
+        mmaStage();
+        barrier();
+        loadStage(s + 1);
+        storeStage();
+        barrier();
+    }
+    mmaStage();
+    // Reuse shared memory for the accumulator so the final stores can mask edge pixels and channels.
+    barrier();
+    if (gl_SubgroupID < WARPS) {
+        [[unroll]] for (uint j = 0; j < FC; ++j) {
+            [[unroll]] for (uint i = 0; i < FR; ++i) {
+                coopMatStore(acc[j * FR + i], smem, (warp_r * WM + i * 16) * OS4 + (warp_c * WN + j * FN) / 4, OS4,
+                             gl_CooperativeMatrixLayoutRowMajor);
+            }
+        }
+    }
+    barrier();
+    for (uint i = tid; i < BS_K * NT; i += WG) {
+        const uint r = i / NT;
+        const uint c = i - r * NT;
+        storeOut(r, c, smem[r * OS4 + c / 4][c % 4]);
+    }
+}
