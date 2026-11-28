@@ -31,7 +31,9 @@
 #define REQD_SUBGROUP_SIZE_64  __attribute__((qcom_reqd_sub_group_size("half")))
 #endif
 
+#ifndef NTILES
 #define NTILES     4        // 64-row tiles per work-group (NTILES*64 = 256 rows)
+#endif
 #define TILE_ROWS  64
 #define BN         16       // output columns handled per work-group (global z step)
 #define WG_THREADS (NTILES * TILE_ROWS)
