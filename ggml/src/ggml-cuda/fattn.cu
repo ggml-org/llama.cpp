@@ -576,7 +576,8 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
     }
 }
 
-static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
+// with_bias == false: the choice for the same op without the indexed bias
+static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst, const bool with_bias) {
 #ifndef FLASH_ATTN_AVAILABLE
     GGML_UNUSED(device); GGML_UNUSED(dst);
     return BEST_FATTN_KERNEL_NONE;
@@ -673,8 +674,8 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
-    // the tile and vec kernels implement the indexed bias, the mma kernel does not
-    if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
+    // the tile and vec kernels implement the indexed bias, the mma kernel only with packed Q heads and without logit softcap
+    if (with_bias && ggml_flash_attn_ext_has_indexed_bias(dst)) {
         float logit_softcap;
         memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
         if (Q->ne[0] != 128 && !(Q->ne[0] == 64 && logit_softcap == 0.0f)) {
@@ -683,6 +684,11 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         if (logit_softcap == 0.0f && Q->ne[1] == 1 && n_kv % FATTN_KQ_STRIDE == 0 &&
                 ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type)) {
             return BEST_FATTN_KERNEL_VEC;
+        }
+        // use the mma kernel where it is used without the bias; on Volta odd GQA ratios do not pack Q heads
+        if (logit_softcap == 0.0f && !kv_rows && gqa_opt_applies && (cc != GGML_CUDA_CC_VOLTA || gqa_ratio % 2 == 0) &&
+                ggml_cuda_get_best_fattn_kernel(device, dst, false) == BEST_FATTN_KERNEL_MMA_F16) {
+            return BEST_FATTN_KERNEL_MMA_F16;
         }
         return BEST_FATTN_KERNEL_TILE;
     }
@@ -809,7 +815,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
     GGML_ASSERT(K != nullptr);
     GGML_ASSERT(V != nullptr);
 
-    const best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel(device, dst);
+    const best_fattn_kernel kernel = ggml_cuda_get_best_fattn_kernel(device, dst, true);
 
     bool need_f16_K = false;
     bool need_f16_V = false;
@@ -837,7 +843,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
 
 void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     ggml_cuda_set_device(ctx.device);
-    switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst)) {
+    switch (ggml_cuda_get_best_fattn_kernel(ggml_cuda_get_device(), dst, true)) {
         case BEST_FATTN_KERNEL_NONE:
             GGML_ABORT("fatal error");
         case BEST_FATTN_KERNEL_TILE:
@@ -853,5 +859,5 @@ void ggml_cuda_flash_attn_ext(ggml_backend_cuda_context & ctx, ggml_tensor * dst
 }
 
 bool ggml_cuda_flash_attn_ext_supported(int device, const ggml_tensor * dst) {
-    return ggml_cuda_get_best_fattn_kernel(device, dst) != BEST_FATTN_KERNEL_NONE;
+    return ggml_cuda_get_best_fattn_kernel(device, dst, true) != BEST_FATTN_KERNEL_NONE;
 }
