@@ -1870,6 +1870,28 @@ private:
                 if (!slot.prompt_load(*prompt_cache, task.tokens, lora)) {
                     slot.prompt_clear();
                 }
+            } else if (params_base.kv_unified) {
+                // idle slots keep their cells: save and free them one at a time until the restore fits
+                // stop once the cache no longer holds a start worth restoring (the saves can evict it)
+                int n_purged = 0;
+
+                while (prompt_cache->has_better(slot.prompt, task.tokens, lora) && try_clear_idle_slots()) {
+                    n_purged++;
+
+                    if (slot.prompt_load(*prompt_cache, task.tokens, lora)) {
+                        break;
+                    }
+
+                    slot.prompt_clear();
+                }
+
+                if (n_purged > 0) {
+                    if (slot.prompt.n_tokens() > 0) {
+                        SLT_INF(slot, "loaded the prompt from the cache after purging %d idle slots\n", n_purged);
+                    } else {
+                        SLT_WRN(slot, "could not load the prompt from the cache after purging %d idle slots\n", n_purged);
+                    }
+                }
             }
         }
 
@@ -1881,8 +1903,6 @@ private:
     // return true if at least one slot has been cleared
     // TODO: improve logic
     //       - smarter decision which slot to clear (LRU or longest prompt?)
-    //       - move slot to level 2 cache instead of removing?
-    //       - instead of purging, try to store and resume later?
     bool try_clear_idle_slots() {
         bool res = false;
 
@@ -1896,6 +1916,11 @@ private:
             }
 
             if (slot.prompt.n_tokens() > 0) {
+                // save the prompt before its cells are freed
+                if (prompt_cache && slot.prompt_save(*prompt_cache)) {
+                    prompt_cache->update();
+                }
+
                 SRV_WRN("purging slot %d with %zu tokens\n", slot.id, slot.prompt.tokens.size());
 
                 slot.prompt_clear();
