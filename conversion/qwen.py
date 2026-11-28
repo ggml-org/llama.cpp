@@ -11,7 +11,7 @@ import torch
 if TYPE_CHECKING:
     from torch import Tensor
 
-from .base import LazyTorchTensor, ModelBase, ModelType, TextModel, get_model_architecture, gguf, jinja_str_or_json, logger
+from .base import LazyTorchTensor, ModelBase, ModelType, TextModel, get_model_architecture, gguf, jinja_str_or_json, logger, split_gdn_qkvz
 
 
 @ModelBase.register("QWenLMHeadModel")
@@ -313,6 +313,7 @@ class _QwenMtpMixin:
     tensor_map handles them."""
 
     supports_mtp_export = True
+    use_mtp_filename = True
     hparams: dict[str, Any]
     model_arch: gguf.MODEL_ARCH
     gguf_writer: gguf.GGUFWriter
@@ -383,19 +384,6 @@ class _QwenMtpMixin:
         if (n := self.block_count - self.hparams["num_hidden_layers"]) > 0:
             self.gguf_writer.add_nextn_predict_layers(n)
 
-    def prepare_metadata(self, vocab_only: bool):
-        from_dir = self.fname_out.is_dir()
-        super().prepare_metadata(vocab_only=vocab_only)  # ty: ignore[missing-attribute]
-
-        if not self.mtp_only or not from_dir:
-            return
-
-        output_type: str = self.ftype.name.partition("_")[2]  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
-        fname_default: str = gguf.naming_convention(
-            self.metadata.name, self.metadata.basename, self.metadata.finetune,                  # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
-            self.metadata.version, size_label=None, output_type=output_type, model_type=None)    # pyright: ignore[reportAttributeAccessIssue] # ty: ignore[missing-attribute]
-        self.fname_out = self.fname_out.parent / f"mtp-{fname_default}.gguf"
-
 
 @ModelBase.register("Qwen3NextForCausalLM")
 @ModelBase.example("Qwen/Qwen3-Next-80B-A3B-Instruct")
@@ -421,33 +409,9 @@ class Qwen3NextModel(_QwenMtpMixin, Qwen2MoeModel):
         return None
 
     def _split_qkvz(self, data_torch: Tensor) -> tuple[Tensor, Tensor]:
-        # original order:  [q, k, v, z] * head_count
-        # corrected order: [q * head_count, k * head_count, v * head_count, z * head_count]
-        head_k_dim = self.hparams["linear_key_head_dim"]
-        head_v_dim = self.hparams["linear_value_head_dim"]
-        num_v_heads = self.hparams["linear_num_value_heads"]
-        num_k_heads = self.hparams["linear_num_key_heads"]
-        hidden_size = data_torch.shape[1]
-        split_arg_list_qkvz = [
-            head_k_dim, # q partition
-            head_k_dim, # k partition
-            (num_v_heads // num_k_heads * head_v_dim), # v partition
-            (num_v_heads // num_k_heads * head_v_dim), # z partition
-        ]
-        # view as (n_embd, head_count, [q+k+v+z])
-        data_torch = data_torch.permute(1, 0).contiguous()
-        data_torch = data_torch.view(-1, num_k_heads, sum(split_arg_list_qkvz))
-        # split into q, k, v, z
-        q, k, v, z = torch.split(data_torch, split_arg_list_qkvz, dim=-1)
-        # flatten dim + head_count
-        q = q.contiguous().view(hidden_size, -1)
-        k = k.contiguous().view(hidden_size, -1)
-        v = v.contiguous().view(hidden_size, -1)
-        z = z.contiguous().view(hidden_size, -1)
-        # stack back
-        qkv = torch.cat([q, k, v], dim=-1).permute(1, 0).contiguous()
-        z = z.permute(1, 0).contiguous()
-        return qkv, z
+        return split_gdn_qkvz(
+            data_torch, self.hparams["linear_key_head_dim"], self.hparams["linear_value_head_dim"],
+            self.hparams["linear_num_key_heads"], self.hparams["linear_num_value_heads"])
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()

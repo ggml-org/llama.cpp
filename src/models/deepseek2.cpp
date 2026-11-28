@@ -31,11 +31,7 @@ void llama_model_deepseek2::load_arch_hparams(llama_model_loader & ml) {
         }
     }
 
-    if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false)) {
-        // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
-        // cancel the factor from the convert script
-        hparams.rope_yarn_log_mul /= 0.1f;
-    }
+    hparams.rope_yarn_log_mul = hparams.rope_yarn_log_mul_raw / 0.1f;
 
     // (optional) temperature tuning - used by mistral-large
     ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE,  hparams.f_attn_temp_scale,       false);

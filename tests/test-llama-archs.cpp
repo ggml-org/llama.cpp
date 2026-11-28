@@ -261,6 +261,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     uint32_t n_layer = 2;
     if (arch == LLM_ARCH_LLAMA4) {
         n_layer = 4; // hparams.n_no_rope_layer_step is hard-coded to 4
+    } else if (arch == LLM_ARCH_GIGACHAT35) {
+        n_head = 8;
+        n_layer = 4; // dense recurrent, MoE MLA, MoE recurrent, MoE MLA
     } else if (arch == LLM_ARCH_MAION_CODER) {
         n_head = 4;
         n_layer = 4; // dense and MoE layers, each with local and full attention
@@ -341,7 +344,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     }
 
     uint32_t n_head_kv = n_head;
-    if (arch == LLM_ARCH_QWEN3) {
+    if (arch == LLM_ARCH_QWEN3 || arch == LLM_ARCH_GIGACHAT35) {
         n_head_kv = 1; // MQA coverage
     } else if (arch == LLM_ARCH_MUSE_GLIMMER || arch == LLM_ARCH_MUSE_SPARK || arch == LLM_ARCH_AFMOE || arch == LLM_ARCH_MAION_CODER ||
             arch == LLM_ARCH_KOLIBRI1 || arch == LLM_ARCH_LIMITE || arch == LLM_ARCH_GEMMA4 || arch == LLM_ARCH_RICURSIVE ||
@@ -447,6 +450,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             || arch == LLM_ARCH_GLM5_NEXT
             || arch == LLM_ARCH_HY_V4
             || arch == LLM_ARCH_HY_V4_FLASH
+            || arch == LLM_ARCH_GIGACHAT35
             || arch == LLM_ARCH_MISTRAL4
             || arch == LLM_ARCH_MISTRAL_LARGE4
             || arch == LLM_ARCH_XING4_0) {
@@ -920,6 +924,29 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_ACTIVATION_SITU_LINEAR_BETA, 25.0f);
     ms.add_kv(LLM_KV_KDA_GATE_LOWER_BOUND,        -5.0f);
 
+    if (arch == LLM_ARCH_GIGACHAT35) {
+        ms.add_kv(LLM_KV_NORM_GATE_RANK,             uint32_t(16));
+        ms.add_kv(LLM_KV_SSM_INNER_SIZE,             uint32_t(128) * n_head);
+        ms.add_kv(LLM_KV_SSM_GROUP_COUNT,            uint32_t(4));
+        ms.add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, std::vector<uint32_t>{1, 0, 1, 0});
+        ms.add_kv(LLM_KV_EXPERT_FEED_FORWARD_LENGTH, std::vector<uint32_t>{0, n_ff / 2, n_ff, n_ff});
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,           10.0f);
+        ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP,         10.0f);
+        ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,       2.5f);
+        ms.add_kv(LLM_KV_ROPE_SCALING_TYPE,          "yarn");
+        ms.add_kv(LLM_KV_ROPE_SCALING_FACTOR,        8.0f);
+        ms.add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,  0.15625f);
+        ms.add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN,  n_ctx);
+
+        ggml_tensor scale = {};
+        scale.type = GGML_TYPE_F32;
+        std::fill_n(scale.ne, GGML_MAX_DIMS, 1);
+        for (const char * name : {"blk.1.attn_v_b.scale", "output_norm_gate_up.scale"}) {
+            ggml_set_name(&scale, name);
+            gguf_add_tensor(ms.gguf_ctx, &scale);
+        }
+    }
+
     for (uint32_t il = 0; il < n_layer; il++) {
         ggml_tensor t;
         memset(&t, 0, sizeof(ggml_tensor));
@@ -1224,6 +1251,7 @@ static bool moe_mandatory(const llm_arch arch) {
         case LLM_ARCH_KIMI_K31:
         case LLM_ARCH_RAON1_MINI:
         case LLM_ARCH_GLM5_NEXT:
+        case LLM_ARCH_GIGACHAT35:
         case LLM_ARCH_STEP35:
         case LLM_ARCH_MISTRAL4:
         case LLM_ARCH_MISTRAL_LARGE4:
@@ -1607,7 +1635,7 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
 
                         // the k-pool layout is updated in place when drafts are rejected
                         // TODO: the meta backend aborts with n_rs_seq > 0 (view of permuted tensor not implemented)
-                        if ((arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
+                        if ((arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_GLM5_NEXT || arch == LLM_ARCH_GIGACHAT35) && dc.split_mode != LLAMA_SPLIT_MODE_TENSOR) {
                             const double nmse_rollback = check_draft_rollback(model_and_ctx_dev.first.get(), tokens, logits_dev);
                             if (!(nmse_rollback <= 1e-4)) {
                                 if (test_ok) {

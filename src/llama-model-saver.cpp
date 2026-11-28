@@ -272,6 +272,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
     add_kv(LLM_KV_POST_NORM_EPS,                     hparams.f_post_norm_eps);
     add_kv(LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,     hparams.f_norm_rms_eps_latent);
+    add_kv(LLM_KV_NORM_GATE_RANK,                    hparams.n_norm_gate_rank);
     add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,           hparams.f_norm_group_eps);
     add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,        hparams.n_norm_groups);
     add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      hparams.n_value_expert);
@@ -422,7 +423,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ROPE_SCALING_ATTN_FACTOR,          hparams.rope_attn_factor);
     add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN,         hparams.n_ctx_orig_yarn);
     add_kv(LLM_KV_ROPE_SCALING_FINETUNED,            hparams.rope_finetuned);
-    add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,         hparams.rope_yarn_log_mul);
+    add_kv(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,         hparams.rope_yarn_log_mul_raw);
     add_kv(LLM_KV_ROPE_SCALING_YARN_EXT_FACTOR,      hparams.yarn_ext_factor);
     add_kv(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR,     hparams.yarn_attn_factor);
     add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST,       hparams.yarn_beta_fast);
@@ -528,6 +529,8 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->tok_norm_b);
     add_tensor(model->output_norm);
     add_tensor(model->output_norm_b);
+    add_tensor(model->output_norm_gate_up);
+    add_tensor(model->output_norm_gate_down);
     add_tensor(model->output);
     add_tensor(model->output_b);
     add_tensor(model->output_norm_enc);

@@ -69,6 +69,13 @@ struct llm_build_delta_net_base : public llm_graph_context {
             int64_t              n_seqs,
             int                  il);
 
+    // split the conv output into q, k, v, l2-normalize q and k and repeat their heads up to num_v_heads
+    // conv_qkv_mix: (qkv_dim, n_seq_tokens, n_seqs); returns q, k, v: (head_dim, num_v_heads, n_seq_tokens, n_seqs)
+    llm_graph_qkv build_recurrent_qkv(
+            ggml_tensor * conv_qkv_mix,
+            float         eps_norm,
+            int           il);
+
     // run delta-net attention and write the new recurrent state(s) back to ssm_states_all
     // s: (head_v_dim, head_v_dim, num_v_heads, n_seqs); returns output: (head_v_dim, num_v_heads, n_seq_tokens, n_seqs)
     ggml_tensor * build_recurrent_attn(
@@ -3254,6 +3261,63 @@ struct llama_model_clover_moe : public llama_model_base {
         ggml_tensor * build_layer_ffn(ggml_tensor * cur, int il);
         ggml_tensor * build_norm_gated(ggml_tensor * input, ggml_tensor * weights, ggml_tensor * gate, int il);
         std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(ggml_tensor * input, int il);
+    };
+
+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
+};
+
+struct llama_model_gigachat35 : public llama_model_base {
+    llama_model_gigachat35(const struct llama_model_params & params) : llama_model_base(params) {}
+    void load_arch_hparams(llama_model_loader & ml) override;
+    void load_arch_tensors(llama_model_loader & ml) override;
+    uint32_t graph_nodes_per_tensor() const override { return 32; }
+
+    struct graph : public llm_build_delta_net_base {
+        graph(const llm_graph_params & params);
+    protected:
+        // the helpers alone, graph_mtp builds its own body
+        struct no_build {};
+        graph(const llm_graph_params & params, no_build) : llm_build_delta_net_base(params) {}
+
+        float get_kq_scale() const;
+
+        ggml_tensor * build_zero_centered_gated_norm(
+                    ggml_tensor * input,
+                    ggml_tensor * weight,
+                    ggml_tensor * gate_up,
+                    ggml_tensor * gate_down,
+                            int   il);
+
+        ggml_tensor * build_layer_attn_mla(
+         llm_graph_input_attn_k * inp_attn,
+                    ggml_tensor * cur,
+                    ggml_tensor * inp_pos,
+                          float   kq_scale,
+                            int   il);
+    private:
+        ggml_tensor * build_linear_output_norm(
+                    ggml_tensor * input,
+                    ggml_tensor * weight,
+                    ggml_tensor * gate,
+                            int   il);
+
+        ggml_tensor * build_layer_attn_linear(
+             llm_graph_input_rs * inp,
+                    ggml_tensor * cur,
+                            int   il);
+
+        ggml_tensor * build_layer_ffn(
+                    ggml_tensor * cur,
+                            int   il);
+
+        // returns pair of qkv, z
+        std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(
+                    ggml_tensor * input,
+                            int   il);
+    };
+
+    struct graph_mtp : public graph {
+        graph_mtp(const llm_graph_params & params);
     };
 
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;

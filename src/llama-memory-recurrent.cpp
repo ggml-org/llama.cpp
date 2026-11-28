@@ -125,7 +125,9 @@ llama_memory_recurrent::llama_memory_recurrent(
             const int64_t n_k  = kda ? (int64_t) hparams.n_embd_head_kda*hparams.n_head() : (int64_t) hparams.ssm_d_state*hparams.ssm_n_group;
             const int64_t n_v  = kda ? n_k : (int64_t) hparams.ssm_d_inner;
             const int64_t n_gb = kda ? n_k : (int64_t) hparams.ssm_dt_rank;
-            ggml_tensor * spk  = ggml_new_tensor_2d(ctx, type_s, n_k*n_pend, mem_size);
+            // GigaChat repeats each key for its adjacent value heads before the gated delta net.
+            const int64_t n_k_replay = model.arch == LLM_ARCH_GIGACHAT35 ? n_v : n_k;
+            ggml_tensor * spk  = ggml_new_tensor_2d(ctx, type_s, n_k_replay*n_pend, mem_size);
             ggml_tensor * spv  = ggml_new_tensor_2d(ctx, type_s, n_v*n_pend, mem_size);
             ggml_tensor * spgb = ggml_new_tensor_2d(ctx, type_s, n_gb*2*n_pend, mem_size);
             ggml_format_name(spk,  "cache_spk_l%d",  i);

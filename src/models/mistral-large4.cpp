@@ -43,7 +43,7 @@ void llama_model_mistral_large4::load_arch_hparams(llama_model_loader & ml) {
 
     hparams.f_final_logit_softcapping = 0.0f;
     ml.get_key(LLM_KV_FINAL_LOGIT_SOFTCAPPING, hparams.f_final_logit_softcapping, false);
-    ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false);
+    hparams.rope_yarn_log_mul = hparams.rope_yarn_log_mul_raw;
 
     // SSMax uses log(pos + 1), computed via the attention temperature input as 1 + log(pos + 1)
     hparams.n_attn_temp_floor_scale = 1;

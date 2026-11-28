@@ -390,7 +390,6 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
 
     const int64_t d_inner      = hparams.ssm_d_inner;
     const int64_t n_seqs       = ubatch.n_seqs;
-    const int64_t head_k_dim   = hparams.ssm_d_state;
     const int64_t num_k_heads  = hparams.ssm_n_group;
     const int64_t num_v_heads  = hparams.ssm_dt_rank;
     const int64_t head_v_dim   = d_inner / num_v_heads;
@@ -461,67 +460,7 @@ ggml_tensor * llama_model_qwen3next::graph::build_layer_attn_linear(
     ggml_tensor * conv_output_silu = ggml_silu(ctx0, conv_output_proper);
     cb(conv_output_silu, "conv_output_silu", il);
 
-    ggml_tensor * conv_qkv_mix = conv_output_silu;
-
-    // Calculate the total conv dimension
-    int64_t qkv_dim = head_k_dim * num_k_heads * 2 + head_v_dim * num_v_heads;
-    int64_t nb1_qkv = ggml_row_size(conv_qkv_mix->type, qkv_dim);
-
-    // Extract the convolved Q, K, V from conv_output
-    ggml_tensor * q_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-            ggml_row_size(conv_qkv_mix->type, head_k_dim),
-            nb1_qkv,
-            nb1_qkv * n_seq_tokens,
-            0);
-
-    ggml_tensor * k_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_k_dim, num_k_heads, n_seq_tokens, n_seqs,
-            ggml_row_size(conv_qkv_mix->type, head_k_dim),
-            nb1_qkv,
-            nb1_qkv * n_seq_tokens,
-            head_k_dim * num_k_heads * ggml_element_size(conv_qkv_mix));
-
-    ggml_tensor * v_conv = ggml_view_4d(ctx0, conv_qkv_mix, head_v_dim, num_v_heads, n_seq_tokens, n_seqs,
-            ggml_row_size(conv_qkv_mix->type, head_v_dim),
-            nb1_qkv,
-            nb1_qkv * n_seq_tokens,
-            ggml_row_size(conv_qkv_mix->type, 2 * head_k_dim * num_k_heads));
-
-    cb(q_conv, "q_conv", il);
-    cb(k_conv, "k_conv", il);
-    cb(v_conv, "v_conv", il);
-
-
-    const float eps_norm = hparams.f_norm_rms_eps;
-
-    q_conv = build_gdn_l2_norm(ctx0, q_conv, eps_norm);
-    k_conv = build_gdn_l2_norm(ctx0, k_conv, eps_norm);
-
-    //q_conv = ggml_cont_4d(ctx0, q_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
-    //k_conv = ggml_cont_4d(ctx0, k_conv, head_k_dim, num_k_heads, n_seq_tokens, n_seqs);
-    //v_conv = ggml_cont_4d(ctx0, v_conv, head_v_dim, num_v_heads, n_seq_tokens, n_seqs);
-
-    // if head keys and value keys are different, repeat to force tensors into matching shapes
-    // TODO: avoid repeats for fused GDN, needs broadcast configuration for GDN op [TAG_GGML_GDN_BCAST]
-    if (num_k_heads != num_v_heads) {
-        GGML_ASSERT(num_v_heads % num_k_heads == 0);
-        int64_t repeat_factor = num_v_heads / num_k_heads;
-
-        // repeat interleave: reshape to (repeat part, 1, remaining part...), do repeat, then reshape back
-        ggml_tensor * q_reshaped = ggml_reshape_4d(ctx0, q_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
-        ggml_tensor * k_reshaped = ggml_reshape_4d(ctx0, k_conv, head_k_dim, 1, num_k_heads, n_seq_tokens * n_seqs);
-
-        // Repeat along the third dimension (the new dimension with size 1)
-        ggml_tensor * q_repeated =
-            ggml_repeat_4d(ctx0, q_reshaped, head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
-        ggml_tensor * k_repeated =
-            ggml_repeat_4d(ctx0, k_reshaped, head_k_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs);
-
-        // Reshape back to merge the head and repeat dimensions
-        // From [head_dim, repeat_factor, num_k_heads, n_seq_tokens * n_seqs]
-        // Back to [head_dim, repeat_factor * num_k_heads, n_seq_tokens, n_seqs]
-        q_conv = ggml_reshape_4d(ctx0, q_repeated, head_k_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs);
-        k_conv = ggml_reshape_4d(ctx0, k_repeated, head_k_dim, num_k_heads * repeat_factor, n_seq_tokens, n_seqs);
-    }
+    auto [q_conv, k_conv, v_conv] = build_recurrent_qkv(conv_output_silu, hparams.f_norm_rms_eps, il);
 
     cb(q_conv, "q_conv_predelta", il);
     cb(k_conv, "k_conv_predelta", il);

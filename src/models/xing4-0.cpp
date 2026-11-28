@@ -69,11 +69,7 @@ void llama_model_xing4_0::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_HYPER_CONNECTION_EPSILON,             hparams.dsv4_hc_eps);
     GGML_ASSERT(hparams.dsv4_hc_mult == 4 && "xing4_0 requires 4 residual streams");
 
-    if (ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL, hparams.rope_yarn_log_mul, false)) {
-        // [TAG_DEEPSEEK2_YARN_LOG_MUL_FIX]
-        // cancel the factor from the convert script
-        hparams.rope_yarn_log_mul /= 0.1f;
-    }
+    hparams.rope_yarn_log_mul = hparams.rope_yarn_log_mul_raw / 0.1f;
 }
 
 void llama_model_xing4_0::load_arch_tensors(llama_model_loader & ml) {

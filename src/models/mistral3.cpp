@@ -4,7 +4,7 @@ void llama_model_mistral3::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS, hparams.f_norm_rms_eps);
     ml.get_key(LLM_KV_ATTENTION_TEMPERATURE_SCALE, hparams.f_attn_temp_scale, false);
 
-    ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,   hparams.rope_yarn_log_mul, false);
+    hparams.rope_yarn_log_mul = hparams.rope_yarn_log_mul_raw;
 
     ml.get_key(LLM_KV_REALTIME_DELAY_TOKENS, hparams.n_tokens_delay, false);
 

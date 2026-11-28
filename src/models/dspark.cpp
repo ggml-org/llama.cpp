@@ -54,7 +54,7 @@ void llama_model_dflash::load_hparams_dsv4(llama_model_loader & ml) {
 void llama_model_dflash::load_hparams_mistral_large4(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_KEY_LENGTH_MLA,   hparams.n_embd_head_k_mla_impl);
     ml.get_key(LLM_KV_ATTENTION_VALUE_LENGTH_MLA, hparams.n_embd_head_v_mla_impl);
-    ml.get_key(LLM_KV_ROPE_SCALING_YARN_LOG_MUL,  hparams.rope_yarn_log_mul, false);
+    hparams.rope_yarn_log_mul = hparams.rope_yarn_log_mul_raw;
     ml.get_key(LLM_KV_ATTENTION_SLIDING_WINDOW,   hparams.n_swa);
 
     if (hparams.n_swa == 0) {
