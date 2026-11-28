@@ -100,7 +100,9 @@ struct callback_data {
     // all zero rows in the diff tensor will also be removed
     // NOTE: final layer is ignored. we only have (n_layers - 1) to process
     std::vector<struct ggml_tensor *> calc_diff() {
-        for (float il = 0; il < v_pos.size(); il++) {
+        // Some archs emit l_out for every layer, so the final layer is NOT dropped by the token-width filter.
+        const size_t n_used = std::min({v_pos.size(), v_neg.size(), (size_t) n_layers - 1u});
+        for (size_t il = 0; il < n_used; il++) {
             float * a = (float *) v_pos[il]->data;
             float * b = (float *) v_neg[il]->data;
             size_t n_elem = ggml_nelements(v_pos[il]);
