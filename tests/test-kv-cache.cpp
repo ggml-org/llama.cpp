@@ -175,6 +175,55 @@ int main() {
         GGML_ASSERT(kv.seq_pos_max(0) == 4);
     }
 
+    // model tensor enumeration and per-layer KV geometry getters
+    {
+        std::unique_ptr<llama_model> model(llama_model_create(LLM_ARCH_LLAMA, llama_model_default_params()));
+        init_model(*model, 3);
+        model->hparams.n_head_kv_arr[0]   = 8;
+        model->hparams.n_head_kv_arr[1]   = 0;
+        model->hparams.n_head_kv_arr[2]   = 4;
+        model->hparams.n_embd_head_k_full = 128;
+        model->hparams.n_embd_head_v_full = 64;
+        model->hparams.n_embd_head_k_swa  = 96;
+        model->hparams.n_embd_head_v_swa  = 48;
+        model->hparams.is_swa_impl[2]     = true;
+
+        GGML_ASSERT(llama_model_n_head_kv_layer(nullptr, 0) == -1);
+        GGML_ASSERT(llama_model_n_head_kv_layer(model.get(), -1) == -1);
+        GGML_ASSERT(llama_model_n_head_kv_layer(model.get(), 0) == 8);
+        GGML_ASSERT(llama_model_n_head_kv_layer(model.get(), 1) == 0);
+        GGML_ASSERT(llama_model_n_head_kv_layer(model.get(), 2) == 4);
+        GGML_ASSERT(llama_model_n_head_kv_layer(model.get(), 3) == -1);
+
+        GGML_ASSERT(llama_model_n_embd_head_k_layer(nullptr, 0) == -1);
+        GGML_ASSERT(llama_model_n_embd_head_v_layer(nullptr, 0) == -1);
+        GGML_ASSERT(llama_model_n_embd_head_k_layer(model.get(), -1) == -1);
+        GGML_ASSERT(llama_model_n_embd_head_v_layer(model.get(), -1) == -1);
+        GGML_ASSERT(llama_model_n_embd_head_k_layer(model.get(), 0) == 128);
+        GGML_ASSERT(llama_model_n_embd_head_v_layer(model.get(), 0) == 64);
+        GGML_ASSERT(llama_model_n_embd_head_k_layer(model.get(), 2) == 96);
+        GGML_ASSERT(llama_model_n_embd_head_v_layer(model.get(), 2) == 48);
+        GGML_ASSERT(llama_model_n_embd_head_k_layer(model.get(), 3) == -1);
+        GGML_ASSERT(llama_model_n_embd_head_v_layer(model.get(), 3) == -1);
+
+        ggml_context_ptr gctx(ggml_init({ ggml_tensor_overhead() * 4, nullptr, true }));
+        GGML_ASSERT(gctx != nullptr);
+        ggml_tensor * t0 = ggml_new_tensor_1d(gctx.get(), GGML_TYPE_F32, 8);
+        ggml_tensor * t1 = ggml_new_tensor_1d(gctx.get(), GGML_TYPE_F32, 16);
+        ggml_set_name(t0, "token_embd.weight");
+        ggml_set_name(t1, "output.weight");
+        model->tensors_by_name.emplace_back("token_embd.weight", t0);
+        model->tensors_by_name.emplace_back("output.weight", t1);
+
+        GGML_ASSERT(llama_model_n_tensors(nullptr) == 0);
+        GGML_ASSERT(llama_model_n_tensors(model.get()) == 2);
+        GGML_ASSERT(llama_model_get_tensor(nullptr, 0) == nullptr);
+        GGML_ASSERT(llama_model_get_tensor(model.get(), -1) == nullptr);
+        GGML_ASSERT(llama_model_get_tensor(model.get(), 0) == t0);
+        GGML_ASSERT(llama_model_get_tensor(model.get(), 1) == t1);
+        GGML_ASSERT(llama_model_get_tensor(model.get(), 2) == nullptr);
+    }
+
     llama_backend_free();
     return 0;
 }

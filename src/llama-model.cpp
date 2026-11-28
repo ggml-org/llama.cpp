@@ -3709,6 +3709,41 @@ int32_t llama_model_n_head_kv(const llama_model * model) {
     return model->hparams.n_head_kv();
 }
 
+int32_t llama_model_n_head_kv_layer(const llama_model * model, int32_t il) {
+    if (!model || il < 0 || (uint32_t) il >= model->hparams.n_layer()) {
+        return -1;
+    }
+    return (int32_t) model->hparams.n_head_kv((uint32_t) il);
+}
+
+int32_t llama_model_n_embd_head_k_layer(const llama_model * model, int32_t il) {
+    if (!model || il < 0 || (uint32_t) il >= model->hparams.n_layer()) {
+        return -1;
+    }
+    return (int32_t) model->hparams.n_embd_head_k((uint32_t) il);
+}
+
+int32_t llama_model_n_embd_head_v_layer(const llama_model * model, int32_t il) {
+    if (!model || il < 0 || (uint32_t) il >= model->hparams.n_layer()) {
+        return -1;
+    }
+    return (int32_t) model->hparams.n_embd_head_v((uint32_t) il);
+}
+
+int32_t llama_model_n_tensors(const llama_model * model) {
+    if (!model) {
+        return 0;
+    }
+    return (int32_t) model->tensors_by_name.size();
+}
+
+ggml_tensor * llama_model_get_tensor(llama_model * model, int32_t i) {
+    if (!model || i < 0 || (size_t) i >= model->tensors_by_name.size()) {
+        return nullptr;
+    }
+    return model->tensors_by_name[i].second;
+}
+
 int32_t llama_model_n_swa(const llama_model * model) {
     // dsv4 kv-cache has SWA but it cannot be used as a rollback because of
     // other compression ratios, so we return 0 here
