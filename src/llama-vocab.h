@@ -78,6 +78,7 @@ enum llama_vocab_pre_type {
     LLAMA_VOCAB_PRE_TYPE_TEKKEN_NUM3       = 66,
     LLAMA_VOCAB_PRE_TYPE_ZONOS3            = 67,
     LLAMA_VOCAB_PRE_TYPE_RAON              = 68,
+    LLAMA_VOCAB_PRE_TYPE_FALCON_H1         = 69,
 };
 
 // HF Metaspace pre-tokenizer prepend_scheme
