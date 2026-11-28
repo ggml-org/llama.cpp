@@ -1837,21 +1837,18 @@ static bool ggml_vk_matmul_int_shmem_support(const vk_device& device, const std:
 
 static bool ggml_vk_matmul_cm1_int_shmem_support(const vk_device& device, const std::vector<uint32_t>& warptile, bool mul_mat_id, ggml_type src0_type) {
 
-    bool kscales2 = false;    // two scale sets per block
     bool has_dm   = false;    // d+m as vec2 + b-side sum
     bool has_kvalues = false;
     switch (src0_type) {
         case GGML_TYPE_Q4_0: case GGML_TYPE_Q5_0: case GGML_TYPE_Q8_0:
+        case GGML_TYPE_Q3_K: case GGML_TYPE_Q6_K:
             break;
         case GGML_TYPE_Q4_1: case GGML_TYPE_Q5_1:
         case GGML_TYPE_Q4_K: case GGML_TYPE_Q5_K:
             has_dm = true;                          break;
         case GGML_TYPE_IQ4_NL: case GGML_TYPE_IQ4_XS: case GGML_TYPE_MXFP4:
-            has_kvalues = true;                     break;
-        case GGML_TYPE_Q3_K: case GGML_TYPE_Q6_K:
-            kscales2 = true;                        break;
         case GGML_TYPE_NVFP4:
-            kscales2 = true; has_kvalues = true;    break;
+            has_kvalues = true;                     break;
         default:
             return false;
     }
@@ -1862,13 +1859,11 @@ static bool ggml_vk_matmul_cm1_int_shmem_support(const vk_device& device, const 
     const uint32_t BK      = 32;
     const uint32_t BK_STEP = mul_mat_id ? 2u : 4u;
     const uint32_t QPITCH  = BK_STEP * (BK / 4u) + 4u;
-    const uint32_t KSCALES = kscales2 ? 2u : 1u;
 
     uint32_t total = 0;
     total += BM * QPITCH * (uint32_t)sizeof(uint32_t);   // buf_a_qs
     total += BN * QPITCH * (uint32_t)sizeof(uint32_t);   // buf_b_qs
-    total += has_dm ? (BM * BK_STEP * 2u * (uint32_t)sizeof(float))   // buf_a_dm (vec2)
-                    : (BM * BK_STEP * KSCALES * (uint32_t)sizeof(float)); // buf_a_d
+    total += BM * BK_STEP * 2u * (uint32_t)sizeof(float); // buf_a_dm / buf_a_dn (vec2) or buf_a_d (2 scales)
     total += BN * BK_STEP * (uint32_t)sizeof(float);     // buf_b_d
     if (has_dm) {
         total += BN * BK_STEP * (uint32_t)sizeof(float); // buf_b_s
@@ -7461,8 +7456,9 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     }
 
     // The partial tiles of a quantized A rely on the bound range to read zeros past the last row,
-    // so the range stays exact: the strided extent of a tensor read in place, the staged size otherwise.
-    const uint64_t x_range = qx_needs_dequant ? x_sz : ggml_nbytes(src0);
+    // so the range stays tight: the strided extent of a tensor read in place, rounded up to whole
+    // dwords for the shaders that load A as uint32, or the staged size otherwise.
+    const uint64_t x_range = qx_needs_dequant ? x_sz : std::min<uint64_t>(ggml_vk_align_size(ggml_nbytes(src0), 4), d_X->size - x_buf_offset);
     const uint64_t y_range = (qy_needs_dequant || quantize_y) ? y_sz : ggml_nbytes(src1);
 
     uint32_t stride_batch_x = qx_needs_dequant ? ne00*ne01 : ggml_vk_batch_stride(src0);
@@ -8624,7 +8620,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     }
     ggml_vk_sync_buffers(ctx, subctx);
 
-    const uint64_t x_range = qx_needs_dequant ? x_sz : ggml_nbytes(src0);
+    const uint64_t x_range = qx_needs_dequant ? x_sz : std::min<uint64_t>(ggml_vk_align_size(ggml_nbytes(src0), 4), d_X->size - x_buf_offset);
     const uint64_t y_range = (qy_needs_dequant || quantize_y) ? y_sz : ggml_nbytes(src1);
 
     uint32_t stride_batch_x = qx_needs_dequant ? ne00*ne01 : ggml_vk_batch_stride(src0);
