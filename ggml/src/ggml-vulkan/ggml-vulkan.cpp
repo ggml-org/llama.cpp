@@ -10834,7 +10834,8 @@ static void ggml_vk_op_f32(ggml_backend_vk_context * ctx, vk_context& subctx, co
         } break;
     case GGML_OP_ADD_ID:
         {
-            elements = { (uint32_t)ne01, (uint32_t)ne02, 1 };
+            // the shader loops over the tokens when there are more than the workgroups in y
+            elements = { (uint32_t)ne01, std::min((uint32_t)ne02, ctx->device->properties.limits.maxComputeWorkGroupCount[1]), 1 };
         } break;
     case GGML_OP_SET_ROWS:
         {
@@ -11225,6 +11226,7 @@ void ggml_vk_add_id(ggml_backend_vk_context * ctx, vk_context& subctx, const ggm
     ggml_vk_op_f32<vk_op_add_id_push_constants>(ctx, subctx, src0, src1, src2, nullptr, dst, GGML_OP_ADD_ID, {
         (uint32_t)dst->ne[0],
         (uint32_t)dst->ne[1],
+        (uint32_t)dst->ne[2],
         (uint32_t)src0->nb[1] / src0_type_size,
         (uint32_t)src0->nb[2] / src0_type_size,
         (uint32_t)src1->nb[1] / src1_type_size,
