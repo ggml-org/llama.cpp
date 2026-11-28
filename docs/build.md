@@ -88,6 +88,11 @@ cmake --build build --config Release
         cmake --preset x64-windows-llvm-release
         cmake --build build-x64-windows-llvm-release
         ```
+- Building on [Haiku](https://www.haiku-os.org/) (x86_64): the default CMake build works as-is. The CPU backend is supported, and the RPC backend can be enabled with `-DGGML_RPC=ON`:
+  ```bash
+  cmake -B build -DGGML_RPC=ON
+  cmake --build build --config Release -j $(nproc)
+  ```
 - If you want HTTPS/TLS features, you may install OpenSSL development libraries. If not installed, the project will build and run without SSL support.
   - **Debian / Ubuntu:** `sudo apt-get install libssl-dev`
   - **Fedora / RHEL / Rocky / Alma:** `sudo dnf install openssl-devel`
