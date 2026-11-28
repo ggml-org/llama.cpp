@@ -12154,10 +12154,13 @@ inline bool use_adreno_kernels(const ggml_backend_opencl_context *backend_ctx, c
         threshold_ne0 = 128;
         threshold_ne1 = 128;
     }
-    // K floor 256 on X2E: the gemma-4 E2B/E4B MTP drafters' weights are all K = 256.
-    // Default on for X2E, GGML_OPENCL_K_FLOOR_256=0/1 forces it.
+    // K floor 256 on X2E and A8X: the gemma-4 E2B/E4B MTP drafters' weights are all K = 256.
+    // Default on for X2E and for A8X except the E17 compiler, GGML_OPENCL_K_FLOOR_256=0/1 forces it.
     static const char * k_floor_256_env = getenv("GGML_OPENCL_K_FLOOR_256");
-    const bool k_floor_256 = k_floor_256_env ? atoi(k_floor_256_env) != 0 : backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E;
+    const bool k_floor_256 = k_floor_256_env ? atoi(k_floor_256_env) != 0 :
+        backend_ctx->adreno_gen == ADRENO_GPU_GEN::X2E ||
+        (backend_ctx->adreno_gen == ADRENO_GPU_GEN::A8X &&
+         backend_ctx->adreno_cl_compiler_version.type != ADRENO_CL_COMPILER_TYPE::E17);
     if (k_floor_256 && threshold_ne0 > 256) {
         threshold_ne0 = 256;
     }
