@@ -76,7 +76,7 @@ In the above examples, `--entrypoint /app/llama-cli` is specified for clarity, b
 
 Assuming one has the [nvidia-container-toolkit](https://github.com/NVIDIA/nvidia-container-toolkit) properly installed on Linux, or is using a GPU enabled cloud, `cuBLAS` should be accessible inside the container.
 
-## Building Docker locally
+### Building Docker locally
 
 ```bash
 docker build -t local/llama.cpp:full-cuda --target full -f .devops/cuda.Dockerfile .
@@ -97,7 +97,7 @@ The resulting images, are essentially the same as the non-CUDA images:
 2. `local/llama.cpp:light-cuda`: This image only includes the `llama-cli` and `llama-completion` executables.
 3. `local/llama.cpp:server-cuda`: This image only includes the `llama-server` executable.
 
-## Usage
+### Usage
 
 After building locally, Usage is similar to the non-CUDA examples, but you'll need to add the `--gpus` flag. You will also want to use the `--n-gpu-layers` flag.
 
@@ -111,7 +111,7 @@ docker run --gpus all -v /path/to/models:/models local/llama.cpp:server-cuda -m 
 
 Assuming one has the [mt-container-toolkit](https://developer.mthreads.com/musa/native) properly installed on Linux, `muBLAS` should be accessible inside the container.
 
-## Building Docker locally
+### Building Docker locally
 
 ```bash
 docker build -t local/llama.cpp:full-musa --target full -f .devops/musa.Dockerfile .
@@ -131,7 +131,7 @@ The resulting images, are essentially the same as the non-MUSA images:
 2. `local/llama.cpp:light-musa`: This image only includes the `llama-cli` and `llama-completion` executables.
 3. `local/llama.cpp:server-musa`: This image only includes the `llama-server` executable.
 
-## Usage
+### Usage
 
 After building locally, Usage is similar to the non-MUSA examples, but you'll need to set `mthreads` as default Docker runtime. This can be done by executing `(cd /usr/bin/musa && sudo ./docker setup $PWD)` and verifying the changes by executing `docker info | grep mthreads` on the host machine. You will also want to use the `--n-gpu-layers` flag.
 
@@ -143,7 +143,7 @@ docker run -v /path/to/models:/models local/llama.cpp:server-musa -m /models/7B/
 
 ## Docker With SYCL
 
-## Building Docker locally
+### Building Docker locally
 
 ```bash
 docker build -t local/llama.cpp:full-intel --target full -f .devops/intel.Dockerfile .
@@ -160,7 +160,7 @@ The resulting images, are essentially the same as the non-SYCL images:
 2. `local/llama.cpp:light-intel`: This image only includes the `llama-cli` and `llama-completion` executables.
 3. `local/llama.cpp:server-intel`: This image only includes the `llama-server` executable.
 
-## Usage
+### Usage
 
 After building locally, usage is similar to the non-SYCL examples, but you'll need to add the `--device` flag.
 
