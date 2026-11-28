@@ -37,6 +37,15 @@ def vision_server():
     return server
 
 
+@pytest.fixture
+def tool_server():
+    """Separate fixture for tool tests that require a model which actually calls tools"""
+    global server
+    server = ServerPreset.small_test()
+    server.n_slots = 1
+    return server
+
+
 # Basic message tests
 
 def test_anthropic_messages_basic():
@@ -259,9 +268,10 @@ def test_anthropic_count_tokens_no_max_tokens():
 
 # Tool use tests
 
-def test_anthropic_tool_use_basic():
+def test_anthropic_tool_use_basic(tool_server):
     """Test basic tool use"""
-    server.jinja = True
+    global server
+    server = tool_server
     server.start()
 
     res = server.make_request("POST", "/v1/messages", data={
@@ -288,22 +298,14 @@ def test_anthropic_tool_use_basic():
 
     assert res.status_code == 200
     assert res.body["type"] == "message"
-    assert len(res.body["content"]) > 0
+    assert res.body["stop_reason"] == "tool_use"
 
-    # Check if model used the tool (it might not always, depending on the model)
-    content_types = [block.get("type") for block in res.body["content"]]
-
-    if "tool_use" in content_types:
-        # Model used the tool
-        assert res.body["stop_reason"] == "tool_use"
-
-        # Find the tool_use block
-        tool_block = next(b for b in res.body["content"] if b.get("type") == "tool_use")
-        assert "id" in tool_block
-        assert "name" in tool_block
-        assert tool_block["name"] == "get_weather"
-        assert "input" in tool_block
-        assert isinstance(tool_block["input"], dict)
+    tool_blocks = [b for b in res.body["content"] if b.get("type") == "tool_use"]
+    assert len(tool_blocks) == 1, f"Expected one tool_use block, got {res.body['content']}"
+    tool_block = tool_blocks[0]
+    assert tool_block["id"]
+    assert tool_block["name"] == "get_weather"
+    assert match_regex("Paris", tool_block["input"]["location"])
 
 
 def test_anthropic_tool_result():
@@ -546,9 +548,10 @@ def test_anthropic_tool_reference():
     assert anthropic.body["input_tokens"] == oai.body["input_tokens"]
 
 
-def test_anthropic_tool_streaming():
+def test_anthropic_tool_streaming(tool_server):
     """Test streaming with tool use"""
-    server.jinja = True
+    global server
+    server = tool_server
     server.start()
 
     res = server.make_stream_request("POST", "/v1/messages", data={
@@ -577,26 +580,26 @@ def test_anthropic_tool_streaming():
 
     event_types = [e["type"] for e in events]
 
-    # Should have basic events
-    assert "message_start" in event_types
-    assert "message_stop" in event_types
+    assert event_types[0] == "message_start"
+    assert event_types[-1] == "message_stop"
 
-    # If tool was used, check for proper tool streaming
-    if any(e.get("type") == "content_block_start" and
-           e.get("content_block", {}).get("type") == "tool_use"
-           for e in events):
-        # Find tool use block start
-        tool_starts = [e for e in events if
-                      e.get("type") == "content_block_start" and
-                      e.get("content_block", {}).get("type") == "tool_use"]
+    tool_starts = [e for e in events if e["type"] == "content_block_start" and e["content_block"]["type"] == "tool_use"]
+    assert len(tool_starts) == 1, f"Expected one tool_use content_block_start, got {events}"
+    tool_start = tool_starts[0]
+    assert tool_start["content_block"]["name"] == "calculator"
+    assert tool_start["content_block"]["id"]
 
-        assert len(tool_starts) > 0, "Should have tool_use content_block_start"
+    # The arguments stream as input_json_delta events on the index of the tool_use block
+    index = tool_start["index"]
+    partial_json = "".join(
+        e["delta"]["partial_json"] for e in events
+        if e["type"] == "content_block_delta" and e["index"] == index and e["delta"]["type"] == "input_json_delta"
+    )
+    assert match_regex("2 *\\+ *2", json.loads(partial_json)["expression"])
 
-        # Check index is correct (should be 0 if no text, 1 if there's text)
-        tool_start = tool_starts[0]
-        assert "index" in tool_start
-        assert tool_start["content_block"]["type"] == "tool_use"
-        assert "name" in tool_start["content_block"]
+    message_deltas = [e for e in events if e["type"] == "message_delta"]
+    assert len(message_deltas) == 1
+    assert message_deltas[0]["delta"]["stop_reason"] == "tool_use"
 
 
 # Vision/multimodal tests
