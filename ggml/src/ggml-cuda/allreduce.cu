@@ -337,10 +337,21 @@ struct ggml_cuda_ar_pipeline {
     ggml_cuda_ar_host_mapping arrival;
 };
 
-// Base pointer for the (slot, rank) per-block token block.  The kernel adds
+// Number of butterfly exchange steps for n_devices (a power of two): log2(n).
+// n=2 -> 1 step (direct exchange), n=4 -> 2 steps (XOR butterfly).
+static int ggml_cuda_ar_n_steps(int n_devices) {
+    int steps = 0;
+    for (int n = n_devices; n > 1; n >>= 1) {
+        steps++;
+    }
+    return steps;
+}
+
+// Base pointer for the (slot, step, rank) per-block token block.  The kernel adds
 // blockIdx.x * (ARRIVAL_STRIDE/sizeof(int)) internally to land on its own slot.
-static int * ggml_cuda_ar_arrival_ptr(const ggml_cuda_ar_pipeline * p, int slot, int rank) {
-    const size_t offset = ((size_t)slot * p->n_devices + rank) *
+static int * ggml_cuda_ar_arrival_ptr(const ggml_cuda_ar_pipeline * p, int slot, int step, int rank) {
+    const size_t n_steps = ggml_cuda_ar_n_steps(p->n_devices);
+    const size_t offset = (((size_t)slot * n_steps + step) * p->n_devices + rank) *
                           GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
     return reinterpret_cast<int *>(p->arrival.dev + offset);
 }
@@ -399,8 +410,9 @@ static void ggml_cuda_ar_wait_for_compute(
 
 ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n_devices) {
 
-    if (n_devices != 2) {
-        GGML_LOG_DEBUG("%s: internal AllReduce only supports n_devices=2 (got %zu); "
+    // Only powers of two are supported (butterfly exchange).  n=2 and n=4 today.
+    if (n_devices != 2 && n_devices != 4) {
+        GGML_LOG_DEBUG("%s: internal AllReduce only supports n_devices=2 or 4 (got %zu); "
                        "falling back\n", __func__, n_devices);
         return nullptr;
     }
@@ -481,8 +493,9 @@ ggml_cuda_ar_pipeline * ggml_cuda_ar_pipeline_init(const int * devices, size_t n
     }
 
     // Arrival ring: cache-line padded so each GPU's int is on its own line.
+    // One ring per butterfly step so steps synchronize independently.
     const size_t arrival_bytes =
-        (size_t)GGML_CUDA_AR_POOL_SIZE * n_devices *
+        (size_t)GGML_CUDA_AR_POOL_SIZE * ggml_cuda_ar_n_steps(n_devices) * n_devices *
         GGML_CUDA_AR_KERNEL_BLOCKS * GGML_CUDA_AR_ARRIVAL_STRIDE;
     if (p->arrival.alloc(arrival_bytes) != cudaSuccess) {
         GGML_LOG_ERROR("%s: alloc for arrival ring failed (%zu bytes)\n",
@@ -752,7 +765,7 @@ bool ggml_cuda_ar_allreduce(
     GGML_ASSERT(p != nullptr);
 
     const int n = p->n_devices;
-    GGML_ASSERT(n == 2);
+    GGML_ASSERT(n == 2 || n == 4);
 
     const ggml_type input_type = tensors[0]->type;
     GGML_ASSERT(input_type == GGML_TYPE_F32 || input_type == GGML_TYPE_F16 || input_type == GGML_TYPE_BF16);
@@ -784,7 +797,9 @@ bool ggml_cuda_ar_allreduce(
     // Decide between copy-engine and chunked kernel paths based on the working
     // type's actual byte count.  No upper bound: copy_outer slices reductions
     // larger than copy_bytes into copy_bytes-sized pieces.
+    // The copy-engine path is 2-GPU only.
     const bool use_copy_engine =
+        n == 2 &&
         p->copy_threshold > 0 &&
         nbytes >= p->copy_threshold;
 
@@ -897,58 +912,71 @@ bool ggml_cuda_ar_allreduce(
         // skips the cross-stream scheduling overhead that was hurting the
         // small-tensor (tg) latency on the AR-stream variant.  Only ev.ker is
         // still recorded at end-of-AR for acquire_slot's pool-wraparound check.
+        //
+        // The for n>2 reduction is a butterfly
+        const int n_steps = ggml_cuda_ar_n_steps(n);
         for (int64_t chunk_start = 0; chunk_start < ne; chunk_start += (int64_t) max_chunk_elems) {
             const size_t remaining_elems = (size_t) (ne - chunk_start);
             const size_t chunk_elems = remaining_elems < max_chunk_elems ? remaining_elems : max_chunk_elems;
             const size_t chunk_dst_bytes  = chunk_elems * input_type_size;
 
-            const auto [slot, token] = ggml_cuda_ar_acquire_slot(p);
+            const auto [slot, base_token] = ggml_cuda_ar_acquire_slot(p);
             const bool last_chunk = chunk_start + (int64_t) chunk_elems == ne;
 
             for (int i = 0; i < n; ++i) {
-                const int peer = 1 - i;  // valid for n == 2 only
+                if (compute_flag[i] || use_bf16) {
+                    continue;
+                }
                 ggml_cuda_set_device(p->devices[i]);
                 auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
-                GGML_ASSERT(cuda_ctx->device == p->devices[i]);
-                cudaStream_t stream = cuda_ctx->stream();
-
                 char * data = static_cast<char *>(tensors[i]->data) + chunk_start * (int64_t) input_type_size;
+                CUDA_CHECK(cudaMemsetAsync(data, 0, chunk_dst_bytes, cuda_ctx->stream()));
+            }
 
-                // Match NCCL/meta-backend semantics: inactive shards contribute
-                // zeros.  On the BF16 path the F32 tensor data was already
-                // zeroed up-front (above), so per-chunk zeroing isn't needed.
-                if (!compute_flag[i] && !use_bf16) {
-                    CUDA_CHECK(cudaMemsetAsync(data, 0, chunk_dst_bytes, stream));
-                }
+            for (int step = 0; step < n_steps; ++step) {
+                const int token = base_token * n_steps + step;
+                for (int i = 0; i < n; ++i) {
+                    const int peer = i ^ (1 << step);
+                    ggml_cuda_set_device(p->devices[i]);
+                    auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+                    GGML_ASSERT(cuda_ctx->device == p->devices[i]);
+                    cudaStream_t stream = cuda_ctx->stream();
+
+                    char * data = static_cast<char *>(tensors[i]->data) + chunk_start * (int64_t) input_type_size;
 
 #define LAUNCH_AR_KERNEL(T_dst, T_wire) \
-                ggml_cuda_ar_kernel<T_dst, T_wire><<<dim3(GGML_CUDA_AR_KERNEL_BLOCKS), dim3(256), 0, stream>>>( \
-                    reinterpret_cast<const T_dst *>(data), \
-                    reinterpret_cast<T_dst *>(data), \
-                    reinterpret_cast<T_wire *>(p->host_buf[i].dev + (size_t) slot * p->buf_bytes), \
-                    reinterpret_cast<const T_wire *>(p->host_buf[peer].dev + (size_t) slot * p->buf_bytes), \
-                    static_cast<int>(chunk_elems), \
-                    ggml_cuda_ar_arrival_ptr(p, slot, i), \
-                    ggml_cuda_ar_arrival_ptr(p, slot, peer), \
-                    token)
+                    ggml_cuda_ar_kernel<T_dst, T_wire><<<dim3(GGML_CUDA_AR_KERNEL_BLOCKS), dim3(256), 0, stream>>>( \
+                        reinterpret_cast<const T_dst *>(data), \
+                        reinterpret_cast<T_dst *>(data), \
+                        reinterpret_cast<T_wire *>(p->host_buf[i].dev + (size_t) slot * p->buf_bytes), \
+                        reinterpret_cast<const T_wire *>(p->host_buf[peer].dev + (size_t) slot * p->buf_bytes), \
+                        static_cast<int>(chunk_elems), \
+                        ggml_cuda_ar_arrival_ptr(p, slot, step, i), \
+                        ggml_cuda_ar_arrival_ptr(p, slot, step, peer), \
+                        token)
 
-                if (use_bf16) {
-                    GGML_ASSERT(input_type == GGML_TYPE_F32);
-                    LAUNCH_AR_KERNEL(float, nv_bfloat16);
-                } else {
-                    switch (input_type) {
-                        case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float,       float);       break;
-                        case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half,        half);        break;
-                        case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(nv_bfloat16, nv_bfloat16); break;
-                        default: GGML_ASSERT(false);
+                    if (use_bf16) {
+                        GGML_ASSERT(input_type == GGML_TYPE_F32);
+                        LAUNCH_AR_KERNEL(float, nv_bfloat16);
+                    } else {
+                        switch (input_type) {
+                            case GGML_TYPE_F32:  LAUNCH_AR_KERNEL(float,       float);       break;
+                            case GGML_TYPE_F16:  LAUNCH_AR_KERNEL(half,        half);        break;
+                            case GGML_TYPE_BF16: LAUNCH_AR_KERNEL(nv_bfloat16, nv_bfloat16); break;
+                            default: GGML_ASSERT(false);
+                        }
                     }
-                }
 
 #undef LAUNCH_AR_KERNEL
-                CUDA_CHECK(cudaGetLastError());
+                    CUDA_CHECK(cudaGetLastError());
+                }
+            }
 
-                if (last_chunk) {
-                    CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].ker, stream));
+            if (last_chunk) {
+                for (int i = 0; i < n; ++i) {
+                    ggml_cuda_set_device(p->devices[i]);
+                    auto * cuda_ctx = static_cast<ggml_backend_cuda_context *>(backends[i]->context);
+                    CUDA_CHECK(cudaEventRecord(p->ev_pool[i][slot].ker, cuda_ctx->stream()));
                 }
             }
         }
