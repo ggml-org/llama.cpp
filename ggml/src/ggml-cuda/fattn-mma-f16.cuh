@@ -944,6 +944,7 @@ static __device__ __forceinline__ void flash_attn_ext_f16_iter(
         const int i0_stop = i0_start + 2*nbatch_V2;
 
         if constexpr (nstages <= 1) {
+            // An explicit DVp == DV short-circuit is needed here because the compiler may decide not to unroll the loop if the body is too large:
             const int i0_diff = ((DVp == DV || i0_stop < DV) ? i0_stop : DV) - i0_start; // Only load the real head size from global memory.
             if (!V_is_K_view || i0_stop > 2*nbatch_K2) {
                 constexpr bool use_cp_async = nstages == 1;
