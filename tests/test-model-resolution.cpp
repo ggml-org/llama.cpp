@@ -219,6 +219,18 @@ struct plan_case {
 };
 
 static const plan_case plan_cases[] = {
+    // a quant built with an importance matrix is selected by its quant tag
+    {"imatrix quant tag", {"model-imatrix.gguf", "model-Q4_K_M-imatrix.gguf"},
+     "test/repo:Q4_K_M", "", false, false,
+     "model-Q4_K_M-imatrix.gguf", {"model-Q4_K_M-imatrix.gguf"}, "", "", "", "", ""},
+
+    // an underscore is part of the quant tag, so that name is not a quant tag at all
+    {"underscore imatrix", {"imatrix.gguf", "model-Q4_K_M_imatrix.gguf"},
+     "test/repo", "", false, false,
+     "", {}, "", "", "", "", ""},
+
+    {"standalone importance matrix", {"model-imatrix.gguf"}, "test/repo", "", false, false,
+     "", {}, "", "", "", "", ""},
     // exact tag picks the matching primary, sidecars follow the tag
     {"flat exact tag", flat, "test/repo:Q8_0", "", true, false,
      "model-Q8_0.gguf", {"model-Q8_0.gguf"},
