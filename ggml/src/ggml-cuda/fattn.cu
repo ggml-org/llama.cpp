@@ -782,6 +782,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
+    // Mask-less attention with many queries (e.g. vision encoders) cannot use the GQA tiles above.
+    // The WMMA kernel is still much faster than the tile kernel for this case:
+    if (amd_wmma_available(cc) && !mask && Q->ne[0] <= 256 && Q->ne[1] >= 128) {
+        return BEST_FATTN_KERNEL_MMA_F16;
+    }
+
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {
         if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
