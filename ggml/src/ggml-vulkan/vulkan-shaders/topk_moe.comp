@@ -135,12 +135,30 @@ void main() {
         [[unroll]]
         for (uint i = 0; i < n_experts; i += WARP_SIZE) {
             const uint expert = i + lane;
-            selection_probs[i / WARP_SIZE] = (n_experts % WARP_SIZE == 0 || expert < n_experts) ? probs[i / WARP_SIZE] + bias[bias_offset + expert] : -INFINITY;
+            const bool valid = n_experts % WARP_SIZE == 0 || expert < n_experts;
+            const float p = probs[i / WARP_SIZE];
+            if (!valid) {
+                selection_probs[i / WARP_SIZE] = -INFINITY;
+            } else {
+                const float b = bias[bias_offset + expert];
+                if (isnan(p) || isnan(b)) {
+                    selection_probs[i / WARP_SIZE] = uintBitsToFloat(0xFF7FFFFFu);
+                } else {
+                    selection_probs[i / WARP_SIZE] = p + b;
+                }
+            }
         }
     } else {
         [[unroll]]
         for (int i = 0; i < experts_per_thread; i++) {
-            selection_probs[i] = probs[i];
+            selection_probs[i] = isnan(probs[i]) ? uintBitsToFloat(0xFF7FFFFFu) : probs[i];
+        }
+    }
+
+    [[unroll]]
+    for (int i = 0; i < experts_per_thread; i++) {
+        if (isnan(probs[i])) {
+            probs[i] = uintBitsToFloat(0xFF7FFFFFu);
         }
     }
 
