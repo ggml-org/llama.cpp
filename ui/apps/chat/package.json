@@ -151,6 +151,7 @@
 		"typescript-eslint": "8.72.1",
 		"unified": "11.0.5",
 		"unist-util-visit": "5.1.0",
+		"unkernel": "0.2.0-261119-97d7945",
 		"uuid": "13.0.2",
 		"vaul-svelte": "1.0.0-next.7",
 		"vite": "8.3.6",

@@ -7,12 +7,12 @@
 	import { Label } from '@ggml-org/llama-ui/ui/label';
 	import * as RadioGroup from '@ggml-org/llama-ui/ui/radio-group';
 	import { Switch } from '@ggml-org/llama-ui/ui/switch';
-	import { Check, Download, Trash2 } from '@lucide/svelte';
+	import { Check, Download, RotateCcw, Trash2 } from '@lucide/svelte';
 	import { DialogConfirmation, DialogConversationSelection } from '#lib/components/app/index.ts';
 	import SettingsGroup from '#lib/components/app/settings/SettingsGroup.svelte';
 	import { ICON_CLASS_DEFAULT } from '#lib/constants/index.ts';
 	import { ConversationSelectionMode, DataExportScope } from '#lib/enums/index.ts';
-	import { ConversationTransferService } from '#lib/services/index.ts';
+	import { ConversationTransferService, LinuxService } from '#lib/services/index.ts';
 	import { conversationsStore, settingsStore } from '#lib/stores/index.ts';
 	import { createMessageCountMap } from '#lib/utils/index.ts';
 	import { fade } from 'svelte/transition';
@@ -40,6 +40,13 @@
 		IMPORT_NOTE_SHORT:
 			'Conversations, your settings or both, from a .jsonl, a .zip or a .json. You see what each file holds before anything changes.',
 		INCLUDE_SENSITIVE: 'Include API keys and MCP server headers',
+		RESET_LINUX: 'Reset the Linux machine',
+		RESET_LINUX_CONFIRM: 'Reset',
+		RESET_LINUX_DONE: 'Linux machine reset',
+		RESET_LINUX_FAILED: 'Reset failed',
+		RESET_LINUX_NOTE:
+			'Stop the Linux machine of the run_bash tool and empty its disk: the packages and files it holds are lost, and its next command boots a fresh Debian.',
+		RESET_LINUX_TITLE: 'Reset Linux',
 		SENSITIVE_INCLUDED:
 			'The file will hold your credentials: share it with no one you do not trust.',
 		SENSITIVE_LEFT_OUT: 'Left out by default to keep your credentials safe.'
@@ -72,6 +79,8 @@
 	let messageCountMap = $state<Map<string, number>>(new Map());
 
 	let showDeleteDialog = $state(false);
+	let showResetLinuxDialog = $state(false);
+	let hasLinux = $derived(!!settingsStore.config.linuxImageUrl);
 
 	async function handleExport() {
 		try {
@@ -165,6 +174,19 @@
 	function handleDeleteAllCancel() {
 		showDeleteDialog = false;
 	}
+
+	async function handleResetLinuxConfirm() {
+		showResetLinuxDialog = false;
+
+		try {
+			await LinuxService.reset();
+			toast.success(TEXT.RESET_LINUX_DONE);
+		} catch (err) {
+			toast.error(TEXT.RESET_LINUX_FAILED, {
+				description: err instanceof Error ? err.message : String(err)
+			});
+		}
+	}
 </script>
 
 {#snippet sensitiveNote()}
@@ -239,6 +261,18 @@
 				onclick={handleDeleteAllClick}
 				title={TEXT.DELETE_ALL_TITLE}
 			/>
+
+			{#if hasLinux}
+				<SettingsChatImportExportSection
+					IconComponent={RotateCcw}
+					buttonText={TEXT.RESET_LINUX}
+					buttonVariant="destructive"
+					description={TEXT.RESET_LINUX_NOTE}
+					inset
+					onclick={() => (showResetLinuxDialog = true)}
+					title={TEXT.RESET_LINUX_TITLE}
+				/>
+			{/if}
 		</InsetList>
 	</div>
 {:else}
@@ -312,6 +346,19 @@
 				title={TEXT.DELETE_ALL_TITLE}
 				titleClass="text-destructive"
 			/>
+
+			{#if hasLinux}
+				<SettingsChatImportExportSection
+					IconComponent={RotateCcw}
+					buttonClass="justify-start justify-self-start md:w-auto"
+					buttonText={TEXT.RESET_LINUX}
+					buttonVariant="destructive"
+					description={TEXT.RESET_LINUX_NOTE}
+					onclick={() => (showResetLinuxDialog = true)}
+					title={TEXT.RESET_LINUX_TITLE}
+					titleClass="text-destructive"
+				/>
+			{/if}
 		</SettingsGroup>
 	</div>
 {/if}
@@ -334,5 +381,17 @@
 	onCancel={handleDeleteAllCancel}
 	onConfirm={handleDeleteAllConfirm}
 	title={TEXT.DELETE_ALL}
+	variant="destructive"
+/>
+
+<DialogConfirmation
+	bind:open={showResetLinuxDialog}
+	cancelText="Cancel"
+	confirmText={TEXT.RESET_LINUX_CONFIRM}
+	description={TEXT.RESET_LINUX_NOTE}
+	icon={RotateCcw}
+	onCancel={() => (showResetLinuxDialog = false)}
+	onConfirm={handleResetLinuxConfirm}
+	title={TEXT.RESET_LINUX}
 	variant="destructive"
 />

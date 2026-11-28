@@ -34,6 +34,12 @@ export const TOOL_CALL_PHRASING: Readonly<Record<string, ToolCallPhrasing>> = {
 		present: 'Viewing',
 		summary: ToolCallSummaryKind.VIEW
 	},
+	[BuiltInTool.BROWSER_RUN_BASH]: {
+		object: 'a command',
+		past: 'Ran',
+		present: 'Running',
+		summary: ToolCallSummaryKind.COMMAND
+	},
 	[BuiltInTool.BROWSER_RUN_JAVASCRIPT]: {
 		object: 'JavaScript',
 		past: 'Ran',

@@ -3,6 +3,7 @@
 #include "server-http.h"
 #include "server-models.h"
 #include "server-cors-proxy.h"
+#include "server-wisp.h"
 #include "server-stream.h"
 #include "server-tools.h"
 
@@ -261,12 +262,12 @@ static bool server_setup_features(
     }
 
     // tools can run shell commands: do not expose them to the network without auth
-    const bool tools_enabled = !params.server_tools.empty() || !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty() || params.ui_mcp_proxy;
+    const bool tools_enabled = !params.server_tools.empty() || !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty() || params.ui_mcp_proxy || params.ui_linux_net;
     const bool loopback_only = std::all_of(params.hostnames.begin(), params.hostnames.end(), [](const std::string & h) {
         return string_ends_with(h, ".sock") || h == "localhost" || h == "::1" || h == "[::1]" || string_starts_with(h, "127.");
     });
     if (tools_enabled && !loopback_only && params.api_keys.empty() && !params.server_tools_allow_unauth) {
-        SRV_ERR("%s", "security: server tools, MCP servers or MCP proxy are enabled on a non-loopback address without an API key\n");
+        SRV_ERR("%s", "security: server tools, MCP servers, MCP proxy or Linux network relay are enabled on a non-loopback address without an API key\n");
         SRV_ERR("%s", "set --api-key, bind to 127.0.0.1, or pass --allow-unauthenticated-tools on a trusted network\n");
         return false;
     }
@@ -290,6 +291,14 @@ static bool server_setup_features(
     } else {
         ctx_http.get ("/cors-proxy",      ex_wrapper(res_403));
         ctx_http.post("/cors-proxy",      ex_wrapper(res_403));
+    }
+
+    // Wisp relay (EXPERIMENTAL, only used by Llama Chat for the network of its browser Linux machine)
+    if (params.ui_linux_net) {
+        ctx_http.ws("/wisp/", wisp_make_handler(params.ui_linux_net_allow_private_urls));
+        warn_names.push_back(params.ui_linux_net_allow_private_urls
+            ? "Linux network relay (experimental, local and private addresses allowed)"
+            : "Linux network relay (experimental)");
     }
 
     try {

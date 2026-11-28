@@ -69,6 +69,15 @@
 		{open}
 		{section}
 	/>
+{:else if section.toolName === BuiltInTool.BROWSER_RUN_BASH}
+	<ChatMessageToolCallBlockExecShellCommand
+		{attachments}
+		{isExecuting}
+		{isStreaming}
+		{onToggle}
+		{open}
+		{section}
+	/>
 {:else if section.toolName === BuiltInTool.SERVER_FILE_GLOB_SEARCH}
 	<ChatMessageToolCallBlockFileGlobSearch {isStreaming} {onToggle} {open} {section} />
 {:else if section.toolName === BuiltInTool.SERVER_GREP_SEARCH}

@@ -301,6 +301,25 @@ export { MCPService } from './mcp.service';
 export { SandboxService } from './sandbox.service';
 
 /**
+ * **LinuxService** - Bash on a Linux machine inside the browser
+ *
+ * Executor for the run_bash browser tool: unkernel, a Linux kernel compiled
+ * to WebAssembly with an emulated aarch64 CPU, boots the configured Debian
+ * image on the first call and keeps running for the page's lifetime, its
+ * root on a persistent IndexedDB disk and its TCP on the configured Wisp
+ * proxy. Shown only when an image URL is set.
+ *
+ * **Architecture & Relationships:**
+ * - **LinuxService** (this class): the machine and the command runs
+ * - **toolsStore**: Exposes the tool definition when an image URL is set
+ * - **agenticStore**: Dispatches ToolSource.BROWSER calls here
+ * - **Settings, Import/Export**: Resets the machine and its disk
+ *
+ * @see buildRunBashToolDefinition in constants/linux.constants - tool schema sent to the LLM
+ */
+export { LinuxService } from './linux.service';
+
+/**
  * **SearchChatsService** - Read-only search over saved chats, executor of the search_chats browser tool
  *
  * @see buildSearchChatsToolDefinition in constants/search-chats - tool schema sent to the LLM

@@ -1,5 +1,5 @@
 <script lang="ts">
-	// Block for `exec_shell_command`. Collapsed, it reads as one line: "Ran"
+	// Block for the terminal tools (`exec_shell_command`, `run_bash`). Collapsed, it reads as one line: "Ran"
 	// or the model's description of the call, always followed by the command.
 	// Open, it shows the terminal: the prompt line and the output. It treats
 	// "live" output chunks as active even after the call resolved, so the

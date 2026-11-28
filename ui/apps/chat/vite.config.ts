@@ -4,6 +4,7 @@ import { nerdamerPlugin } from './scripts/vite-plugin-nerdamer.ts';
 import { pwaManifestPlugin } from './scripts/vite-plugin-pwa-manifest.ts';
 import { relativizeBasePlugin } from './scripts/vite-plugin-relativize-base.ts';
 import { splashScreenPlugin } from './scripts/vite-plugin-splash-screen.ts';
+import { unkernelPlugin } from './scripts/vite-plugin-unkernel.ts';
 import { storybookTest } from '@storybook/addon-vitest/vitest-plugin';
 import adapter from '@sveltejs/adapter-static';
 import { sveltekit } from '@sveltejs/kit/vite';
@@ -73,6 +74,7 @@ export default defineConfig(({ command, mode }) => {
 
 		plugins: [
 			llamaUiPlugin(),
+			unkernelPlugin(),
 			tailwindcss(),
 			sveltekit({
 				adapter: adapter({

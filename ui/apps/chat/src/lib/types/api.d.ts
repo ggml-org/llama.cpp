@@ -307,6 +307,8 @@ export interface ApiLlamaCppServerProps {
 	cors_proxy_enabled?: boolean;
 	/** llama-server was started with `--ui-agent`: agent mode with no server tools and no proxy */
 	ui_agent?: boolean;
+	/** llama-server was started with `--ui-linux-net`: its Wisp relay carries the TCP of the browser Linux machine */
+	ui_linux_net?: boolean;
 }
 
 export interface ApiChatCompletionRequest {

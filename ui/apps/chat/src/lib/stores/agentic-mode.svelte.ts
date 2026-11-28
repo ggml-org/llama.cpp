@@ -3,12 +3,12 @@
  *
  * They are on when the build has them (see AGENTIC_ENABLED) and llama-server
  * asks for them: with its built-in tools or its proxy, which `--agent` turns
- * on together, or with `--ui-agent`, which offers neither and leaves the
- * tools that run in the browser and the MCP servers the browser reaches
- * itself. Without them Llama Chat is a plain chat: a message and its reply,
+ * on together, with the relay of the browser Linux machine (`--ui-linux-net`),
+ * or with `--ui-agent`, which offers none of them and leaves the tools that
+ * run in the browser and the MCP servers the browser reaches itself. Without them Llama Chat is a plain chat: a message and its reply,
  * with no tools, no MCP and no agentic loop.
  *
- * The server says so in two places: `/props` reports the proxy and
+ * The server says so in two places: `/props` reports the proxy, the relay and
  * `--ui-agent`, and `/tools` lists the built-in tools, which the tools store
  * reports here.
  */
@@ -28,7 +28,10 @@ class AgenticMode {
 
 		return (
 			AGENTIC_ENABLED &&
-			(this.serverHasTools || (props?.cors_proxy_enabled ?? false) || (props?.ui_agent ?? false))
+			(this.serverHasTools ||
+				(props?.cors_proxy_enabled ?? false) ||
+				(props?.ui_linux_net ?? false) ||
+				(props?.ui_agent ?? false))
 		);
 	}
 

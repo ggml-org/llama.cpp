@@ -1,4 +1,4 @@
-// Meta parser for `exec_shell_command` tool calls. Surfaces the
+// Meta parser for terminal tool calls (`exec_shell_command`, `run_bash`). Surfaces the
 // command text from args `command` / `cmd` / `shell_command` aliases.
 // Args are parsed partially so the title can render the command while
 // it is still streaming.
@@ -8,7 +8,8 @@
 // the error / exit status elide from call-section to result-section.
 
 import { parseToolArgs } from './_shared';
-import { BuiltInTool } from '#lib/enums/index.ts';
+import { TERMINAL_TOOLS } from '#lib/constants/index.ts';
+import type { BuiltInTool } from '#lib/enums/index.ts';
 import type { AgenticSection } from '#lib/types/index.ts';
 
 export type ExecShellCommandMeta = {
@@ -16,7 +17,9 @@ export type ExecShellCommandMeta = {
 };
 
 export function parseExecShellCommandMeta(section: AgenticSection): ExecShellCommandMeta | null {
-	const args = parseToolArgs(BuiltInTool.SERVER_EXEC_SHELL_COMMAND, section, { partial: true });
+	if (!section.toolName || !TERMINAL_TOOLS.has(section.toolName)) return null;
+
+	const args = parseToolArgs(section.toolName as BuiltInTool, section, { partial: true });
 
 	if (!args) return null;
 

@@ -704,6 +704,8 @@ struct common_params {
     bool ui_agent = false; // agent mode in Llama Chat, no server tools and no MCP proxy
     bool ui_mcp_proxy = false;
     bool ui_mcp_proxy_allow_private_urls = false; // allow the MCP CORS proxy to reach local or private addresses
+    bool ui_linux_net = false; // Wisp relay for the TCP of the Linux machine that Llama Chat runs in the browser
+    bool ui_linux_net_allow_private_urls = false; // allow the Wisp relay to reach local or private addresses
     std::string ui_config_json;
 
     // "advanced" endpoints are disabled by default for better security

@@ -40,6 +40,7 @@ import {
 	ToolCallType
 } from '#lib/enums/index.ts';
 import { ChatService } from '#lib/services/index.ts';
+import { LinuxService } from '#lib/services/linux.service.ts';
 import { ReadMediaService } from '#lib/services/read-media.service.ts';
 import { SandboxService } from '#lib/services/sandbox.service.ts';
 import { SearchChatsService } from '#lib/services/search-chats.service.ts';
@@ -495,6 +496,8 @@ class AgenticStore {
 			if (toolName === BuiltInTool.BROWSER_SEARCH_CHATS) {
 				return SearchChatsService.executeTool(args, conversationId);
 			}
+
+			if (toolName === BuiltInTool.BROWSER_RUN_BASH) return LinuxService.executeTool(args, signal);
 
 			if (toolName === BuiltInTool.BROWSER_READ_MEDIA) {
 				return ReadMediaService.executeTool(

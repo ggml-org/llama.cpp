@@ -12,6 +12,7 @@ import {
 	buildBrowserInfoToolDefinition,
 	buildGetDatetimeToolDefinition,
 	buildReadMediaToolDefinition,
+	buildRunBashToolDefinition,
 	buildSearchChatsToolDefinition,
 	DISABLED_TOOL_CATEGORIES_LOCALSTORAGE_KEY,
 	DISABLED_TOOL_KEYS_LOCALSTORAGE_KEY,
@@ -127,6 +128,8 @@ class ToolsStore {
 		const readMedia = this.readMediaTool();
 
 		if (readMedia) tools.push(readMedia);
+
+		if (settingsStore.config.linuxImageUrl) tools.push(buildRunBashToolDefinition());
 
 		// provide browser's get_info tool if server doesn't provide one
 		if (!this.hasServerTool(BuiltInTool.SERVER_GET_INFO)) {

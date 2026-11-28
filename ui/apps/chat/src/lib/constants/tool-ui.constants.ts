@@ -21,6 +21,12 @@ import Terminal from '@lucide/svelte/icons/terminal';
 import { BuiltInTool, ToolSource } from '#lib/enums/index.ts';
 import type { ToolUiEntry } from '#lib/types/index.ts';
 
+/** Tools whose calls render as a terminal: the command, then its output and exit code. */
+export const TERMINAL_TOOLS: ReadonlySet<string> = new Set([
+	BuiltInTool.BROWSER_RUN_BASH,
+	BuiltInTool.SERVER_EXEC_SHELL_COMMAND
+]);
+
 export const TOOL_UI: Readonly<Record<BuiltInTool, ToolUiEntry>> = {
 	[BuiltInTool.BROWSER_GET_DATETIME]: {
 		icon: Clock,
@@ -28,6 +34,11 @@ export const TOOL_UI: Readonly<Record<BuiltInTool, ToolUiEntry>> = {
 		source: ToolSource.BROWSER
 	},
 	[BuiltInTool.BROWSER_READ_MEDIA]: { icon: Eye, label: 'Read media', source: ToolSource.BROWSER },
+	[BuiltInTool.BROWSER_RUN_BASH]: {
+		icon: Terminal,
+		label: 'Run in Linux',
+		source: ToolSource.BROWSER
+	},
 	[BuiltInTool.BROWSER_RUN_JAVASCRIPT]: {
 		icon: Braces,
 		label: 'Run JavaScript',

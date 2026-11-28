@@ -1,6 +1,7 @@
 import { DEFAULT_AGENTIC_CONFIG } from './agentic.constants';
 import { CLI_FLAGS } from './cli-flags.constants';
 import { COMPACTION } from './compaction.constants';
+import { LINUX_IMAGE_URL_DEFAULT } from './linux.constants';
 import { DEFAULT_MCP_CONFIG } from './mcp.constants';
 import { SETTINGS_KEYS } from './settings-keys.constants';
 import { PDF_RENDERING } from './supported-file-types.constants';
@@ -835,6 +836,13 @@ export const SETTINGS_REGISTRY: SettingsSectionEntry[] = [
 				key: SETTINGS_KEYS.SYMBOLIC_MATH_ENABLED,
 				label: 'Symbolic math (nerdamer)',
 				type: SettingsFieldType.CHECKBOX
+			},
+			{
+				defaultValue: LINUX_IMAGE_URL_DEFAULT,
+				help: 'URL of the Debian image (an unkernel debian.erofs, served with Range support) of the Linux machine the run_bash tool runs commands on, inside the browser; empty: no run_bash. It has a network when llama-server runs with --ui-linux-net. Takes effect on reload.',
+				key: SETTINGS_KEYS.LINUX_IMAGE_URL,
+				label: 'Linux image URL',
+				type: SettingsFieldType.INPUT
 			},
 			{
 				defaultValue: '',

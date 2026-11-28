@@ -955,8 +955,8 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
     }
 
     const bool mcp_enabled = !params.mcp_servers_config.empty() || !params.mcp_servers_json.empty();
-    if ((!params.server_tools.empty() || mcp_enabled || params.ui_mcp_proxy) && !params.cors_origins_explicit) {
-        LOG_WRN("server tools, MCP servers or MCP proxy are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
+    if ((!params.server_tools.empty() || mcp_enabled || params.ui_mcp_proxy || params.ui_linux_net) && !params.cors_origins_explicit) {
+        LOG_WRN("server tools, MCP servers, MCP proxy or Linux network relay are enabled, using localhost as default CORS origin (change via --cors-origins)\n");
         params.cors_origins = "localhost";
     }
 
@@ -3435,6 +3435,23 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_MCP_PROXY_ALLOW_PRIVATE_URLS"));
     add_opt(common_arg(
+        {"--ui-linux-net"},
+        {"--no-ui-linux-net"},
+        "experimental: whether to enable the Wisp relay at /wisp, which carries the TCP connections of the Linux machine that Llama Chat runs in the browser; local and private addresses are refused unless --ui-linux-net-allow-private-urls is set - do not enable in untrusted environments (default: disabled)\n"
+        "note: for security reasons, this will limit --cors-origins to localhost by default",
+        [](common_params & params, bool value) {
+            params.ui_linux_net = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_LINUX_NET"));
+    add_opt(common_arg(
+        {"--ui-linux-net-allow-private-urls"},
+        "allow the Wisp relay to reach local or private addresses (e.g. servers on localhost or LAN) - anyone who can reach the relay can then reach your local network (default: disabled, only public addresses)\n"
+        "note: only has effect with --ui-linux-net",
+        [](common_params & params) {
+            params.ui_linux_net_allow_private_urls = true;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_UI_LINUX_NET_ALLOW_PRIVATE_URLS"));
+    add_opt(common_arg(
         {"--tools"}, "TOOL1,TOOL2,...",
         "experimental: whether to enable built-in tools for AI agents - do not enable in untrusted environments (default: no tools)\n"
         "specify \"all\" to enable all tools\n"
@@ -3497,7 +3514,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--ui-agent"},
         "enable agent mode in Llama Chat with nothing enabled on the server: the tools that run in the browser and MCP servers the browser reaches itself, no server tools and no MCP proxy (default: disabled)\n"
-        "note: not needed with --agent, --tools or --ui-mcp-proxy, they enable agent mode in Llama Chat too",
+        "note: not needed with --agent, --tools, --ui-mcp-proxy or --ui-linux-net, they enable agent mode in Llama Chat too",
         [](common_params & params) {
             params.ui_agent = true;
         }
