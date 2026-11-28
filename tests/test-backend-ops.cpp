@@ -14211,6 +14211,29 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {200000, 4, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4,      1, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4,   1023, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
+    for (int64_t ne0 : {1, 3, 4, 8}) {
+        for (bool mask : {false, true}) {
+            for (bool sinks : {false, true}) {
+                for (float max_bias : {0.0f, 8.0f}) {
+                    if (!mask && max_bias > 0.0f) continue;
+                    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {ne0, 37, 2, 3}, mask, sinks, GGML_TYPE_F16, {1, 1}, 0.1f, max_bias));
+                    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {ne0, 37, 2, 3}, mask, sinks, GGML_TYPE_F32, {1, 1}, 0.1f, max_bias));
+                }
+            }
+        }
+    }
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4, 37, 2, 3}, true, true, GGML_TYPE_F16, {2, 3}, 0.1f, 8.0f));
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {8, 37, 2, 3}, true, true, GGML_TYPE_F32, {2, 3}, 0.1f, 8.0f));
+    test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {4, 300000, 1, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
+    for (int64_t ne0 : {1, 3, 4, 8}) {
+        test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { ne0, 37, 2, 3 }));
+        test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { ne0, 5, 6, 3 }, true, false));
+        test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { ne0, 5, 6, 3 }, false, true));
+        test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { ne0, 5, 6, 3 }, true, true));
+        test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { ne0, 37, 2, 3 }));
+        test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { ne0, 5, 6, 3 }, true, true));
+    }
+    test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { 4, 300000, 1, 1 }));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {643251, 3, 1, 1}, false,  false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
     test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {16, 65537, 1, 1}));
 
@@ -15838,6 +15861,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
                 }
             }
         }
+    }
+
+    for (int64_t ne0 : {4, 8}) {
+        test_cases.emplace_back(new test_soft_max(GGML_TYPE_F32, {ne0, 3440640, 1, 1}, false, false, GGML_TYPE_F32, {1, 1}, 1.0f, 0.0f));
+        test_cases.emplace_back(new test_sum_rows(GGML_TYPE_F32, { ne0, 3440640, 1, 1 }));
+        test_cases.emplace_back(new test_mean(GGML_TYPE_F32, { ne0, 3440640, 1, 1 }));
     }
 
     for (int col : {8192, 16384, 32768, 65536, 131072, 262144, 524288}) {
