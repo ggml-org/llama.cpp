@@ -8,7 +8,6 @@
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer A {A_TYPE data_a[];};
-layout (binding = 0) readonly buffer AV4 {vec4 data_a_v4[];};
 layout (binding = 1) writeonly buffer D {D_TYPE data_d[];};
 
 layout (constant_id = 0) const uint BLOCK_SIZE = 256;
@@ -28,20 +27,8 @@ void main() {
 
     FLOAT_TYPE sum = FLOAT_TYPE(0.0);
 
-    const bool is_aligned = (p.n_cols % 4) == 0 && (p.nb01 % 4) == 0 && (p.nb02 % 4) == 0 && (p.nb03 % 4) == 0 && (get_aoffset() % 4) == 0;
-
-    if (is_aligned) {
-        for (uint i = 0; i < p.n_cols; i += 4) {
-            const vec4 x = data_a_v4[(src_idx + i) / 4];
-            sum += FLOAT_TYPE(x.x);
-            sum += FLOAT_TYPE(x.y);
-            sum += FLOAT_TYPE(x.z);
-            sum += FLOAT_TYPE(x.w);
-        }
-    } else {
-        for (uint i = 0; i < p.n_cols; ++i) {
-            sum += FLOAT_TYPE(data_a[src_idx + i]);
-        }
+    for (uint i = 0; i < p.n_cols; ++i) {
+        sum += FLOAT_TYPE(data_a[src_idx + i]);
     }
 
     data_d[dst_idx] = D_TYPE(sum * p.weight);

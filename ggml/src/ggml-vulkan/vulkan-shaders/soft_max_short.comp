@@ -32,11 +32,9 @@ layout(constant_id = 0) const uint BLOCK_SIZE = 256;
 layout(local_size_x_id = 0, local_size_y = 1, local_size_z = 1) in;
 
 layout (binding = 0) readonly buffer X {A_TYPE data_a[];};
-layout (binding = 0) readonly buffer XV4 {vec4 data_a_v4[];};
 layout (binding = 1) readonly buffer Y {B_TYPE data_b[];};
 layout (binding = 2) readonly buffer Z {float data_c[];};
 layout (binding = 3) buffer D {D_TYPE data_d[];};
-layout (binding = 3) buffer DV4 {vec4 data_d_v4[];};
 
 const uint MAX_COLS = 8;
 
@@ -69,30 +67,10 @@ void main() {
     FLOAT_TYPE vals[MAX_COLS];
     FLOAT_TYPE max_val = p.has_sinks == 0 ? uintBitsToFloat(0xFF800000) : data_c[i02];
 
-    const bool is_aligned = p.KX % 4 == 0;
-
-    if (is_aligned) {
-        [[unroll]] for (uint col = 0; col < MAX_COLS; col += 4) {
-            if (col < p.KX) {
-                const vec4 x = data_a_v4[(rowx * p.KX + col) / 4];
-                vals[col + 0] = FLOAT_TYPE(x.x);
-                vals[col + 1] = FLOAT_TYPE(x.y);
-                vals[col + 2] = FLOAT_TYPE(x.z);
-                vals[col + 3] = FLOAT_TYPE(x.w);
-            }
-        }
-    } else {
-        [[unroll]] for (uint col = 0; col < MAX_COLS; ++col) {
-            if (col < p.KX) {
-                vals[col] = FLOAT_TYPE(data_a[rowx * p.KX + col]);
-            }
-        }
-    }
-
     [[unroll]] for (uint col = 0; col < MAX_COLS; ++col) {
         if (col < p.KX) {
             const FLOAT_TYPE b = p.KY > 0 ? FLOAT_TYPE(data_b[rowy_start + col]) : FLOAT_TYPE(0.0f);
-            vals[col] = vals[col] * p.scale + slope * b;
+            vals[col] = FLOAT_TYPE(data_a[rowx * p.KX + col]) * p.scale + slope * b;
             max_val = max(max_val, vals[col]);
         }
     }
@@ -108,17 +86,9 @@ void main() {
 
     const FLOAT_TYPE rcpdivisor = 1.0/sum;
 
-    if (is_aligned) {
-        [[unroll]] for (uint col = 0; col < MAX_COLS; col += 4) {
-            if (col < p.KX) {
-                data_d_v4[(rowx * p.KX + col) / 4] = vec4(vals[col + 0], vals[col + 1], vals[col + 2], vals[col + 3]) * rcpdivisor;
-            }
-        }
-    } else {
-        [[unroll]] for (uint col = 0; col < MAX_COLS; ++col) {
-            if (col < p.KX) {
-                data_d[rowx * p.KX + col] = D_TYPE(vals[col] * rcpdivisor);
-            }
+    [[unroll]] for (uint col = 0; col < MAX_COLS; ++col) {
+        if (col < p.KX) {
+            data_d[rowx * p.KX + col] = D_TYPE(vals[col] * rcpdivisor);
         }
     }
 }
