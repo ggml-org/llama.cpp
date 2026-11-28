@@ -785,7 +785,23 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 
 #if defined(GGML_USE_HIP)
 // hipMemcpyAsync() from pageable memory keeps the source range mapped for DMA; for a model loaded with mmap() this exceeds the resident memory limit and the copy hangs (ggml-org/llama.cpp#19482).
-// Upload in chunks through temporary pinned buffers. Two streams are used in a ping-pong so that filling one buffer overlaps with the DMA of the other. row_size == size and n_rows == 1 for a plain contiguous copy.
+// Upload in chunks through a temporary pinned buffer. Two streams are used in a ping-pong so that filling one half of the buffer overlaps with the DMA of the other; a host function marks a half free once its copy is done. row_size == size and n_rows == 1 for a plain contiguous copy.
+struct ggml_cuda_upload_half {
+    std::mutex              mutex;
+    std::condition_variable cond;
+    bool                    done = true;
+};
+
+// called by the driver once the copy that used this half is done; the caller synchronizes the
+// stream before returning, so the state this points to is guaranteed to be alive here
+static void ggml_cuda_upload_half_done(void * user_data) {
+    auto * half = (ggml_cuda_upload_half *) user_data;
+
+    std::lock_guard<std::mutex> lock(half->mutex);
+    half->done = true;
+    half->cond.notify_all();
+}
+
 static bool ggml_cuda_memcpy_host_to_device_staged(
         char * dst, size_t stride_dst,
         const char * src, size_t stride_src,
@@ -796,43 +812,50 @@ static bool ggml_cuda_memcpy_host_to_device_staged(
 
     const size_t chunk = std::min(row_size, (size_t) (64 * 1024 * 1024));
 
-    void *       host[2] = { ggml_cuda_host_malloc(chunk), ggml_cuda_host_malloc(chunk) };
+    // one pinned allocation, split into two halves for the ping-pong
+    void * host = ggml_cuda_host_malloc(2 * chunk);
+    if (host == nullptr) {
+        return false;
+    }
+
     cudaStream_t strm[2] = { stream, nullptr };
-
-    bool ok = host[0] != nullptr && host[1] != nullptr;
-    if (ok && cudaStreamCreateWithFlags(&strm[1], cudaStreamNonBlocking) != cudaSuccess) {
+    if (cudaStreamCreateWithFlags(&strm[1], cudaStreamNonBlocking) != cudaSuccess) {
         (void) cudaGetLastError();
-        ok = false;
+        cudaFreeHost(host);
+        return false;
     }
 
-    if (ok) {
-        size_t k = 0;
-        for (size_t r = 0; r < n_rows; r++) {
-            for (size_t off = 0; off < row_size; off += chunk, k++) {
-                const size_t n = std::min(chunk, row_size - off);
-                const int    s = k & 1;
+    ggml_cuda_upload_half half[2];
 
-                // wait for the copy that last read this buffer
-                CUDA_CHECK(cudaStreamSynchronize(strm[s]));
+    size_t k = 0;
+    for (size_t r = 0; r < n_rows; r++) {
+        for (size_t off = 0; off < row_size; off += chunk, k++) {
+            const size_t n = std::min(chunk, row_size - off);
+            const int    s = k & 1;
 
-                memcpy(host[s], src + r*stride_src + off, n);
-                CUDA_CHECK(cudaMemcpyAsync(dst + r*stride_dst + off, host[s], n, cudaMemcpyHostToDevice, strm[s]));
+            char * h = (char *) host + s*chunk;
+
+            // wait for the copy that last used this half
+            {
+                std::unique_lock<std::mutex> lock(half[s].mutex);
+                half[s].cond.wait(lock, [&] { return half[s].done; });
+                half[s].done = false;
             }
-        }
-        CUDA_CHECK(cudaStreamSynchronize(strm[0]));
-        CUDA_CHECK(cudaStreamSynchronize(strm[1]));
-    }
 
-    for (int i = 0; i < 2; i++) {
-        if (host[i] != nullptr) {
-            (void) cudaFreeHost(host[i]);
+            memcpy(h, src + r*stride_src + off, n);
+            CUDA_CHECK(cudaMemcpyAsync(dst + r*stride_dst + off, h, n, cudaMemcpyHostToDevice, strm[s]));
+            CUDA_CHECK(cudaLaunchHostFunc(strm[s], ggml_cuda_upload_half_done, &half[s]));
         }
     }
-    if (strm[1] != nullptr) {
-        CUDA_CHECK(cudaStreamDestroy(strm[1]));
-    }
 
-    return ok;
+    // waits for the copies and the host functions, so the local state outlives all callbacks
+    CUDA_CHECK(cudaStreamSynchronize(strm[0]));
+    CUDA_CHECK(cudaStreamSynchronize(strm[1]));
+
+    cudaFreeHost(host);
+    CUDA_CHECK(cudaStreamDestroy(strm[1]));
+
+    return true;
 }
 #endif
 
