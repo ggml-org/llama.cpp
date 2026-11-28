@@ -42,6 +42,31 @@ struct llama_memory_buffer {
 
 using llama_memory_buffers = std::map<ggml_backend_buffer_type_t, llama_memory_buffer>;
 
+// Borrowed sampling outputs for one row.
+struct llama_sampling_output_view {
+    llama_token token = LLAMA_TOKEN_NULL;
+    const float * probs = nullptr;
+    const float * sampled_logits = nullptr;
+    const llama_token * candidates = nullptr;
+    const float * logits = nullptr;
+    uint32_t n_probs = 0;
+    uint32_t n_logits = 0;
+};
+
+struct llama_sampling_outputs {
+    const llama_vocab * vocab = nullptr;
+
+    // Positive indices are batch token positions; negative indices count from the last output row.
+    // An invalid index returns an empty row.
+    LLAMA_API llama_sampling_output_view get_sampling_ith(int32_t i) const;
+
+private:
+    friend struct llama_context;
+
+    std::vector<llama_sampling_output_view> sampling;
+    const std::vector<int32_t> * output_ids = nullptr;
+};
+
 struct llama_context {
     // init scheduler and compute buffers, reserve worst-case graphs
     llama_context(
@@ -80,6 +105,8 @@ struct llama_context {
     bool memory_update(bool optimize);
 
     enum llama_pooling_type pooling_type() const;
+
+    const llama_sampling_outputs * get_sampling_outputs();
 
     float * get_logits();
     float * get_logits_ith(int32_t i);
@@ -345,6 +372,8 @@ private:
 
     llama_memory_ptr memory;
     llama_moe_cache_ptr moe_cache;
+
+    llama_sampling_outputs sampling_outputs;
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};

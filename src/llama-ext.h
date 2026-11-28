@@ -165,3 +165,9 @@ LLAMA_API uint32_t llama_model_n_tokens_delay(const struct llama_model * model);
 
 // each sequence is paired with an unconditional one at n_seq_max / 2 + seq_id, in a unified KV cache
 LLAMA_API bool llama_model_classifier_free_guidance(const struct llama_model * model);
+
+struct llama_sampling_outputs;
+
+// Borrowed sampling outputs from the last successful encode/decode. Do not use after the context outputs change or the context is freed.
+// Wait for the current batch and prepare its sampling outputs once. Does not copy output tensors.
+LLAMA_API const llama_sampling_outputs * llama_get_sampling_outputs(llama_context * ctx);
