@@ -20,8 +20,12 @@ ExtraQuantType ggml_openvino_get_npu_requant_type() {
 std::optional<ExtraQuantType> ggml_openvino_npu_token_embd_requant_type(const ggml_tensor * tensor) {
     // A Q6_K embedding table is stored as q8_0_c by default on the NPU. The int4 layouts only pay off for a tied
     // embedding, where the table is also the lm_head weight and GET_ROWS gathers the packed rows
-    // before dequantizing them (see gather_compressed_rows).
-    if (tensor->type != GGML_TYPE_Q6_K) {
+    // before dequantizing them (see gather_compressed_rows). Other K-quant tables default to the channel-wise
+    // int8 of ggml_openvino_get_requant_type() and follow this setting only when it is set explicitly
+    // (Gemma 4 E2B: a tied Q4_K table is 384 MiB as int8, 198 MiB as q4_0_128).
+    if (tensor->type != GGML_TYPE_Q6_K &&
+        !((tensor->type == GGML_TYPE_Q4_K || tensor->type == GGML_TYPE_Q5_K) &&
+          ggml_openvino_getenv_str("GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT") != nullptr)) {
         return std::nullopt;
     }
     const std::string quant = ggml_openvino_getenv_str("GGML_OPENVINO_NPU_TOKEN_EMBD_QUANT", "q8_0_c");
@@ -45,6 +49,10 @@ std::optional<ExtraQuantType> ggml_openvino_npu_token_embd_requant_type(const gg
 }
 
 std::optional<ExtraQuantType> ggml_openvino_npu_weight_requant_type(const ggml_tensor * tensor) {
-    GGML_UNUSED(tensor);
-    return ggml_openvino_get_npu_requant_type();
+    const ExtraQuantType type = ggml_openvino_get_npu_requant_type();
+    // a group must fit within a row
+    if (type == ExtraQuantType::Q4_0_128 && tensor->ne[0] % 128 != 0) {
+        return ExtraQuantType::Q4_0_C;
+    }
+    return type;
 }

@@ -1,15 +1,15 @@
 <script lang="ts">
-	// Block for `exec_shell_command`. Unlike the other tools, this
-	// renderer uses CollapsibleTerminalBlock (terminal-style frame)
-	// and treats "live" output chunks as active even after the call
-	// resolved, so the spinner stays on while stdout is still flowing.
+	// Block for `exec_shell_command`. Collapsed, it reads as one line: "Ran"
+	// or the model's description of the call, always followed by the command.
+	// Open, it shows the terminal: the prompt line and the output. It treats
+	// "live" output chunks as active even after the call resolved, so the
+	// spinner stays on while stdout is still flowing.
 	// The scroll-to-bottom auto-scroll logic mirrors what was here
 	// before extraction.
 
 	import { parseExecShellCommandMeta } from './parsers/exec-shell-command';
 	import ToolCallBlock from './ToolCallBlock.svelte';
 	import { AlertTriangle, Check, CircleStop, Loader2, XCircle } from '@lucide/svelte';
-	import { CollapsibleTerminalBlock } from '#lib/components/app/index.ts';
 	import {
 		SETTINGS_KEYS,
 		TOOL_RUNTIME_SCROLL_AT_BOTTOM_THRESHOLD_PX
@@ -213,12 +213,12 @@
 	});
 </script>
 
-{#snippet execShellTitle()}
+{#snippet promptLine()}
 	{#if cwd}
 		<span class="exec-wd" title={cwd}>{wdDisplay}</span>
-
-		<span class="exec-prompt">$</span>
 	{/if}
+
+	<span class="exec-prompt">$</span>
 
 	{#if highlightedCommandHtml}
 		<span class="font-mono">{@html highlightedCommandHtml}</span>
@@ -239,73 +239,98 @@
 	{onToggle}
 	{open}
 	{section}
-	spinIconWhenActive={true}
-	wrapper={CollapsibleTerminalBlock}
 >
-	{#snippet titleSnippet()}
-		{@render execShellTitle()}
+	{#snippet titleSnippet(phrase)}
+		<!-- The command is always in the title: a description is the model's
+		     wording, and the reader approves and audits what actually runs.
+		     Both take their own width while the row has room. When it runs out
+		     the command gives way first, since the full command is one click away
+		     and a cut description reads as noise. -->
+		<span class="flex min-w-0 items-baseline gap-1.5">
+			<span
+				class={phrase.described ? 'min-w-0 truncate' : 'shrink-0'}
+				title={phrase.described ? phrase.label : undefined}>{phrase.label}</span
+			>
+
+			{#if execShellMeta?.command}
+				<span
+					class="exec-title-command min-w-[2ch] shrink-[1000] truncate font-mono"
+					title={execShellMeta.command}
+				>
+					{execShellMeta.command}
+				</span>
+			{/if}
+		</span>
 	{/snippet}
 
 	{#snippet children(_meta, ctx)}
-		{#if (ctx.isPending && !commandStreaming) || (isLive && !section.toolResult)}
-			<div class="flex items-start gap-2 text-caption text-muted-foreground/70">
-				<Loader2 class="size-icon-xs animate-spin" />
-				Executing command...
+		<div class="terminal-frame">
+			<div class="exec-prompt-line font-mono text-caption">
+				{@render promptLine()}
 			</div>
-		{:else if ctx.isInterrupted}
-			<div class="flex items-start gap-2 text-caption text-muted-foreground/70 italic">
-				<CircleStop class="mt-0.5 h-3 w-3 shrink-0" />
 
-				<span>Command interrupted before it returned output</span>
-			</div>
-		{:else if execShellError}
-			<div class="flex items-start gap-2 text-caption text-fg-danger italic">
-				<XCircle class="mt-0.5 size-icon-xs shrink-0" />
+			{#if (ctx.isPending && !commandStreaming) || (isLive && !section.toolResult)}
+				<div class="flex items-start gap-2 text-caption text-muted-foreground/70">
+					<Loader2 class="size-icon-xs animate-spin" />
+					Executing command...
+				</div>
+			{:else if ctx.isInterrupted}
+				<div class="flex items-start gap-2 text-caption text-muted-foreground/70 italic">
+					<CircleStop class="mt-0.5 h-3 w-3 shrink-0" />
 
-				<span>{execShellError}</span>
-			</div>
-		{:else if section.toolResult}
-			<div
-				bind:this={scrollEl}
-				class={['terminal-output', !useFullHeightCodeBlocks && 'is-clamped']}
-				onscroll={handleScrollEvent}
-			>
-				{#each outputLines as line, i (i)}
-					<div class="font-mono text-caption leading-relaxed whitespace-pre-wrap">{line.text}</div>
+					<span>Command interrupted before it returned output</span>
+				</div>
+			{:else if execShellError}
+				<div class="flex items-start gap-2 text-caption text-fg-danger italic">
+					<XCircle class="mt-0.5 size-icon-xs shrink-0" />
 
-					{#if line.media?.type === AttachmentType.IMAGE}
-						<img
-							alt={line.media.name}
-							class="mt-2 mb-2 h-auto max-w-full rounded-lg"
-							loading="lazy"
-							src={line.media.base64Url}
-						/>
-					{/if}
-				{/each}
+					<span>{execShellError}</span>
+				</div>
+			{:else if section.toolResult}
+				<div
+					bind:this={scrollEl}
+					class={['terminal-output', !useFullHeightCodeBlocks && 'is-clamped']}
+					onscroll={handleScrollEvent}
+				>
+					{#each outputLines as line, i (i)}
+						<div class="font-mono text-caption leading-relaxed whitespace-pre-wrap">
+							{line.text}
+						</div>
 
-				{#if isExitCodeFinalLine && execShellExitStatus}
-					<div class={exitBadgeClass}>
-						{#if execShellExitStatus.timedOut}
-							<AlertTriangle class="size-icon-xs" />
-
-							<span>timed out</span>
-
-							<span class="exit-sep">&middot;</span>
-
-							<span>exit {execShellExitStatus.code}</span>
-						{:else if execShellExitStatus.code === 0}
-							<Check class="size-icon-xs" />
-
-							<span>exit 0</span>
-						{:else}
-							<XCircle class="size-icon-xs" />
-
-							<span>exit {execShellExitStatus.code}</span>
+						{#if line.media?.type === AttachmentType.IMAGE}
+							<img
+								alt={line.media.name}
+								class="mt-2 mb-2 h-auto max-w-full rounded-lg"
+								loading="lazy"
+								src={line.media.base64Url}
+							/>
 						{/if}
-					</div>
-				{/if}
-			</div>
-		{/if}
+					{/each}
+
+					{#if isExitCodeFinalLine && execShellExitStatus}
+						<div class={exitBadgeClass}>
+							{#if execShellExitStatus.timedOut}
+								<AlertTriangle class="size-icon-xs" />
+
+								<span>timed out</span>
+
+								<span class="exit-sep">&middot;</span>
+
+								<span>exit {execShellExitStatus.code}</span>
+							{:else if execShellExitStatus.code === 0}
+								<Check class="size-icon-xs" />
+
+								<span>exit 0</span>
+							{:else}
+								<XCircle class="size-icon-xs" />
+
+								<span>exit {execShellExitStatus.code}</span>
+							{/if}
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</div>
 	{/snippet}
 </ToolCallBlock>
 
@@ -341,6 +366,29 @@
 		50% {
 			opacity: 0;
 		}
+	}
+
+	.exec-title-command {
+		color: var(--fg-muted);
+		font-size: 0.92em;
+	}
+
+	.terminal-frame {
+		display: grid;
+		gap: 0.5rem;
+		min-width: 0;
+		padding: 0.625rem 0.75rem;
+		border-radius: var(--radius-md, 0.375rem);
+		background: var(--surface-code);
+		border: 1px solid color-mix(in oklch, var(--line-default) 30%, transparent);
+	}
+
+	.exec-prompt-line {
+		word-break: break-word;
+	}
+
+	.exec-prompt-line :global(.font-mono) {
+		white-space: pre-wrap;
 	}
 
 	.terminal-output.is-clamped {

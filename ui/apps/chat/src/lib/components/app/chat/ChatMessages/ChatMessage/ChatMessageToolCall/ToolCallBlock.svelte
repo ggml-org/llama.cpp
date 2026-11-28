@@ -1,22 +1,28 @@
 <script generics="TMeta" lang="ts">
 	// Generic chrome shell shared by every per-tool block under
 	// `ChatMessageToolCall/`. Owns:
-	//   - the collapsible wrapper (defaults to CollapsibleContentBlock;
-	//     `exec_shell_command` swaps in CollapsibleTerminalBlock via the
-	//     `wrapper` prop);
-	//   - the icon, spinner state, and MCP favicon fallback chain;
+	//   - the collapsible wrapper (CollapsibleContentBlock);
+	//   - the running state, shown as a shimmering title;
 	//   - the status subtitle pill.
+	//   - the call's plain-language description, handed to the title.
 	// Components supply only their `meta`, a title snippet, and a body
 	// snippet - everything around them is this single source of truth.
 
-	import { Loader2, Wrench } from '@lucide/svelte';
+	import { describeToolCall } from './parsers/tool-call-phrasing';
+	import { useToolCallElapsed } from './tool-call-elapsed';
+	import ToolCallElapsed from './ToolCallElapsed.svelte';
+	import {
+		formatToolCallLine,
+		isToolCallRunning,
+		type ToolCallDescription
+	} from '@ggml-org/llama-harness';
 	import { CollapsibleContentBlock } from '#lib/components/app/index.ts';
-	import { ICON_CLASS_DEFAULT, ICON_CLASS_SPIN } from '#lib/constants/index.ts';
 	import { AgenticSectionType } from '#lib/enums/index.ts';
-	import { mcpStore } from '#lib/stores/index.ts';
-	import type { AgenticSection, ToolUiEntry } from '#lib/types/index.ts';
-	import { getToolUi } from '#lib/utils/index.ts';
-	import type { Component, Snippet } from 'svelte';
+	import { settingsStore } from '#lib/stores/index.ts';
+	import type { AgenticSection } from '#lib/types/index.ts';
+	import { imageExtras, toolCallShownArg } from '#lib/utils/index.ts';
+	import type { Snippet } from 'svelte';
+	import { fade } from 'svelte/transition';
 
 	type ToolCallBlockMetaWithError = TMeta & { errorMessage?: string };
 
@@ -44,28 +50,15 @@
 		 */
 		extraLiveStreaming?: boolean;
 		/**
-		 * Swap the title-row icon for a spinning `Loader2` while the
-		 * spinner is showing. Only meaningful for tools where "live"
-		 * is interesting (e.g. exec_shell_command showing the in-flight
-		 * process). Other tools leave it off and render the spinner
-		 * inline within the body.
-		 */
-		spinIconWhenActive?: boolean;
-		/**
 		 * Treat an empty result as interrupted too. For tools that create
 		 * their result message before running (`exec_shell_command`), so a
 		 * stop mid-run leaves an empty result rather than none.
 		 */
 		emptyResultIsInterrupted?: boolean;
-		/**
-		 * Wrapper component that renders the title row and the body
-		 * children. Defaults to CollapsibleContentBlock;
-		 * `exec_shell_command` uses CollapsibleTerminalBlock for its
-		 * terminal-style frame.
-		 */
-		wrapper?: typeof CollapsibleContentBlock;
+		/** A fixed title; without it and without a snippet, the description is the title. */
 		title?: string;
-		titleSnippet?: Snippet;
+		/** The title, given the call's description ( "Read a file", "Reading ..." ). */
+		titleSnippet?: Snippet<[ToolCallDescription]>;
 		onToggle?: () => void;
 		children: Snippet<[TMeta | null | undefined, ToolCallCtx]>;
 	}
@@ -79,10 +72,8 @@
 		onToggle,
 		open,
 		section,
-		spinIconWhenActive = false,
 		title,
-		titleSnippet,
-		wrapper: Wrapper = CollapsibleContentBlock
+		titleSnippet: blockTitle
 	}: Props = $props();
 
 	const isPending = $derived(section.type === AgenticSectionType.TOOL_CALL_PENDING);
@@ -95,22 +86,6 @@
 		section.type === AgenticSectionType.TOOL_CALL &&
 			(section.toolResult === undefined || (emptyResultIsInterrupted && !section.toolResult)) &&
 			!showSpinner
-	);
-
-	const toolUi: ToolUiEntry | null = $derived(getToolUi(section.toolName));
-	const toolIcon: Component = $derived(
-		spinIconWhenActive && showSpinner ? Loader2 : (toolUi?.icon ?? Wrench)
-	);
-	const toolIconClass = $derived(
-		spinIconWhenActive && showSpinner ? ICON_CLASS_SPIN : ICON_CLASS_DEFAULT
-	);
-	// Drop the MCP favicon while the spinner is on so the title row
-	// signals "in flight" without being overwritten by server branding.
-	const mcpServerFavicon = $derived(
-		showSpinner ? null : mcpStore.getServerFaviconForTool(section.toolName)
-	);
-	const iconUrl = $derived(
-		showSpinner || (toolUi?.icon ?? null) || !mcpServerFavicon ? null : mcpServerFavicon
 	);
 
 	// No subtitle while the call is in flight - the spinner already
@@ -128,19 +103,67 @@
 	}
 
 	const subtitle = $derived(subtitleFor(meta?.errorMessage));
+	const elapsedStartFor = useToolCallElapsed();
+	const elapsedStart = $derived(elapsedStartFor(section.toolCallId));
+
+	// images the call produced, as tiny thumbnails beside its title while the
+	// row is closed; opened, its body shows them in full
+	const images = $derived(imageExtras(section.toolResultExtras));
+
+	// what the call did, or is doing while it runs; described once here for
+	// every per-tool title
+	const phrase = $derived(
+		describeToolCall(
+			section.toolName,
+			section.toolArgs,
+			extraLiveStreaming || isToolCallRunning(section, isStreaming),
+			toolCallShownArg(settingsStore.config, section.toolName)
+		)
+	);
 </script>
 
-<Wrapper
+<CollapsibleContentBlock
 	class="my-2"
-	icon={toolIcon}
-	iconClass={toolIconClass}
-	{iconUrl}
 	{onToggle}
 	{open}
+	pinnedChevron
+	shimmerTitle={showSpinner}
 	{subtitle}
-	{title}
-	{titleSnippet}
 >
+	{#snippet titleSnippet()}
+		{#if blockTitle}
+			{@render blockTitle(phrase)}
+		{:else}
+			{title ?? formatToolCallLine(phrase)}
+		{/if}
+	{/snippet}
+
+	{#snippet trailing()}
+		{#if elapsedStart !== null}
+			<ToolCallElapsed startedAt={elapsedStart} />
+		{/if}
+	{/snippet}
+
+	{#snippet titleSuffix()}
+		{#if images.length > 0 && !open}
+			<span
+				transition:fade={{ duration: 150 }}
+				aria-label="{images.length} {images.length === 1 ? 'image' : 'images'}"
+				class="ml-1 inline-flex items-center gap-1 align-middle"
+				role="img"
+			>
+				{#each images as image, i (i)}
+					<img
+						alt=""
+						class="h-5 w-auto max-w-10 rounded-sm border border-border/60 object-cover"
+						loading="lazy"
+						src={image.base64Url}
+					/>
+				{/each}
+			</span>
+		{/if}
+	{/snippet}
+
 	{@render children(meta, {
 		isCodeStreaming,
 		isInterrupted,
@@ -148,4 +171,4 @@
 		isStreaming,
 		isStreamingCall
 	})}
-</Wrapper>
+</CollapsibleContentBlock>

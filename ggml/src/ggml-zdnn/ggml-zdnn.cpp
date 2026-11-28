@@ -100,6 +100,10 @@ static bool ggml_zdnn_is_tensor_own(const ggml_tensor * tensor) {
 }
 
 static bool ggml_zdnn_supports_op(const ggml_backend_zdnn_device_context * ctx_dev, const ggml_tensor * op) {
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     switch (op->op) {
         case GGML_OP_NONE:
         case GGML_OP_RESHAPE:
@@ -615,11 +619,12 @@ static void ggml_backend_zdnn_device_get_props(ggml_backend_dev_t dev, ggml_back
     props->type        = ggml_backend_zdnn_device_get_type(dev);
     ggml_backend_zdnn_device_get_memory(dev, &props->memory_free, &props->memory_total);
     props->caps = {
-        /* .async                = */ false,
-        /* .host_buffer          = */ false,
-        /* .buffer_from_host_ptr = */ false,
-        /* .events               = */ false,
-        /* .mmap_support         = */ true,
+        /* .async                 = */ false,
+        /* .host_buffer           = */ false,
+        /* .buffer_from_host_ptr  = */ false,
+        /* .events                = */ false,
+        /* .mmap_support          = */ true,
+        /* .fast_async_host_input = */ false,
     };
 }
 

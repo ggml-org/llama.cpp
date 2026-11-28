@@ -18,6 +18,8 @@
 			"@ggml-org/llama-ui": ["../../lib/ui/src/lib/index.ts"],
 			"@ggml-org/llama-voice": ["../../lib/voice/src/index.ts"],
 			"@ggml-org/llama-voice/svelte": ["../../lib/voice/src/svelte/index.ts"],
+			"@ggml-org/llama-huggingface": ["../../lib/huggingface/src/index.ts"],
+			"@ggml-org/llama-huggingface/svelte": ["../../lib/huggingface/src/svelte/index.ts"],
 			"$llama-ui-stories/*": ["../../lib/ui/tests/stories/*"],
 			"@internationalized/date": ["./node_modules/@internationalized/date"],
 			"@internationalized/date/*": ["./node_modules/@internationalized/date/*"],
@@ -47,7 +49,9 @@
 			"tw-animate-css/*": ["./node_modules/tw-animate-css/*"],
 			"vaul-svelte": ["./node_modules/vaul-svelte"],
 			"vaul-svelte/*": ["./node_modules/vaul-svelte/*"],
-			"@lucide/svelte/icons/*": ["./node_modules/@lucide/svelte/dist/icons/*"]
+			"@lucide/svelte/icons/*": ["./node_modules/@lucide/svelte/dist/icons/*"],
+			"@ggml-org/llama-harness": ["../../lib/harness/src/index.ts"],
+			"@ggml-org/llama-harness/trace": ["../../lib/harness/src/trace/index.ts"]
 		},
 		"sourceMap": true,
 		"strict": true
@@ -65,6 +69,8 @@
 		"tests/**/*.svelte",
 		".storybook/**/*.ts",
 		"../../lib/ui/tests/stories/svx.d.ts",
+		"../../lib/huggingface/src/**/*.ts",
+		"../../lib/huggingface/src/**/*.svelte",
 		".storybook/**/*.svelte"
 	],
 	"exclude": ["src/lib/services/sandbox-worker.js", "src/lib/vendors/**", "src/service-worker"]

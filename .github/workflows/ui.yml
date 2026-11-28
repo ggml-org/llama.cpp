@@ -83,8 +83,16 @@ jobs:
         run: npm ci
         working-directory: ui/apps/chat
 
+      # the app's demo helpers import the demo harness (ui/lib/demo), whose sources resolve
+      # @playwright/test and its other types from its own node_modules
+      - name: Install demo harness dependencies
+        id: setup-demo
+        if: ${{ steps.setup.conclusion == 'success' }}
+        run: npm ci
+        working-directory: ui/lib/demo
+
       - name: Run type checking
-        if: ${{ always() && steps.setup.conclusion == 'success' }}
+        if: ${{ always() && steps.setup.conclusion == 'success' && steps.setup-demo.conclusion == 'success' }}
         run: npm run check
         working-directory: ui/apps/chat
 
@@ -181,6 +189,157 @@ jobs:
         run: npm run prepack
         working-directory: ui/lib/voice
 
+  harness-checks:
+    name: Harness checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ui/lib/harness
+
+      - name: Run type checking
+        run: npm run check
+        working-directory: ui/lib/harness
+
+      - name: Run tests
+        run: npm test
+        working-directory: ui/lib/harness
+
+      - name: Build the package
+        run: npm run prepack
+        working-directory: ui/lib/harness
+
+  demo-checks:
+    name: Demo harness checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ui/lib/demo
+
+      - name: Run type checking
+        run: npm run check
+        working-directory: ui/lib/demo
+
+  chat-only-build:
+    name: Chat-only build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ui/apps/chat
+
+      - name: Build without the agentic loop
+        run: npm run build
+        working-directory: ui/apps/chat
+        env:
+          VITE_PUBLIC_AGENTIC: "false"
+
+      - name: Check the harness loop is not in the bundle
+        run: |
+          if grep -rlq "Tool execution was interrupted by a new user message" dist; then
+            echo "The chat-only bundle contains Llama Harness's loop" && exit 1
+          fi
+        working-directory: ui/apps/chat
+
+  huggingface-lib-bundle:
+    name: Hugging Face lib in the bundle
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ui/apps/chat
+
+      - name: Build with and without the Hugging Face lib
+        run: |
+          npm run build
+          VITE_PUBLIC_HUGGING_FACE=true LLAMA_UI_OUT_DIR=dist-with-sharing npm run build
+        working-directory: ui/apps/chat
+
+      # a text of the lib's sign-in: it is in the bundle only when the lib is
+      - name: Check the Hugging Face lib is only in the bundle built with it
+        run: |
+          marker="Hugging Face sent no access token back"
+          if ! grep -rlq "$marker" dist-with-sharing; then
+            echo "The bundle built with the Hugging Face lib does not contain it" && exit 1
+          fi
+          if grep -rlq "$marker" dist; then
+            echo "The default bundle contains the Hugging Face lib" && exit 1
+          fi
+        working-directory: ui/apps/chat
+
+  huggingface-lib-checks:
+    name: Hugging Face lib checks
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.sha || github.event.pull_request.head.sha || github.sha || github.head_ref || github.ref_name }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ui/lib/huggingface
+
+      # its plain TypeScript; the components are checked with the app that compiles them
+      - name: Run type checking
+        run: npm run check
+        working-directory: ui/lib/huggingface
+
+      - name: Run tests
+        run: npm test
+        working-directory: ui/lib/huggingface
+
   e2e-tests:
     name: E2E Tests
     needs: ui-build
@@ -223,6 +382,9 @@ jobs:
         if: ${{ always() && steps.playwright.conclusion == 'success' }}
         run: npm run build-storybook
         working-directory: ui/apps/chat
+        env:
+          # its stories show the Hugging Face lib
+          VITE_PUBLIC_HUGGING_FACE: "true"
 
       - name: Run UI tests
         if: ${{ always() && steps.playwright.conclusion == 'success' }}

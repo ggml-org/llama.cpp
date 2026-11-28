@@ -1,9 +1,5 @@
 <script lang="ts">
-	import {
-		DialogConversationDelete,
-		SearchInput,
-		SidebarNavigationSearchResults
-	} from '#lib/components/app/index.ts';
+	import { SearchInput, SidebarNavigationSearchResults } from '#lib/components/app/index.ts';
 	import { ROUTES } from '#lib/constants/index.ts';
 	import { RouterService } from '#lib/services/router.service.ts';
 	import { chatStore, conversationsStore, deviceStore } from '#lib/stores/index.ts';
@@ -34,44 +30,6 @@
 
 	async function selectConversation(id: string) {
 		await goto(RouterService.chat(id));
-	}
-
-	async function handleEditConversation(id: string) {
-		const conversation = conversationsStore.conversations.find((c) => c.id === id);
-
-		if (!conversation) return;
-
-		const newName = window.prompt('Rename conversation', conversation.name);
-
-		if (newName && newName.trim()) {
-			await conversationsStore.updateConversationName(id, newName.trim());
-		}
-	}
-
-	let deleteDialogOpen = $state(false);
-	let deleteTargetId = $state<string | null>(null);
-
-	function handleDeleteConversation(id: string) {
-		const conversation = conversationsStore.conversations.find((c) => c.id === id);
-
-		if (!conversation) return;
-
-		deleteTargetId = conversation.id;
-		deleteDialogOpen = true;
-	}
-
-	async function handleDeleteConfirm() {
-		const id = deleteTargetId;
-
-		deleteDialogOpen = false;
-
-		if (!id) return;
-
-		await conversationsStore.deleteConversation(id, { deleteWithForks: false });
-	}
-
-	function handleDeleteCancel() {
-		deleteDialogOpen = false;
 	}
 
 	function handleStopGeneration(id: string) {
@@ -105,16 +63,8 @@
 	<SidebarNavigationSearchResults
 		{currentChatId}
 		{filteredConversations}
-		onDelete={handleDeleteConversation}
-		onEdit={handleEditConversation}
 		onSelect={selectConversation}
 		onStop={handleStopGeneration}
 		{searchQuery}
 	/>
 </div>
-
-<DialogConversationDelete
-	bind:open={deleteDialogOpen}
-	onCancel={handleDeleteCancel}
-	onConfirm={handleDeleteConfirm}
-/>

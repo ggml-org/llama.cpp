@@ -799,10 +799,10 @@ static void launch_mul_mat_q_few_switch_ncg(const ggml_tensor * src0, const ggml
 void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * ids, ggml_tensor * dst) {
     GGML_TENSOR_BINARY_OP_LOCALS;
 
-    GGML_ASSERT(src1->type == GGML_TYPE_F32);
+    GGML_ASSERT(src1->type == GGML_TYPE_F32 || src1->type == GGML_TYPE_BF16);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
     GGML_ASSERT(nb00 == ggml_type_size(src0->type));
-    GGML_ASSERT(nb10 == sizeof(float));
+    GGML_ASSERT(nb10 == ggml_type_size(src1->type));
     GGML_ASSERT(nb0  == sizeof(float));
     GGML_ASSERT(ne00 % QK_K == 0);
 
@@ -828,14 +828,14 @@ void ggml_cuda_mul_mat_q_few(ggml_backend_cuda_context & ctx, const ggml_tensor 
 
         pairs.alloc(int64_t(npairs_max)*MMQ_FEW_PAIR_INTS);
         src1_q.alloc(int64_t(npairs_max)*nunits*MMQ_FEW_Q8_1_INT4);
-        quantize_mmq_few_id_q8_1_cuda((const float *) src1->data, (const int32_t *) ids->data, src1_q.get(), pairs.get(), mmq_few_ds_layout(src0->type),
-            ne00, nb11/sizeof(float), nb12/sizeof(float), ne11, ne02, n_expert_used, n_tokens, ids->nb[1]/sizeof(int32_t), npairs_max, stream);
+        quantize_mmq_few_id_q8_1_cuda(src1->data, src1->type, (const int32_t *) ids->data, src1_q.get(), pairs.get(), mmq_few_ds_layout(src0->type),
+            ne00, nb11/nb10, nb12/nb10, ne11, ne02, n_expert_used, n_tokens, ids->nb[1]/sizeof(int32_t), npairs_max, stream);
     } else {
         GGML_ASSERT(ne11 <= MMQ_FEW_MAX_NCG*MMQ_FEW_NCOLS);
         GGML_ASSERT(ne12 % ne02 == 0 && ne13 % ne03 == 0);
 
         src1_q.alloc(int64_t(ne12)*ne13*nunits*ncg*MMQ_FEW_Q8_1_INT4);
-        quantize_mmq_few_q8_1_cuda((const float *) src1->data, src1_q.get(), mmq_few_ds_layout(src0->type), ne10, nb11/sizeof(float), nb12/sizeof(float), nb13/sizeof(float),
+        quantize_mmq_few_q8_1_cuda(src1->data, src1->type, src1_q.get(), mmq_few_ds_layout(src0->type), ne10, nb11/nb10, nb12/nb10, nb13/nb10,
             ne11, ne12, ne13, stream);
     }
 

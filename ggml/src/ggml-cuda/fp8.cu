@@ -1,9 +1,11 @@
+#include "convert.cuh"
 #include "fp8.cuh"
 
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && CUDART_VERSION >= 11080
 
+template <typename src_t>
 struct fp8_abs_src {
-    const float * x;
+    const src_t * x;
     int64_t ne0;
     int64_t ne1;
     int64_t ne2;
@@ -18,12 +20,13 @@ struct fp8_abs_src {
         i /= ne1;
         const int64_t i2 = i % ne2;
         const int64_t i3 = i / ne2;
-        const float value = fabsf(x[i0 + i1*s1 + i2*s2 + i3*s3]);
+        const float value = fabsf(ggml_cuda_cast<float>(x[i0 + i1*s1 + i2*s2 + i3*s3]));
         return isfinite(value) ? value : 448.0f;
     }
 };
 
-static __global__ void fp8_amax_partials(fp8_abs_src src, int64_t ne, float * partials) {
+template <typename src_t>
+static __global__ void fp8_amax_partials(fp8_abs_src<src_t> src, int64_t ne, float * partials) {
     float amax = 0.0f;
     for (int64_t i = (int64_t) blockIdx.x*blockDim.x + threadIdx.x; i < ne; i += (int64_t) blockDim.x*gridDim.x) {
         amax = fmaxf(amax, src(i));
@@ -49,8 +52,9 @@ static __global__ void fp8_amax_final(const float * partials, int n, float * ama
     }
 }
 
+template <typename src_t>
 static __global__ void quantize_fp8_e4m3(
-        const float * __restrict__ x, uint8_t * __restrict__ y, const float * __restrict__ amax,
+        const src_t * __restrict__ x, uint8_t * __restrict__ y, const float * __restrict__ amax,
         float * __restrict__ scale, int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne, int64_t s1, int64_t s2, int64_t s3) {
     const int64_t i = (int64_t) blockIdx.x*blockDim.x + threadIdx.x;
     if (i >= ne) {
@@ -65,10 +69,24 @@ static __global__ void quantize_fp8_e4m3(
     const int64_t i3 = tmp / ne2;
 
     const float d = *amax > 0.0f ? *amax / 448.0f : 1.0f;
-    y[i] = ggml_cuda_fp32_to_f8_e4m3(x[i0 + i1*s1 + i2*s2 + i3*s3] / d);
+    y[i] = ggml_cuda_fp32_to_f8_e4m3(ggml_cuda_cast<float>(x[i0 + i1*s1 + i2*s2 + i3*s3]) / d);
     if (i == 0) {
         *scale = d;
     }
+}
+
+// src1 (F32 or BF16) to FP8 with one scale for the whole tensor: amax / 448
+template <typename src_t>
+static void fp8_quantize_src1(
+        ggml_backend_cuda_context & ctx, const src_t * x, uint8_t * y, float * amax, float * scale,
+        int64_t ne0, int64_t ne1, int64_t ne2, int64_t ne, int64_t s1, int64_t s2, int64_t s3, cudaStream_t stream) {
+    const fp8_abs_src<src_t> abs_src = { x, ne0, ne1, ne2, s1, s2, s3 };
+    const int reduce_blocks = std::min<int64_t>((ne + 255)/256, 1024);
+    ggml_cuda_pool_alloc<float> reduce_tmp(ctx.pool(), reduce_blocks);
+    fp8_amax_partials<<<reduce_blocks, 256, 0, stream>>>(abs_src, ne, reduce_tmp.ptr);
+    fp8_amax_final<<<1, 256, 0, stream>>>(reduce_tmp.ptr, reduce_blocks, amax);
+
+    quantize_fp8_e4m3<<<(ne + 255)/256, 256, 0, stream>>>(x, y, amax, scale, ne0, ne1, ne2, ne, s1, s2, s3);
 }
 
 static void fp8_set_batch(cublasLtMatrixLayout_t desc, int32_t count, int64_t stride) {
@@ -89,9 +107,9 @@ bool ggml_cuda_mul_mat_fp8(
         ggml_backend_cuda_context & ctx, const ggml_tensor * src0, const ggml_tensor * src1, ggml_tensor * dst,
         const ggml_tensor * weight_scale) {
     const int cc = ggml_cuda_info().devices[ctx.device].cc;
-    if (!fp8_mma_hardware_available(cc) || src0->type != GGML_TYPE_F8_E4M3 || src1->type != GGML_TYPE_F32 ||
+    if (!fp8_mma_hardware_available(cc) || src0->type != GGML_TYPE_F8_E4M3 || (src1->type != GGML_TYPE_F32 && src1->type != GGML_TYPE_BF16) ||
             dst->type != GGML_TYPE_F32 || !ggml_is_contiguous(dst) || src0->ne[0] % 16 != 0 || src0->ne[1] % 16 != 0 ||
-            src0->nb[0] != sizeof(uint8_t) || src0->nb[1] != (size_t) src0->ne[0] || src1->nb[0] != sizeof(float) ||
+            src0->nb[0] != sizeof(uint8_t) || src0->nb[1] != (size_t) src0->ne[0] || src1->nb[0] != ggml_type_size(src1->type) ||
             !ggml_cuda_is_aligned(src0, 16) || !ggml_cuda_is_aligned(dst, 16)) {
         return false;
     }
@@ -110,18 +128,17 @@ bool ggml_cuda_mul_mat_fp8(
     ggml_cuda_pool_alloc<float> src1_scale(ctx.pool(), 1);
     ggml_cuda_pool_alloc<float> src1_amax(ctx.pool(), 1);
 
-    const fp8_abs_src abs_src = {
-        (const float *) src1->data, ne10, ne11, ne12,
-        (int64_t) (nb11 / sizeof(float)), (int64_t) (nb12 / sizeof(float)), (int64_t) (nb13 / sizeof(float))
-    };
-    const int reduce_blocks = std::min<int64_t>((ne_src1 + 255)/256, 1024);
-    ggml_cuda_pool_alloc<float> reduce_tmp(ctx.pool(), reduce_blocks);
-    fp8_amax_partials<<<reduce_blocks, 256, 0, stream>>>(abs_src, ne_src1, reduce_tmp.ptr);
-    fp8_amax_final<<<1, 256, 0, stream>>>(reduce_tmp.ptr, reduce_blocks, src1_amax.ptr);
-
-    quantize_fp8_e4m3<<<(ne_src1 + 255)/256, 256, 0, stream>>>(
-        (const float *) src1->data, src1_fp8.ptr, src1_amax.ptr, src1_scale.ptr, ne10, ne11, ne12, ne_src1,
-        nb11 / sizeof(float), nb12 / sizeof(float), nb13 / sizeof(float));
+    const int64_t s11 = nb11 / nb10;
+    const int64_t s12 = nb12 / nb10;
+    const int64_t s13 = nb13 / nb10;
+    if (src1->type == GGML_TYPE_BF16) {
+        fp8_quantize_src1(ctx, (const nv_bfloat16 *) src1->data, src1_fp8.ptr, src1_amax.ptr, src1_scale.ptr,
+            ne10, ne11, ne12, ne_src1, s11, s12, s13, stream);
+    } else {
+        GGML_ASSERT(src1->type == GGML_TYPE_F32);
+        fp8_quantize_src1(ctx, (const float *) src1->data, src1_fp8.ptr, src1_amax.ptr, src1_scale.ptr,
+            ne10, ne11, ne12, ne_src1, s11, s12, s13, stream);
+    }
     CUDA_CHECK(cudaGetLastError());
 
     cublasLtMatmulDesc_t op_desc;

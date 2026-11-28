@@ -1,0 +1,77 @@
+<!--
+	Mobile flows: how Llama Chat works on a phone. What the sidebar's keys open, the three sheets and the pages
+	each one pushes, and where their stories are. Written for people first and readable as plain Markdown by
+	agents too. Set in the Editorial.
+-->
+
+<script>
+	import Figure from '../editorial/Figure.svelte';
+	import SheetFlow from './SheetFlow.svelte';
+	import { ADD_FLOW, MODELS_FLOW, SETTINGS_FLOW, SETTINGS_TOOLS_FLOW } from './flows';
+</script>
+
+<p class="kicker">Llama Chat &middot; Mobile</p>
+
+# Mobile flows
+
+<p class="lead">On a phone, Llama Chat keeps the chat on screen and opens everything else as a <strong>sheet</strong>: a panel that rises from the bottom, with a round key in its corner and pages that slide in from the right. This page says what opens each sheet and where its pages lead.</p>
+
+## The rules
+
+- **One sheet at a time.** A sheet rises over the page and the sidebar. Its corner key closes it on the first page and goes back on the pages pushed over it. A swipe down closes it too.
+- **Rows are a finger tall.** Every list is an inset list: rounded groups of 3rem rows, tappable as a whole, with a chevron when the row opens a page.
+- **A change applies at once.** A switch or a pick is saved when it is made, and typed text when its field is left. There is no Save.
+- **The phone's own pickers.** A select opens the system's wheel or sheet, files open the system file picker, and the camera row opens the camera.
+- **Settings follow the device.** A setting that only matters on a desktop (the sidebar, tabs, Send on Enter) is not listed on a phone, and the other way round.
+
+## The sidebar
+
+The sidebar slides in from the left. Search is a round key across from the logo. Two keys stay pinned under the conversations: **Settings** on the left and **New chat**, the one primary button, on the right. The conversations scroll and fade out above them.
+
+Story: `Llama Chat/Navigation/SidebarNavigation`.
+
+## Settings
+
+<Figure n={1} caption="Settings: the first page, a section, and the MCP servers from the Agentic section.">
+	<SheetFlow flow={SETTINGS_FLOW} />
+</Figure>
+
+The first page has the theme as three tiles, then one row per section. A section's page lists its fields in groups: switches, pickers and numbers as rows, a prompt or a choice of one as a group of its own, with the help text under the label. Back returns to where the page below was scrolled.
+
+<Figure n={2} caption="The Tools section is three pages deep: the groups, one group's tools, one tool.">
+	<SheetFlow flow={SETTINGS_TOOLS_FLOW} />
+</Figure>
+
+A row with a switch at its end has two targets: the row opens the page, the switch turns the group or the tool on and off without opening it.
+
+Stories: `Llama Chat/Settings/SettingsSheet`.
+
+## Add to chat
+
+<Figure n={3} caption="The + menu: a short sheet, with Tools as pages.">
+	<SheetFlow flow={ADD_FLOW} />
+</Figure>
+
+The sheet is as tall as its menu, and the pages pushed over it keep that height so it does not jump. Files and the camera keep the sheet open while the system picker is up and close it once files arrive. Tools show how many are on, as `4/9`.
+
+Stories: `Llama Chat/Chat/ChatForm/ChatFormActionAddDrawer`.
+
+## Model picker
+
+<Figure n={4} caption="The model picker: the short view, then all models.">
+	<SheetFlow flow={MODELS_FLOW} />
+</Figure>
+
+The sheet opens short, with up to six models: the chat's, the one that transcribes dictation, then the loaded, favorite and recent ones. A tap switches the chat to a model and loads it if need be. Holding a row opens its menu: Unload, Use for dictation on a model that hears (Keep for dictation on the one picked automatically, Pick dictation model automatically on the one chosen), or More details over the sheet. The search stays at the sheet's foot, under the reasoning effort, and shows its results in place at full height.
+
+Stories: `Llama Chat/Models/ModelsSelectorSheet`.
+
+## Building a sheet
+
+A sheet is made of Llama UI's pieces, from `@ggml-org/llama-ui/app/sheets`:
+
+- `useSheetPages` holds the stack of pages; `SheetPages` shows the top one and slides between them.
+- `SheetHeader` is the corner key and the title, inside a `Drawer` whose content takes `SHEET_CONTENT_CLASS`.
+- `InsetList`, `InsetListRow` and `InsetListSplitRow` are the lists. `NativeSelect`, from `app/forms`, is the picker.
+
+Their stories are under `Llama UI/App components`: Sheet, InsetList and NativeSelect.

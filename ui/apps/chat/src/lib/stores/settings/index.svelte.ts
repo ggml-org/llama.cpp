@@ -521,13 +521,13 @@ class SettingsStore {
 			}
 		}
 
-		// MCP shows by default for someone who already added a server, from before it moved
-		// behind its setting, so they keep the way to manage their servers
+		// MCP is on by default for someone who already added a server, from before it had
+		// its setting, so their servers keep working
 		if (
-			!(SETTINGS_KEYS.SHOW_MCP in savedVal) &&
+			!(SETTINGS_KEYS.ENABLE_MCP in savedVal) &&
 			parseMcpServerSettings(savedVal[SETTINGS_KEYS.MCP_SERVERS]).length > 0
 		) {
-			this.config[SETTINGS_KEYS.SHOW_MCP] = true;
+			this.config[SETTINGS_KEYS.ENABLE_MCP] = true;
 		}
 
 		// Load user overrides

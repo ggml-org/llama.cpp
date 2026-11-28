@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { parseWriteFileMeta, parseWriteFileTitleMeta } from './parsers/write-file';
 	import ToolCallBlock from './ToolCallBlock.svelte';
+	import ToolCallTitle from './ToolCallTitle.svelte';
 	import { XCircle } from '@lucide/svelte';
 	import { SyntaxHighlightedCode } from '#lib/components/app/index.ts';
 	import { MAX_HEIGHT_CODE_BLOCK, RESULT_STAT_SEPARATOR } from '#lib/constants/index.ts';
@@ -27,20 +28,16 @@
 </script>
 
 <ToolCallBlock {isStreaming} meta={writeFileMeta} {onToggle} {open} {section}>
-	{#snippet titleSnippet()}
-		<span class="flex min-w-0 flex-wrap items-baseline gap-x-1">
-			<span class="shrink-0 text-muted-foreground">Write file</span>
-
-			<span class="flex min-w-0 items-baseline gap-1.5">
-				<span class="min-w-0 overflow-x-auto font-mono" title={writeFileMeta?.filePath}>
-					{abbreviateHome(writeFileMeta?.filePath ?? '', home)}
-				</span>
-
-				{#if writeFileMeta?.errorMessage}
-					<span class="shrink-0 text-caption italic text-muted-foreground/70">(failed)</span>
-				{/if}
-			</span>
-		</span>
+	{#snippet titleSnippet(phrase)}
+		<ToolCallTitle
+			label={phrase.label}
+			target={abbreviateHome(writeFileMeta?.filePath ?? '', home)}
+			targetTitle={writeFileMeta?.filePath}
+		>
+			{#if writeFileMeta?.errorMessage}
+				<span class="shrink-0 text-caption italic text-muted-foreground/70">(failed)</span>
+			{/if}
+		</ToolCallTitle>
 	{/snippet}
 
 	{#snippet children(_meta, ctx)}

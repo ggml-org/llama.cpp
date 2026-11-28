@@ -10,9 +10,12 @@
 #include "llama-model.h"
 #include "llama-vocab.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 llama_model_saver::llama_model_saver(const struct llama_model * model) :
         gguf_ctx(gguf_init_empty()), model(model), llm_kv(model->arch) {
@@ -173,18 +176,6 @@ void llama_model_saver::add_kv_from_model() {
     // add_kv(LLM_KV_GENERAL_SAMPLING_MIROSTAT_ETA,     ???);
     add_kv(LLM_KV_GENERAL_NAME,                      model->name);
 
-    if (!model->prec_policy.prec_src1.empty()) {
-        std::vector<std::string> tensor_names;
-        std::vector<int8_t> values;
-        tensor_names.reserve(model->prec_policy.prec_src1.size());
-        values.reserve(model->prec_policy.prec_src1.size());
-        for (const auto & [w, prec] : model->prec_policy.prec_src1) {
-            tensor_names.push_back(ggml_get_name(w));
-            values.push_back(prec == GGML_PREC_Q8 ? 0 : 1);
-        }
-        add_kv(LLM_KV_GENERAL_TENSOR_EXTRA_NAME, tensor_names);
-        gguf_set_arr_data(gguf_ctx, llm_kv(LLM_KV_GENERAL_TENSOR_EXTRA_PREC_A4).c_str(), GGUF_TYPE_BOOL, values.data(), values.size());
-    }
     // add_kv(LLM_KV_GENERAL_AUTHOR,                    ???);
     // add_kv(LLM_KV_GENERAL_VERSION,                   ???);
     // add_kv(LLM_KV_GENERAL_URL,                       ???);
@@ -280,6 +271,7 @@ void llama_model_saver::add_kv_from_model() {
     add_kv(LLM_KV_ATTENTION_LAYERNORM_EPS,           hparams.f_norm_eps);
     add_kv(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
     add_kv(LLM_KV_POST_NORM_EPS,                     hparams.f_post_norm_eps);
+    add_kv(LLM_KV_ATTENTION_LATENT_NORM_RMS_EPS,     hparams.f_norm_rms_eps_latent);
     add_kv(LLM_KV_ATTENTION_GROUPNORM_EPS,           hparams.f_norm_group_eps);
     add_kv(LLM_KV_ATTENTION_GROUPNORM_GROUPS,        hparams.n_norm_groups);
     add_kv(LLM_KV_ATTENTION_VALUE_EXPERT_COUNT,      hparams.n_value_expert);
@@ -382,6 +374,11 @@ void llama_model_saver::add_kv_from_model() {
         }
     }
 
+    if (model->arch == LLM_ARCH_HY_V4_FLASH && hparams.ple_n_heads > 0) {
+        add_kv(LLM_KV_ENGRAM_PAD_TOKEN_ID, hparams.engram_pad_id);
+        add_kv(LLM_KV_ENGRAM_TOKEN_MAP,    model->engram_token_map);
+    }
+
     // the PLE group only means anything whole: write all of it or none
     if (hparams.ple_n_heads > 0) {
         std::vector<uint32_t> ple_layers;
@@ -396,9 +393,13 @@ void llama_model_saver::add_kv_from_model() {
         add_kv(LLM_KV_PLE_CONV_KERNEL,       hparams.ple_conv_kernel);
         add_kv(LLM_KV_PLE_EOS_TOKEN_ID,      hparams.ple_eos_token_id);
         add_kv(LLM_KV_EMBEDDING_LENGTH_PER_LAYER, hparams.ple_head_dim);
-        add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS, std::vector<uint64_t>(
-                hparams.ple_layer_multipliers.begin(),
-                hparams.ple_layer_multipliers.begin() + hparams.ple_n_modules*hparams.ple_ngram_size));
+        if (model->arch == LLM_ARCH_HY_V4_FLASH) {
+            add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS, model->engram_multipliers);
+        } else {
+            add_kv(LLM_KV_PLE_LAYER_MULTIPLIERS, std::vector<uint64_t>(
+                    hparams.ple_layer_multipliers.begin(),
+                    hparams.ple_layer_multipliers.begin() + hparams.ple_n_modules*hparams.ple_ngram_size));
+        }
         add_kv(LLM_KV_PLE_HEAD_OFFSETS,      std::vector<uint64_t>(
                 hparams.ple_head_offsets.begin(),
                 hparams.ple_head_offsets.begin() + hparams.ple_n_modules*hparams.ple_n_heads));
@@ -530,8 +531,6 @@ void llama_model_saver::add_tensors_from_model() {
     add_tensor(model->output);
     add_tensor(model->output_b);
     add_tensor(model->output_norm_enc);
-    add_tensor(model->output_s);
-    add_tensor(model->output_in_s);
     add_tensor(model->output_res_score);
     add_tensor(model->output_res_query);
     add_tensor(model->nextn_proj_pre);
@@ -594,6 +593,21 @@ void llama_model_saver::add_tensors_from_model() {
             }
             add_tensor(tensor);
         }
+    }
+
+    std::vector<const struct ggml_tensor *> scales;
+    for (const auto * map : { &model->w_scales.scale, &model->w_scales.input_scale }) {
+        for (const auto & [_, s] : *map) {
+            if (seen.insert(s).second) {
+                scales.push_back(s);
+            }
+        }
+    }
+    std::sort(scales.begin(), scales.end(), [](const ggml_tensor * a, const ggml_tensor * b) {
+        return strcmp(a->name, b->name) < 0;
+    });
+    for (const auto * s : scales) {
+        add_tensor(s);
     }
 }
 

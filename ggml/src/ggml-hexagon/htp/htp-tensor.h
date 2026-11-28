@@ -8,8 +8,6 @@
 #include "hex-common.h"
 #include "hex-fastdiv.h"
 
-#define HTP_TENSOR_MDEV_LINE_SIZE   128
-
 // Currently HMX requires 32x32 tile formats (do not change)
 #define HTP_TENSOR_TILE_N_COLS      32
 #define HTP_TENSOR_TILE_N_ROWS      32
@@ -67,53 +65,6 @@ static inline bool htp_tensor_is_contiguous(const struct htp_tensor * t, uint32_
 
 static inline bool htp_tensor_is_permuted(const struct htp_tensor * t) {
     return t->nb[0] > t->nb[1] || t->nb[1] > t->nb[2] || t->nb[2] > t->nb[3];
-}
-
-static inline bool htp_tensor_mdev_data_aligned(const struct htp_tensor * t) {
-    return ((uintptr_t) t->data & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0;
-}
-
-static inline bool htp_tensor_can_row_partition(const struct htp_tensor * t, uint32_t elem_size) {
-    if (!htp_tensor_mdev_data_aligned(t)) {
-        return false;
-    }
-    if (t->ne[0] != 1 && t->nb[0] != elem_size) {
-        return false;
-    }
-    if (htp_tensor_is_permuted(t)) {
-        return false;
-    }
-    if (t->ne[1] > 1 && (t->nb[1] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) != 0) return false;
-    if (t->ne[2] > 1 && (t->nb[2] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) != 0) return false;
-    if (t->ne[3] > 1 && (t->nb[3] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) != 0) return false;
-    return true;
-}
-
-static inline bool htp_tensor_mdev_rows_per_chunk(const struct htp_tensor * t, uint32_t elem_size, uint32_t row_size, uint32_t * rows_per_chunk) {
-    *rows_per_chunk = 0;
-
-    if (!htp_tensor_mdev_data_aligned(t)) {
-        return false;
-    }
-    if (t->ne[0] != 1 && t->nb[0] != elem_size) {
-        return false;
-    }
-    if (htp_tensor_is_permuted(t)) {
-        return false;
-    }
-    if (t->ne[1] > 1 && (t->nb[1] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0 &&
-        (t->ne[2] <= 1 || (t->nb[2] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0) &&
-        (t->ne[3] <= 1 || (t->nb[3] & (HTP_TENSOR_MDEV_LINE_SIZE - 1)) == 0)) {
-        *rows_per_chunk = 1;
-        return true;
-    }
-    if (t->nb[1] == row_size &&
-        (t->ne[2] <= 1 || t->nb[2] == t->nb[1] * t->ne[1]) &&
-        (t->ne[3] <= 1 || t->nb[3] == t->nb[2] * t->ne[2])) {
-        *rows_per_chunk = (row_size > 0) ? (HTP_TENSOR_MDEV_LINE_SIZE / hex_gcd_u32(row_size, HTP_TENSOR_MDEV_LINE_SIZE)) : 1;
-        return true;
-    }
-    return false;
 }
 
 static inline struct htp_tensor_mdev_range htp_tensor_mdev_partition(uint32_t total_units, uint32_t units_per_chunk, uint32_t mdev_idx, uint32_t mdev_count, const struct fastdiv_values * mdev_count_div) {
@@ -213,5 +164,17 @@ static inline uint32_t htp_tensor_get_row_size(int type, uint32_t ne00) {
         default:              return 0;
     }
 }
+
+static inline size_t htp_tensor_nbytes(const struct htp_tensor * t) {
+    return (size_t) htp_tensor_get_row_size(t->type, t->ne[0]) * t->ne[1] * t->ne[2] * t->ne[3];
+}
+
+#ifdef __HVX_ARCH__
+#include "htp-thread.h"
+
+// Read tensor data contiguously into a 128-byte aligned cached DDR buffer.
+// [dst, hex_align_up(dst + bytes, 128)) must be exclusively owned by the caller.
+size_t htp_tensor_read(const htp_thread_t * th, void * dst, size_t dst_size, const struct htp_tensor * src);
+#endif
 
 #endif // HTP_TENSOR_H

@@ -4,6 +4,7 @@
 #include "ggml-metal-device.h"
 
 #include "ggml-backend-impl.h"
+#include "ggml-impl.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -791,6 +792,10 @@ static bool ggml_metal_fusion_check_mul_mat_add(
 
     const ggml_tensor * mm  = nodes[0];
     const ggml_tensor * add = nodes[1];
+
+    if (ggml_get_src_scale(mm, 0) != nullptr) {
+        return false;
+    }
 
     if (ggml_metal_mul_mat_add_operand(mm, add) == nullptr ||
         !ggml_metal_op_mul_mat_may_use_mma(mm)) {

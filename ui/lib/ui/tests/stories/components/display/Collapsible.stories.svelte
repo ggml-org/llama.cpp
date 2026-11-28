@@ -16,7 +16,7 @@
 </script>
 
 {#snippet section(open: boolean)}
-	<Collapsible.Root class="w-72 space-y-2" {open}>
+	<Collapsible.Root class="w-72" {open}>
 		<div class="flex items-center justify-between">
 			<span class="text-label">Advanced sampling</span>
 
@@ -29,12 +29,15 @@
 			</Collapsible.Trigger>
 		</div>
 
-		<div class="rounded-md border px-4 py-2 font-mono text-body-sm">temperature 0.8</div>
+		<div class="mt-2 rounded-md border px-4 py-2 font-mono text-body-sm">temperature 0.8</div>
 
-		<Collapsible.Content class="space-y-2">
-			<div class="rounded-md border px-4 py-2 font-mono text-body-sm">top_p 0.95</div>
+		<!-- spacing goes inside the content: the closed region stays in the layout -->
+		<Collapsible.Content>
+			<div class="space-y-2 pt-2">
+				<div class="rounded-md border px-4 py-2 font-mono text-body-sm">top_p 0.95</div>
 
-			<div class="rounded-md border px-4 py-2 font-mono text-body-sm">min_p 0.05</div>
+				<div class="rounded-md border px-4 py-2 font-mono text-body-sm">min_p 0.05</div>
+			</div>
 		</Collapsible.Content>
 	</Collapsible.Root>
 {/snippet}

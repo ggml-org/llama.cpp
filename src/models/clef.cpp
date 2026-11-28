@@ -173,22 +173,35 @@ static clef_spans clef_get_spans(const llama_ubatch & ubatch) {
     return res;
 }
 
+// the head always has the max number of spans, so its graph depends only on n_tokens
+// each span has 1 token or more and each question has an option, so there is always a spare question for the padding options
+static size_t clef_n_questions(int64_t n_tokens) { return n_tokens / 2 + 1; }
+static size_t clef_n_options  (int64_t n_tokens) { return std::max<int64_t>(n_tokens - 1, 1); }
+
 // pooling matrices and indices computed from the spans
 class llama_model_clef::input_decision : public llm_graph_input_i {
 public:
-    input_decision(const llama_ubatch & ubatch) : n_tokens(ubatch.n_tokens) {
-        const auto spans = clef_get_spans(ubatch);
-        n_questions = spans.questions.size();
-        n_options   = spans.options.size();
-    }
+    input_decision(const llama_ubatch & ubatch) :
+        n_tokens(ubatch.n_tokens), n_questions(clef_n_questions(n_tokens)), n_options(clef_n_options(n_tokens)) {}
 
     void set_input(const llama_ubatch * ubatch) override {
         // a batch of embeddings has no token ids, and no usable spans
         const std::vector<llama_token> no_tokens(ubatch->token ? 0 : n_tokens, 0);
         ggml_backend_tensor_set(tokens, ubatch->token ? ubatch->token : no_tokens.data(), 0, n_tokens * sizeof(llama_token));
 
-        const auto spans = clef_get_spans(*ubatch);
-        GGML_ASSERT(spans.questions.size() == n_questions && spans.options.size() == n_options);
+        auto spans = clef_get_spans(*ubatch);
+        const int32_t n_q_used = spans.questions.size();
+        GGML_ASSERT((size_t) n_q_used < n_questions && spans.options.size() <= n_options);
+
+        // the padding options belong to the first padding question, the questions do not read the padding questions
+        spans.questions.resize(n_questions, { 0, 0, 0 });
+        spans.options.resize(n_options, { n_q_used, 0, 0 });
+
+        std::vector<float> q_mask(n_questions * n_questions, 0.0f);
+        for (size_t i = 0; i < n_questions; i++) {
+            std::fill(q_mask.begin() + i * n_questions + n_q_used, q_mask.begin() + (i + 1) * n_questions, -INFINITY);
+        }
+        ggml_backend_tensor_set(question_mask, q_mask.data(), 0, ggml_nbytes(question_mask));
 
         // the scores are NaN if the batch has a decision order that cannot be used
         const float status_data = spans.valid || ubatch->decision_order == nullptr ? 0.0f : NAN;
@@ -215,6 +228,8 @@ public:
             owner[i] = o.question;
             mask[o.question * n_options + i] = 0.0f;
         }
+        // a padding question reads all options, a row of -inf gives NaN
+        std::fill(mask.begin() + n_q_used * n_options, mask.end(), 0.0f);
 
         ggml_backend_tensor_set(pool_q,          pool_q_data.data(), 0, ggml_nbytes(pool_q));
         ggml_backend_tensor_set(pool_o,          pool_o_data.data(), 0, ggml_nbytes(pool_o));
@@ -225,8 +240,7 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override {
         // the values are computed again in set_input(), only the shapes must match
-        const auto spans = clef_get_spans(params.ubatch);
-        return spans.questions.size() == n_questions && spans.options.size() == n_options;
+        return params.ubatch.n_tokens == (uint32_t) n_tokens;
     }
 
     ggml_tensor * tokens          = nullptr; // I32 [n_tokens]
@@ -235,11 +249,12 @@ public:
     ggml_tensor * question_type   = nullptr; // I32 [n_questions]
     ggml_tensor * option_question = nullptr; // I32 [n_options]
     ggml_tensor * option_mask     = nullptr; // F32 [n_options, n_questions], 0 if the option belongs to the question, else -inf
+    ggml_tensor * question_mask   = nullptr; // F32 [n_questions, n_questions], -inf for the padding questions
     ggml_tensor * status          = nullptr; // F32 [1], added to the scores: 0, or NaN on invalid input
 
     const int64_t n_tokens;
-    size_t n_questions;
-    size_t n_options;
+    const size_t  n_questions;
+    const size_t  n_options;
 };
 
 // the backbone is copied from llama_model_qwen35::graph, without the memory module
@@ -283,9 +298,9 @@ llama_model_clef::graph::graph(const llm_graph_params & params) :
         cb(cur, "attn_post_norm", il);
 
         cur = build_ffn(cur,
-            model.layers[il].ffn_up,   NULL, model.layers[il].ffn_up_s,
-            model.layers[il].ffn_gate, NULL, model.layers[il].ffn_gate_s,
-            model.layers[il].ffn_down, NULL, model.layers[il].ffn_down_s,
+            model.layers[il].ffn_up,   NULL,
+            model.layers[il].ffn_gate, NULL,
+            model.layers[il].ffn_down, NULL,
             NULL,
             LLM_FFN_SILU, LLM_FFN_PAR, il);
         cb(cur, "ffn_out", il);
@@ -391,13 +406,13 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn(
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
 
     cur = build_attn(inp,
-                nullptr, nullptr, nullptr,
+                nullptr, nullptr,
                 Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
     cb(cur, "attn_pregate", il);
 
     cur = ggml_mul(ctx0, cur, ggml_sigmoid(ctx0, gate));
 
-    cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+    cur = build_lora_mm(model.layers[il].wo, cur);
     cb(cur, "attn_output", il);
 
     return cur;
@@ -416,16 +431,16 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn_linear(
     const int64_t head_v_dim  = d_inner / num_v_heads;
     const int64_t n_seqs      = 1;
 
-    ggml_tensor * qkv_mixed = build_lora_mm(layer.wqkv, cur, layer.wqkv_s);
+    ggml_tensor * qkv_mixed = build_lora_mm(layer.wqkv, cur);
     qkv_mixed = ggml_reshape_3d(ctx0, qkv_mixed, qkv_mixed->ne[0], n_tokens, n_seqs);
 
-    ggml_tensor * z = build_lora_mm(layer.wqkv_gate, cur, layer.wqkv_gate_s);
+    ggml_tensor * z = build_lora_mm(layer.wqkv_gate, cur);
 
-    ggml_tensor * beta = build_lora_mm(layer.ssm_beta, cur, layer.ssm_beta_s);
+    ggml_tensor * beta = build_lora_mm(layer.ssm_beta, cur);
     beta = ggml_reshape_4d(ctx0, beta, 1, num_v_heads, n_tokens, n_seqs);
     beta = ggml_sigmoid(ctx0, beta);
 
-    ggml_tensor * alpha = build_lora_mm(layer.ssm_alpha, cur, layer.ssm_alpha_s);
+    ggml_tensor * alpha = build_lora_mm(layer.ssm_alpha, cur);
     alpha = ggml_reshape_3d(ctx0, alpha, num_v_heads, n_tokens, n_seqs);
 
     ggml_tensor * gate = ggml_softplus(ctx0, ggml_add(ctx0, alpha, layer.ssm_dt));
@@ -469,7 +484,7 @@ ggml_tensor * llama_model_clef::graph::build_layer_attn_linear(
 
     output = ggml_reshape_3d(ctx0, output, head_v_dim * num_v_heads, n_tokens, n_seqs);
 
-    cur = build_lora_mm(layer.ssm_out, output, layer.ssm_out_s);
+    cur = build_lora_mm(layer.ssm_out, output);
     cb(cur, "linear_attn_out", il);
 
     return ggml_reshape_2d(ctx0, cur, n_embd, n_tokens);
@@ -479,17 +494,17 @@ ggml_tensor * llama_model_clef::graph::build_head_norm(ggml_tensor * cur, const 
     return build_norm(cur, n.w, n.b, LLM_NORM, -1);
 }
 
-// q: [n_embd_h, n_q], kv: [n_embd_h, n_kv], no mask
-ggml_tensor * llama_model_clef::graph::build_head_attn(ggml_tensor * q, ggml_tensor * kv, const attn & a) {
+// q: [n_embd_h, n_q], kv: [n_embd_h, n_kv], kq_mask: [n_kv, n_q] or null
+ggml_tensor * llama_model_clef::graph::build_head_attn(ggml_tensor * q, ggml_tensor * kv, const attn & a, ggml_tensor * kq_mask) {
     const int64_t n_embd_h = q->ne[0];
     const int64_t n_head_h = model.n_head_decision;
     const int64_t d_head   = n_embd_h / n_head_h;
     const int64_t n_q      = q->ne[1];
     const int64_t n_kv     = kv->ne[1];
 
-    ggml_tensor * Qcur = ggml_add(ctx0, ggml_mul_mat(ctx0, a.wq, q),  a.bq);
-    ggml_tensor * Kcur = ggml_add(ctx0, ggml_mul_mat(ctx0, a.wk, kv), a.bk);
-    ggml_tensor * Vcur = ggml_add(ctx0, ggml_mul_mat(ctx0, a.wv, kv), a.bv);
+    ggml_tensor * Qcur = ggml_add(ctx0, build_lora_mm(a.wq, q),  a.bq);
+    ggml_tensor * Kcur = ggml_add(ctx0, build_lora_mm(a.wk, kv), a.bk);
+    ggml_tensor * Vcur = ggml_add(ctx0, build_lora_mm(a.wv, kv), a.bv);
 
     Qcur = ggml_permute(ctx0, ggml_reshape_3d(ctx0, Qcur, d_head, n_head_h, n_q),  0, 2, 1, 3); // [d_head, n_q,  n_head]
     Kcur = ggml_permute(ctx0, ggml_reshape_3d(ctx0, Kcur, d_head, n_head_h, n_kv), 0, 2, 1, 3); // [d_head, n_kv, n_head]
@@ -497,19 +512,19 @@ ggml_tensor * llama_model_clef::graph::build_head_attn(ggml_tensor * q, ggml_ten
     Vcur = ggml_cont(ctx0, Vcur);
 
     ggml_tensor * kq = ggml_mul_mat(ctx0, Kcur, Qcur); // [n_kv, n_q, n_head]
-    kq = ggml_soft_max_ext(ctx0, kq, nullptr, 1.0f / sqrtf(float(d_head)), 0.0f);
+    kq = ggml_soft_max_ext(ctx0, kq, kq_mask, 1.0f / sqrtf(float(d_head)), 0.0f);
 
     ggml_tensor * cur = ggml_mul_mat(ctx0, Vcur, kq); // [d_head, n_q, n_head]
     cur = ggml_cont_2d(ctx0, ggml_permute(ctx0, cur, 0, 2, 1, 3), n_embd_h, n_q);
 
-    return ggml_add(ctx0, ggml_mul_mat(ctx0, a.wo, cur), a.bo);
+    return ggml_add(ctx0, build_lora_mm(a.wo, cur), a.bo);
 }
 
 ggml_tensor * llama_model_clef::graph::build_head_ffn(ggml_tensor * cur, const head_layer & layer) {
     cur = build_head_norm(cur, layer.ffn_norm);
-    cur = ggml_add(ctx0, ggml_mul_mat(ctx0, layer.ffn_up, cur), layer.ffn_up_b);
+    cur = ggml_add(ctx0, build_lora_mm(layer.ffn_up, cur), layer.ffn_up_b);
     cur = ggml_gelu_erf(ctx0, cur);
-    return ggml_add(ctx0, ggml_mul_mat(ctx0, layer.ffn_down, cur), layer.ffn_down_b);
+    return ggml_add(ctx0, build_lora_mm(layer.ffn_down, cur), layer.ffn_down_b);
 }
 
 // ref: JointSchemaHead in joint_schema_model.py of the model repo
@@ -523,14 +538,15 @@ ggml_tensor * llama_model_clef::graph::build_head(ggml_tensor * hidden, input_de
     inp->question_type   = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_questions);
     inp->option_question = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_options);
     inp->option_mask     = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_options, n_questions);
+    inp->question_mask   = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_questions, n_questions);
     inp->status          = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, 1);
-    for (ggml_tensor * t : { inp->tokens, inp->pool_q, inp->pool_o, inp->question_type, inp->option_question, inp->option_mask, inp->status }) {
+    for (ggml_tensor * t : { inp->tokens, inp->pool_q, inp->pool_o, inp->question_type, inp->option_question, inp->option_mask, inp->question_mask, inp->status }) {
         ggml_set_input(t);
     }
 
     hidden = build_head_norm(hidden, model.hidden_norm);
 
-    ggml_tensor * memory = ggml_mul_mat(ctx0, model.proj_memory, hidden); // [n_embd_h, n_tokens]
+    ggml_tensor * memory = build_lora_mm(model.proj_memory, hidden); // [n_embd_h, n_tokens]
 
     const int64_t n_embd_h = memory->ne[0];
 
@@ -547,9 +563,9 @@ ggml_tensor * llama_model_clef::graph::build_head(ggml_tensor * hidden, input_de
     lexical = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, lexical)), inp->pool_o); // [n_embd, n_options]
 
     // one query per option
-    ggml_tensor * options = ggml_mul_mat(ctx0, model.proj_option_context, opt_ctx);
-    options = ggml_add(ctx0, options, ggml_mul_mat(ctx0, model.proj_option_lexical, lexical));
-    options = ggml_add(ctx0, options, ggml_get_rows(ctx0, ggml_mul_mat(ctx0, model.proj_option_question, question), inp->option_question));
+    ggml_tensor * options = build_lora_mm(model.proj_option_context, opt_ctx);
+    options = ggml_add(ctx0, options, build_lora_mm(model.proj_option_lexical, lexical));
+    options = ggml_add(ctx0, options, ggml_get_rows(ctx0, build_lora_mm(model.proj_option_question, question), inp->option_question));
 
     // the options read the prompt
     for (uint32_t il = 0; il < model.n_layer_routing; ++il) {
@@ -565,7 +581,7 @@ ggml_tensor * llama_model_clef::graph::build_head(ggml_tensor * hidden, input_de
     cb(options, "decision_options", -1);
 
     // one vector per question: its text, a summary of its options, the end of the prompt and its type
-    ggml_tensor * fields = ggml_mul_mat(ctx0, model.proj_question, question); // [n_embd_h, n_questions]
+    ggml_tensor * fields = build_lora_mm(model.proj_question, question); // [n_embd_h, n_questions]
     {
         // each question weights its own options
         ggml_tensor * weights = ggml_mul_mat(ctx0, options, fields); // [n_options, n_questions]
@@ -575,7 +591,7 @@ ggml_tensor * llama_model_clef::graph::build_head(ggml_tensor * hidden, input_de
         ggml_tensor * summary = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, options)), weights);
 
         fields = ggml_add(ctx0, fields, build_head_norm(summary, model.option_summary_norm));
-        fields = ggml_add(ctx0, fields, ggml_mul_mat(ctx0, model.proj_global, global));
+        fields = ggml_add(ctx0, fields, build_lora_mm(model.proj_global, global));
         fields = ggml_add(ctx0, fields, ggml_get_rows(ctx0, model.type_embd, inp->question_type));
     }
 
@@ -584,7 +600,7 @@ ggml_tensor * llama_model_clef::graph::build_head(ggml_tensor * hidden, input_de
         const auto & layer = model.head_layers[il];
 
         ggml_tensor * cur = build_head_norm(fields, layer.self_norm);
-        fields = ggml_add(ctx0, fields, build_head_attn(cur, cur, layer.self_attn));
+        fields = ggml_add(ctx0, fields, build_head_attn(cur, cur, layer.self_attn, inp->question_mask));
 
         cur = build_head_norm(fields, layer.cross_norm);
         fields = ggml_add(ctx0, fields, build_head_attn(cur, memory, layer.cross_attn));
@@ -611,9 +627,9 @@ ggml_tensor * llama_model_clef::graph::build_head(ggml_tensor * hidden, input_de
     features = ggml_concat(ctx0, features, ggml_mul(ctx0, field, options), 0);
     features = ggml_concat(ctx0, features, ggml_abs(ctx0, ggml_sub(ctx0, field, options)), 0);
 
-    ggml_tensor * residual = ggml_add(ctx0, ggml_mul_mat(ctx0, model.scorer, features), model.scorer_b);
+    ggml_tensor * residual = ggml_add(ctx0, build_lora_mm(model.scorer, features), model.scorer_b);
     residual = ggml_gelu_erf(ctx0, residual);
-    residual = ggml_add(ctx0, ggml_mul_mat(ctx0, model.scorer_out, residual), model.scorer_out_b); // [1, n_options]
+    residual = ggml_add(ctx0, build_lora_mm(model.scorer_out, residual), model.scorer_out_b); // [1, n_options]
 
     auto scale = [&](int i) {
         return ggml_view_1d(ctx0, model.scales, 1, i * ggml_element_size(model.scales));

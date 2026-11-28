@@ -1,6 +1,6 @@
 {
 	"name": "@ggml-org/llama-ui",
-	"version": "0.5.0",
+	"version": "0.7.0",
 	"description": "Shared UI library for llama.cpp frontend apps.",
 	"license": "MIT",
 	"repository": {

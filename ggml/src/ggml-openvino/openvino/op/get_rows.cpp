@@ -24,6 +24,13 @@ namespace op {
 OutputVector translate_get_rows(const NodeContext & context) {
     num_inputs_check(context, 2, 2);
 
+    // Rows gathered on the host (GGML_OPENVINO_NPU_HOST_GATHER) arrive as a [1, 1, n_tokens, row] input.
+    const std::string host_rows = "ggml_host_rows_" + context.get_name();
+    if (context.has_input(host_rows)) {
+        // Not renamed: the output is the Parameter itself, whose name binds the input at runtime.
+        return {context.get_input(host_rows)};
+    }
+
     Output<Node> res;
     Output<Node> data;
     int64_t row_offset = 0;

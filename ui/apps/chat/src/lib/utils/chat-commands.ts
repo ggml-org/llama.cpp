@@ -1,4 +1,4 @@
-import { SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
+import { CWD_COMMAND_NAME, SET_WORKING_DIRECTORY_LABEL } from '#lib/constants/index.ts';
 import { ChatFormCommandAction } from '#lib/enums/index.ts';
 import type { ChatCommandsOptions, ChatFormCommand } from '#lib/types/index.ts';
 
@@ -16,14 +16,16 @@ export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[]
 			action: ChatFormCommandAction.PROMPT,
 			description: 'Insert an MCP prompt',
 			disabled: !options.hasPrompts(),
-			name: 'prompt'
+			name: 'prompt',
+			takesArgument: true
 		},
 		{
 			action: ChatFormCommandAction.CWD,
 			description: SET_WORKING_DIRECTORY_LABEL,
 			disabled: !options.hasCwdTools(),
 			keywords: ['current working directory'],
-			name: 'cwd'
+			name: CWD_COMMAND_NAME,
+			takesArgument: true
 		},
 		{
 			action: ChatFormCommandAction.MODEL,
@@ -33,10 +35,17 @@ export function getChatCommands(options: ChatCommandsOptions): ChatFormCommand[]
 		},
 		{
 			action: ChatFormCommandAction.COMPACT,
-			description: 'Summarize the conversation to free up context',
+			description: 'Summarize to free up context',
 			disabled: !options.canCompact(),
 			keywords: ['summarize', 'context'],
 			name: 'compact'
+		},
+		{
+			action: ChatFormCommandAction.SYSTEM_MESSAGE,
+			description: 'Edit the system message',
+			disabled: !options.canEditSystemMessage(),
+			keywords: ['system prompt', 'instructions'],
+			name: 'system-message'
 		}
 	];
 }

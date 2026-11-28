@@ -3,10 +3,8 @@
 
 #    include "../ggml-openvino-extra.h"
 #    include "ggml-impl.h"
+#    include "op/recurrent_cache_update.hpp"
 #    include "op_table.h"
-#    ifdef GGML_OPENVINO_HAS_CACHE_UPDATE
-#        include "op/recurrent_cache_update.hpp"
-#    endif
 #    include "utils.h"
 
 #    include <openvino/op/concat.hpp>

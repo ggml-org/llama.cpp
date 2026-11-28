@@ -4,7 +4,7 @@
 
 // Shared Gemma-4 backbone helpers used by both gemma4.cpp and diffusion-gemma.cpp, so the attention
 // projection and dense-MLP + 128-expert-MoE blocks have a single source of truth. Every op/arg mirrors
-// the original gemma4 forward; DiffusionGemma's *_s LoRA-scale tensors resolve to nullptr.
+// the original gemma4 forward.
 
 // Q projection + per-head q-norm + partial/proportional rope. Mirrors gemma4.cpp's Q block.
 static inline ggml_tensor * gemma4_build_q(
@@ -19,7 +19,7 @@ static inline ggml_tensor * gemma4_build_q(
     // full_attention (non-SWA) layers use rope_freqs for proportional rope
     ggml_tensor * freq_factors = hp.is_swa(il) ? nullptr : model.layers[il].rope_freqs;
 
-    ggml_tensor * Qcur = g.build_lora_mm(model.layers[il].wq, cur, model.layers[il].wq_s);
+    ggml_tensor * Qcur = g.build_lora_mm(model.layers[il].wq, cur);
     g.cb(Qcur, "Qcur", il);
     Qcur = ggml_reshape_3d(g.ctx0, Qcur, n_embd_head, n_head, g.n_tokens);
     Qcur = g.build_norm(Qcur, model.layers[il].attn_q_norm, nullptr, LLM_NORM_RMS, il);
@@ -43,10 +43,10 @@ static inline llm_graph_qkv gemma4_build_kv(
     const int     n_rot_l      = hp.n_rot(il);
     ggml_tensor * freq_factors = hp.is_swa(il) ? nullptr : model.layers[il].rope_freqs;
 
-    ggml_tensor * Kcur = g.build_lora_mm(model.layers[il].wk, cur, model.layers[il].wk_s);
+    ggml_tensor * Kcur = g.build_lora_mm(model.layers[il].wk, cur);
     g.cb(Kcur, "Kcur", il);
     ggml_tensor * Vcur = model.layers[il].wv
-                            ? g.build_lora_mm(model.layers[il].wv, cur, model.layers[il].wv_s)
+                            ? g.build_lora_mm(model.layers[il].wv, cur)
                             : Kcur;
     g.cb(Vcur, "Vcur", il);
 
@@ -82,9 +82,9 @@ static inline ggml_tensor * gemma4_build_ffn_moe(
         ggml_tensor * cur_mlp = g.build_norm(attn_out, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
         g.cb(cur_mlp, "ffn_norm_1", il);
         cur_mlp = g.build_ffn(cur_mlp,
-                layer.ffn_up,   nullptr, layer.ffn_up_s,
-                layer.ffn_gate, nullptr, layer.ffn_gate_s,
-                layer.ffn_down, nullptr, layer.ffn_down_s,
+                layer.ffn_up,   nullptr,
+                layer.ffn_gate, nullptr,
+                layer.ffn_down, nullptr,
                 nullptr, LLM_FFN_GELU, LLM_FFN_PAR, il);
         cur_mlp = g.build_norm(cur_mlp, layer.ffn_post_norm_1, nullptr, LLM_NORM_RMS, il);
         g.cb(cur_mlp, "ffn_mlp", il);
@@ -113,9 +113,9 @@ static inline ggml_tensor * gemma4_build_ffn_moe(
         cur = g.build_norm(attn_out, layer.ffn_norm, nullptr, LLM_NORM_RMS, il);
         g.cb(cur, "ffn_norm", il);
         cur = g.build_ffn(cur,
-                layer.ffn_up,   nullptr, layer.ffn_up_s,
-                layer.ffn_gate, nullptr, layer.ffn_gate_s,
-                layer.ffn_down, nullptr, layer.ffn_down_s,
+                layer.ffn_up,   nullptr,
+                layer.ffn_gate, nullptr,
+                layer.ffn_down, nullptr,
                 nullptr, LLM_FFN_GELU, LLM_FFN_PAR, il);
         g.cb(cur, "ffn_out", il);
     }

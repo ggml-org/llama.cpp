@@ -31,6 +31,9 @@ export { contextStatsStore } from './chat/context-stats.svelte';
 // AGENTIC (multi-turn tool orchestration)
 export { agenticStore } from './agentic/index.svelte';
 
+// CONVERSATION MEDIA (one slideshow of the thread's images, audio and video)
+export { mediaGalleryStore } from './media-gallery.svelte';
+
 // CONVERSATIONS
 export { sidebarDragStore } from './sidebar-drag.svelte';
 export { conversationsStore } from './conversations/index.svelte';
@@ -40,6 +43,9 @@ export { mcpStore } from './mcp/index.svelte';
 
 // GROUPS (named sidebar sections for chats)
 export { groupsStore } from './groups.svelte';
+
+// HUGGING FACE ACCOUNT (sharing conversations as traces)
+export { huggingFace } from './huggingface.svelte';
 
 // MODELS
 export { modelsStore } from './models/index.svelte';

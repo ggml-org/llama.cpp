@@ -7,20 +7,21 @@
 #include "ggml-openvino-extra.h"
 #include "openvino/rt_info/weightless_caching_attributes.hpp"
 
-#include <cerrno>
+#include <sys/stat.h>
+#include <sys/types.h>
+
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <limits>
-#include <sstream>
 #include <openvino/core/model.hpp>
 #include <openvino/core/version.hpp>
 #include <openvino/op/constant.hpp>
 #include <string>
-#include <sys/stat.h>
-#include <sys/types.h>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -113,50 +114,12 @@ std::string hex64(uint64_t v) {
     return std::string(buf);
 }
 
-// Portable mkdir for a single path component. Returns true if the directory
-// exists after the call (created now or already present).
-bool make_dir(const std::string & path) {
-#if defined(_WIN32)
-    int rc = _mkdir(path.c_str());
-#else
-    int rc = ::mkdir(path.c_str(), 0755);
-#endif
-    if (rc == 0 || errno == EEXIST) {
-        return true;
-    }
-    return false;
-}
-
-// Create `path` and any missing parents (like `mkdir -p`). Best-effort:
-// returns true only if the full directory exists afterwards.
-bool make_dirs(const std::string & path) {
-    if (path.empty()) {
-        return false;
-    }
-    std::string acc;
-    for (size_t i = 0; i < path.size(); ++i) {
-        const char c = path[i];
-        acc.push_back(c);
-        const bool sep = (c == '/'
-#if defined(_WIN32)
-                          || c == '\\'
-#endif
-        );
-        // Create each intermediate component (skip a leading "/" root).
-        if (sep && acc.size() > 1) {
-            std::string component = acc.substr(0, acc.size() - 1);
-#if defined(_WIN32)
-            // A drive root such as "D:" cannot be mkdir'ed (EACCES, not EEXIST).
-            if (component.size() == 2 && component[1] == ':') {
-                continue;
-            }
-#endif
-            if (!make_dir(component)) {
-                return false;
-            }
-        }
-    }
-    return make_dir(path);
+// Create `path` and any missing parents (like `mkdir -p`). True if the directory exists afterwards.
+bool make_dirs(const std::string & path, std::error_code & ec) {
+    const auto fs_path = std::filesystem::u8path(path);
+    std::filesystem::create_directories(fs_path, ec);
+    std::error_code ec_dir;
+    return std::filesystem::is_directory(fs_path, ec_dir);
 }
 
 }  // namespace
@@ -179,13 +142,12 @@ static const char * cache_settings[] = {
     "GGML_OPENVINO_EXACT_ZERO_POINT",
     "GGML_OPENVINO_STATEFUL_EXECUTION",
     "GGML_OPENVINO_DISABLE_KV_STATE_RELAYOUT",
-    "GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS",
     "GGML_OPENVINO_REDUCE_COMPILE_MEM",
     "GGML_OPENVINO_MEMORY_OPTIMIZE",
-    "GGML_OPENVINO_PROFILING",
     "GGML_OPENVINO_DISABLE_SHAPE_FROM_MASK",
     "GGML_OPENVINO_KV_SCATTER_ELEMENTS",
     "GGML_OPENVINO_DISABLE_ELTWISE_RANK_ALIGN",
+    "GGML_OPENVINO_ROPE_F32_ANGLE",
 };
 
 void ggml_openvino_model_cache_init() {
@@ -336,9 +298,10 @@ std::string ggml_openvino_model_cache_dir() {
     // Create the cache directory (and parents) on first use so callers don't
     // have to pre-create it; a missing dir would otherwise silently disable the
     // cache (manifest/blob writes fail with no directory to write into).
-    if (!make_dirs(path)) {
-        GGML_LOG_WARN("ggml-openvino: could not create model cache dir '%s' (errno=%d); caching disabled\n",
-                      path.c_str(), errno);
+    std::error_code ec;
+    if (!make_dirs(path, ec)) {
+        GGML_LOG_WARN("ggml-openvino: could not create model cache dir '%s' (%s); caching disabled\n", path.c_str(),
+                      ec.message().c_str());
         return std::string();
     }
     return path;
@@ -368,13 +331,17 @@ uint64_t ggml_openvino_model_fingerprint(const ggml_cgraph * cgraph,
     // Version 6 clears recurrent-cache slots with Select, so a NaN in a cleared slot does not survive.
     // Version 7 reads ROPE frequency factors named other than rope_freqs.weight as a Constant, not a Parameter.
     // Version 8 drops result_norm from the outputs when it has a consumer, and hashes the output flags.
-    h = fnv1a_u64(h, 8);
+    // Version 9 hashes GGML_OPENVINO_ROPE_F32_ANGLE, which became opt-in.
+    // Version 10 hashes only whether GGML_OPENVINO_PROFILING is 2 or more (it then compiles with enable_profiling),
+    // and no longer GGML_OPENVINO_DISABLE_REMOTE_OUTPUTS, which only changes the output bindings.
+    h = fnv1a_u64(h, 10);
     h = fnv1a(h, graph_signature.data(), graph_signature.size());
     for (const char * name : cache_settings) {
         const char * value = ggml_openvino_getenv_str(name, "");
         h = fnv1a(h, value, strlen(value) + 1);
     }
     h = fnv1a_u64(h, ggml_openvino_gdn_decompose_enabled() ? ggml_openvino_gdn_decompose_chunk() : 0);
+    h = fnv1a_u64(h, ggml_openvino_getenv_int("GGML_OPENVINO_PROFILING") >= 2 ? 1 : 0);
     if (const char * debug_nodes = ggml_openvino_getenv_str("GGML_OPENVINO_DEBUG_NODE")) {
         h = fnv1a(h, "GGML_OPENVINO_DEBUG_NODE", sizeof("GGML_OPENVINO_DEBUG_NODE"));
         h = fnv1a(h, debug_nodes, strlen(debug_nodes) + 1);
@@ -548,8 +515,10 @@ static bool read_weights_hash(const std::string & path, uint64_t & hash) {
     std::string key, value;
     while (meta >> key >> value) {
         if (key == "hash") {
-            hash = std::stoull(value, nullptr, 16);
-            return true;
+            // a damaged record counts as no hash, so the caller rewrites the file
+            char * end = nullptr;
+            hash = std::strtoull(value.c_str(), &end, 16);
+            return end != value.c_str() && *end == '\0';
         }
     }
     return false;

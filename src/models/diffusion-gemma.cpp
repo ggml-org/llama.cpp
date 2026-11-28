@@ -307,7 +307,7 @@ void llama_model_diffusion_gemma::load_arch_tensors(llama_model_loader &) {
         layer.ffn_post_norm = create_tensor(tn(LLM_TENSOR_FFN_POST_NORM, "weight", i), {n_embd}, 0);
 
         // MoE router + experts
-        layer.ffn_gate_inp   = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
+        layer.ffn_gate_inp   = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, TENSOR_NO_SCALE);
         layer.ffn_gate_inp_s = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "scale",  i), {n_embd}, 0);
 
         layer.ffn_pre_norm_2  = create_tensor(tn(LLM_TENSOR_FFN_PRE_NORM_2,  "weight", i), {n_embd}, 0);
@@ -530,7 +530,7 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
                 Kfull = ggml_concat(ctx0, cast_kv(pk), Kcur, 2);
                 Vfull = ggml_concat(ctx0, cast_kv(pv), Vcur, 2);
             }
-            cur = build_attn(inp_attn, model.layers[il].wo, nullptr, nullptr,
+            cur = build_attn(inp_attn, model.layers[il].wo, nullptr,
                              Qcur, Kfull, Vfull, nullptr, nullptr, nullptr,
                              hparams.f_attention_scale, il);
         } else if (is_decode) {
@@ -541,11 +541,11 @@ llama_model_diffusion_gemma::graph::graph(const llama_model & model, const llm_g
                                             dmodel.pkv_v[il]->nb[1], dmodel.pkv_v[il]->nb[2], 0);
             ggml_tensor * Kfull = ggml_concat(ctx0, cast_kv(pk), Kcur, 2);
             ggml_tensor * Vfull = ggml_concat(ctx0, cast_kv(pv), Vcur, 2);
-            cur = build_attn(inp_attn, model.layers[il].wo, nullptr, nullptr,
+            cur = build_attn(inp_attn, model.layers[il].wo, nullptr,
                              Qcur, Kfull, Vfull, nullptr, nullptr, nullptr,
                              hparams.f_attention_scale, il);
         } else {
-            cur = build_attn(inp_attn, model.layers[il].wo, nullptr, nullptr,
+            cur = build_attn(inp_attn, model.layers[il].wo, nullptr,
                              Qcur, Kcur, Vcur, nullptr, nullptr, nullptr,
                              hparams.f_attention_scale, il);
         }

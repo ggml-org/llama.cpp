@@ -181,6 +181,18 @@ class LlamaModel(TextModel):
                 .swapaxes(1, 2)
                 .reshape(weights.shape))
 
+    def _transform_fp8_scale(self, name: str, scale: Tensor) -> tuple[Tensor, ...] | None:
+        if type(self).modify_tensors is not LlamaModel.modify_tensors:
+            return None
+        if self.undo_permute:
+            n_head = self.find_hparam(["n_heads", "num_attention_heads"])
+            n_kv_head = self.find_hparam(["n_kv_heads", "num_key_value_heads"])
+            if name.endswith("q_proj.weight"):
+                scale = self.permute(scale, n_head, n_head)
+            elif name.endswith("k_proj.weight"):
+                scale = self.permute(scale, n_head, n_kv_head)
+        return (scale,)
+
     def _repack_nvfp4(self, name: str, weight: Tensor, scale: Tensor, scale2: Tensor, input_scale: Tensor):
         # Mirror the BF16 Q/K RoPE permutation site in modify_tensors; the NVFP4 path bypasses it.
         if self.undo_permute:

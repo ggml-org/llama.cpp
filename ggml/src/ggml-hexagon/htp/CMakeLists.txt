@@ -19,8 +19,9 @@ add_library(${HTP_LIB} SHARED
     htp_iface_skel.c
     work-queue.c
     dma-queue.c
+    dma-proxy.c
     hmx-queue.c
-    htp-dcache.c
+    htp-tensor.c
     matmul-ops.c
     flash-attn-ops.c
     gated-delta-net-ops.c

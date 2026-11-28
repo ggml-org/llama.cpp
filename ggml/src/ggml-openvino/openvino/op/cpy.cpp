@@ -1,9 +1,9 @@
 #include "../node_context.h"
 #include "../op_table.h"
 #include "../utils.h"
+
 #include <climits>
 #include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <numeric>
 #include <openvino/frontend/exception.hpp>
@@ -126,9 +126,13 @@ OutputVector translate_cpy(const NodeContext & context) {
         auto one = ov::op::v0::Constant::create(ov::element::i64, {1}, {1});
         auto axis = ov::op::v0::Constant::create(ov::element::i64, {1}, {3});
 
-        auto head_part = std::make_shared<ov::op::v8::Slice>(base, zero, begin, one, axis);
-        auto tail_part = std::make_shared<ov::op::v8::Slice>(base, end, int_max, one, axis);
-        auto res = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{head_part, src, tail_part}, 3);
+        // The view offset is relative to the whole base buffer, so splice on the flattened base.
+        auto flat_base = std::make_shared<ov::op::v1::Reshape>(base, flat_shape, false);
+        auto head_part = std::make_shared<ov::op::v8::Slice>(flat_base, zero, begin, one, axis);
+        auto tail_part = std::make_shared<ov::op::v8::Slice>(flat_base, end, int_max, one, axis);
+        auto spliced = std::make_shared<ov::op::v0::Concat>(ov::OutputVector{head_part, src, tail_part}, 3);
+        auto res = std::make_shared<ov::op::v1::Reshape>(
+            spliced, std::make_shared<ov::op::v3::ShapeOf>(base, ov::element::i64), false);
         return rename_outputs_with_suffix({res}, context.get_name());
     }
 
@@ -221,6 +225,8 @@ OutputVector translate_cpy(const NodeContext & context) {
                                           "CPY conv state cache update requires static source feature view");
 
             const int64_t full_feature_size = base_shape[3].get_length();
+            FRONT_END_OP_CONVERSION_CHECK(full_feature_size > 0,
+                                          "CPY conv state cache update requires a non-empty base cache feature size");
             const int64_t update_feature_size = input_shape[2].get_length() * input_shape[3].get_length();
             const auto output_stride = context.get_output_stride();
             const size_t elem_size = output_stride.empty() ? context.get_output_type().size() : output_stride.back();

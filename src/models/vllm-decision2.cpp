@@ -99,13 +99,19 @@ static decision2_rows decision2_get_rows(const llama_ubatch & ubatch) {
     return res;
 }
 
+// no decision order (e.g. reserve): use the max number of options
+static size_t decision2_n_options(const llama_ubatch & ubatch, uint32_t n_outputs) {
+    return ubatch.decision_order ? decision2_get_rows(ubatch).options.size() : std::max<uint32_t>(n_outputs, 1);
+}
+
 class llama_model_vllm_decision2::input_decision : public llm_graph_input_i {
 public:
-    input_decision(const llama_ubatch & ubatch) : n_options(decision2_get_rows(ubatch).options.size()) {}
+    input_decision(const llama_ubatch & ubatch, uint32_t n_outputs) : n_options(decision2_n_options(ubatch, n_outputs)) {}
 
     void set_input(const llama_ubatch * ubatch) override {
-        const auto rows = decision2_get_rows(*ubatch);
-        GGML_ASSERT(rows.options.size() == n_options);
+        auto rows = decision2_get_rows(*ubatch);
+        GGML_ASSERT(rows.options.size() <= n_options);
+        rows.options.resize(n_options, 0);
 
         // the scores are NaN if the batch has a decision order that cannot be used
         const float status_data = rows.valid || ubatch->decision_order == nullptr ? 0.0f : NAN;
@@ -117,7 +123,7 @@ public:
 
     bool can_reuse(const llm_graph_params & params) override {
         // the values are computed again in set_input(), only the shapes must match
-        return decision2_get_rows(params.ubatch).options.size() == n_options;
+        return decision2_n_options(params.ubatch, params.n_outputs) == n_options;
     }
 
     ggml_tensor * options = nullptr; // I32 [n_options]
@@ -129,7 +135,7 @@ public:
 
 llama_model_vllm_decision2::graph::graph(const llm_graph_params & params) :
     llama_model_qwen3::graph(params, no_build()), model(static_cast<const llama_model_vllm_decision2 &>(*params.model)) {
-    auto inp_decision_ptr = std::make_unique<input_decision>(ubatch);
+    auto inp_decision_ptr = std::make_unique<input_decision>(ubatch, n_outputs);
     auto * inp_decision   = inp_decision_ptr.get();
     res->add_input(std::move(inp_decision_ptr));
 
@@ -163,15 +169,15 @@ ggml_tensor * llama_model_vllm_decision2::graph::build_head(ggml_tensor * hidden
     query   = build_norm(query,   model.query_norm,  model.query_norm_b,  LLM_NORM, -1);
 
     // scaled dot product of the option key and the query
-    ggml_tensor * k = ggml_mul_mat(ctx0, model.key,   options); // [n_embd_h, n_options]
-    ggml_tensor * q = ggml_mul_mat(ctx0, model.query, query);   // [n_embd_h, 1]
+    ggml_tensor * k = build_lora_mm(model.key,   options); // [n_embd_h, n_options]
+    ggml_tensor * q = build_lora_mm(model.query, query);   // [n_embd_h, 1]
     ggml_tensor * bilinear = ggml_sum_rows(ctx0, ggml_mul(ctx0, k, q));
     bilinear = ggml_scale(ctx0, bilinear, 1.0f / sqrtf((float) k->ne[0])); // [1, n_options]
 
-    ggml_tensor * mlp = ggml_add(ctx0, ggml_mul_mat(ctx0, model.option_mlp, options), model.option_mlp_b);
-    mlp = ggml_add(ctx0, mlp, ggml_mul_mat(ctx0, model.query_mlp, query));
+    ggml_tensor * mlp = ggml_add(ctx0, build_lora_mm(model.option_mlp, options), model.option_mlp_b);
+    mlp = ggml_add(ctx0, mlp, build_lora_mm(model.query_mlp, query));
     mlp = ggml_gelu_erf(ctx0, mlp);
-    ggml_tensor * nonlinear = ggml_mul_mat(ctx0, model.scorer_out, mlp); // [1, n_options]
+    ggml_tensor * nonlinear = build_lora_mm(model.scorer_out, mlp); // [1, n_options]
 
     ggml_tensor * scores = ggml_add(ctx0, bilinear, nonlinear);
     cb(scores, "decision_scores", -1);
