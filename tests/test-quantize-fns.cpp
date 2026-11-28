@@ -426,6 +426,42 @@ static int test_quantize_imatrix_degenerate(bool verbose) {
     return num_failed;
 }
 
+static int test_vec_dot_q_blocks(bool verbose) {
+    int num_failed = 0;
+    for (ggml_type type : {GGML_TYPE_IQ4_NL, GGML_TYPE_MXFP4}) {
+        const auto * qfns = ggml_get_type_traits(type);
+        const auto * qfns_cpu = ggml_get_type_traits_cpu(type);
+        const auto * vdot = ggml_get_type_traits_cpu(qfns_cpu->vec_dot_type);
+        const auto * vdot_traits = ggml_get_type_traits(qfns_cpu->vec_dot_type);
+        ggml_quantize_init(type);
+
+        for (int blocks = 1; blocks <= 9; ++blocks) {
+            const int n = blocks * ggml_blck_size(type);
+            std::vector<float> a(n), b(n), da(n), db(n);
+            std::vector<uint8_t> qa(ggml_row_size(type, n));
+            std::vector<uint8_t> qb(ggml_row_size(qfns_cpu->vec_dot_type, n));
+            generate_data(0.0f, n, a.data());
+            generate_data(1.0f, n, b.data());
+            qfns_cpu->from_float(a.data(), qa.data(), n);
+            vdot->from_float(b.data(), qb.data(), n);
+            qfns->to_float(qa.data(), da.data(), n);
+            vdot_traits->to_float(qb.data(), db.data(), n);
+
+            float result = INFINITY;
+            qfns_cpu->vec_dot(n, &result, 0, qa.data(), 0, qb.data(), 0, 1);
+            const float ref = dot_product(da.data(), db.data(), n);
+            const float error = fabsf(result - ref) / n;
+            const bool failed = !(error < MAX_QUANTIZATION_REFERENCE_ERROR);
+            num_failed += failed;
+            if (failed || verbose) {
+                printf("%5s vec_dot blocks=%d: %s (ref=%f got=%f err=%f)\n",
+                       ggml_type_name(type), blocks, RESULT_STR[failed], ref, result, error);
+            }
+        }
+    }
+    return num_failed;
+}
+
 int main(int argc, char * argv[]) {
     bool verbose = false;
 
@@ -448,6 +484,7 @@ int main(int argc, char * argv[]) {
     num_failed += test_vec_dot_f32(verbose);
     num_failed += test_f8_e4m3(verbose);
     num_failed += test_vec_dot_q(verbose);
+    num_failed += test_vec_dot_q_blocks(verbose);
     num_failed += test_quantize_imatrix_degenerate(verbose);
 
     if (num_failed || verbose) {
