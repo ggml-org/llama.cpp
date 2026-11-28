@@ -1,5 +1,9 @@
 #include "ggml-vulkan-common.h"
 
+#define GGML_COMMON_DECL_CPP
+#define GGML_COMMON_IMPL_CPP
+#include "ggml-common.h"
+
 static vk_device_architecture get_device_architecture(const vk::PhysicalDevice& device) {
     vk::PhysicalDeviceProperties props = device.getProperties();
 
@@ -576,6 +580,45 @@ static bool ggml_vk_roll_bk_loop(const uint32_t * code, size_t word_count, std::
     return true;
 }
 
+// Grid tables of the IQ1/IQ2/IQ3 types, read by the shaders at IQ_GRID_BINDING.
+// The offsets must match the IQ*_GRID_OFFSET values in types.glsl (bytes).
+struct vk_iq_grids {
+    uint32_t iq1s[NGRID_IQ1S/2];   // 2 bits per value (v & 3), two grid entries per uint32
+    uint32_t iq1s_gpu[NGRID_IQ1S]; // 4 bits per value (v + 1), values 0-3 in the low nibbles
+    uint64_t iq2xxs[256];
+    uint64_t iq2xs[512];
+    uint64_t iq2s[1024];
+    uint32_t iq3xxs[256];
+    uint32_t iq3s[512];
+};
+static_assert(offsetof(vk_iq_grids, iq1s_gpu) == 4096);
+static_assert(offsetof(vk_iq_grids, iq2xxs)   == 12288);
+static_assert(offsetof(vk_iq_grids, iq2xs)    == 14336);
+static_assert(offsetof(vk_iq_grids, iq2s)     == 18432);
+static_assert(offsetof(vk_iq_grids, iq3xxs)   == 26624);
+static_assert(offsetof(vk_iq_grids, iq3s)     == 27648);
+
+static void ggml_vk_init_iq_grids(vk_device & device) {
+    auto grids = std::make_unique<vk_iq_grids>(); // zero-initialized
+    for (int i = 0; i < NGRID_IQ1S; ++i) {
+        const int8_t * g = (const int8_t *) &iq1s_grid[i];
+        uint32_t gpu = 0;
+        for (int j = 0; j < 8; ++j) {
+            grids->iq1s[i / 2] |= (uint32_t)(g[j] & 3) << (16 * (i % 2) + 2 * j);
+            gpu |= (uint32_t)(g[j] + 1) << (8 * (j % 4) + 4 * (j / 4));
+        }
+        grids->iq1s_gpu[i] = gpu;
+    }
+    memcpy(grids->iq2xxs, iq2xxs_grid, sizeof(grids->iq2xxs));
+    memcpy(grids->iq2xs,  iq2xs_grid,  sizeof(grids->iq2xs));
+    memcpy(grids->iq2s,   iq2s_grid,   sizeof(grids->iq2s));
+    memcpy(grids->iq3xxs, iq3xxs_grid, sizeof(grids->iq3xxs));
+    memcpy(grids->iq3s,   iq3s_grid,   sizeof(grids->iq3s));
+
+    device->iq_grid_buf = ggml_vk_create_buffer_device(device, sizeof(vk_iq_grids));
+    ggml_vk_buffer_write(device->iq_grid_buf, 0, grids.get(), sizeof(vk_iq_grids));
+}
+
 static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipeline, size_t spv_size, const void* spv_data, const std::string entrypoint,
                                          uint32_t parameter_count, std::array<uint32_t, 3> wg_denoms, std::vector<uint32_t> specialization_constants,
                                          bool disable_robustness, bool require_full_subgroups, uint32_t required_subgroup_size) {
@@ -877,7 +920,7 @@ void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx) {
         pool_remaining = VK_DEVICE_DESCRIPTOR_POOL_SIZE;
 
         if (pool_idx >= ctx->descriptor_pools.size()) {
-            vk::DescriptorPoolSize descriptor_pool_size(vk::DescriptorType::eStorageBuffer, MAX_PARAMETER_COUNT * VK_DEVICE_DESCRIPTOR_POOL_SIZE);
+            vk::DescriptorPoolSize descriptor_pool_size(vk::DescriptorType::eStorageBuffer, NUM_DESCRIPTOR_BINDINGS * VK_DEVICE_DESCRIPTOR_POOL_SIZE);
             vk::DescriptorPoolCreateInfo descriptor_pool_create_info({}, VK_DEVICE_DESCRIPTOR_POOL_SIZE, descriptor_pool_size);
             ctx->descriptor_pools.push_back(device->device.createDescriptorPool(descriptor_pool_create_info));
         }
@@ -888,6 +931,15 @@ void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx) {
         }
         vk::DescriptorSetAllocateInfo descriptor_set_alloc_info(ctx->descriptor_pools[pool_idx], alloc_count, layouts.data());
         std::vector<vk::DescriptorSet> sets = device->device.allocateDescriptorSets(descriptor_set_alloc_info);
+
+        // the IQ grid tables live at the same binding in every set; shaders that don't use them ignore it
+        const vk::DescriptorBufferInfo iq_grid_info{ device->iq_grid_buf->buffer, 0, VK_WHOLE_SIZE };
+        std::vector<vk::WriteDescriptorSet> iq_grid_writes;
+        for (const vk::DescriptorSet & set : sets) {
+            iq_grid_writes.push_back({ set, IQ_GRID_BINDING, 0, 1, vk::DescriptorType::eStorageBuffer, nullptr, &iq_grid_info });
+        }
+        device->device.updateDescriptorSets(iq_grid_writes, {});
+
         ctx->descriptor_sets.insert(ctx->descriptor_sets.end(), sets.begin(), sets.end());
 
         pool_idx++;
@@ -5562,7 +5614,7 @@ vk_device ggml_vk_get_device(size_t idx) {
 
         std::vector<vk::DescriptorSetLayoutBinding> dsl_binding;
         std::vector<vk::DescriptorBindingFlags> dsl_binding_flags;
-        for (uint32_t i = 0; i < MAX_PARAMETER_COUNT; i++) {
+        for (uint32_t i = 0; i < NUM_DESCRIPTOR_BINDINGS; i++) {
             dsl_binding.push_back({i, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute});
             dsl_binding_flags.push_back({});
         }
@@ -5603,6 +5655,8 @@ vk_device ggml_vk_get_device(size_t idx) {
         }
 
         device->fence = device->device.createFence({});
+
+        ggml_vk_init_iq_grids(device);
 
         device->buffer_type = {
             /* .iface    = */ ggml_backend_vk_buffer_type_interface,
@@ -17848,6 +17902,7 @@ vk_device_struct::~vk_device_struct() {
     device.destroyFence(fence);
 
     ggml_vk_destroy_buffer(sync_staging);
+    ggml_vk_destroy_buffer(iq_grid_buf);
 
     if (compute_queue) compute_queue->cmd_pool.destroy(device);
     if (transfer_queue) transfer_queue->cmd_pool.destroy(device);

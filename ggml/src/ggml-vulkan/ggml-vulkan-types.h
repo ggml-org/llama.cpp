@@ -234,6 +234,13 @@ static bool is_pow2(uint32_t x) { return x > 1 && (x & (x-1)) == 0; }
 
 #define MAX_PARAMETER_COUNT 12
 
+// binding of the IQ1/IQ2/IQ3 grid tables (see vk_iq_grids), after the regular parameters.
+// It is written once per descriptor set and never changes.
+#define IQ_GRID_BINDING MAX_PARAMETER_COUNT
+
+// bindings in the descriptor set layout shared by all pipelines
+#define NUM_DESCRIPTOR_BINDINGS (MAX_PARAMETER_COUNT + 1)
+
 #define MAX_FUSED_ADDS (MAX_PARAMETER_COUNT - 3)
 
 #define GGML_VK_GDN_CM_V 64u
@@ -1058,6 +1065,8 @@ struct vk_device_struct {
 
     vk::Fence fence;
     vk_buffer sync_staging;
+
+    vk_buffer iq_grid_buf;
 
     ggml_backend_buffer_type buffer_type;
 
