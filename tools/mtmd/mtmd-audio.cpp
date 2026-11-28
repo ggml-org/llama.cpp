@@ -14,6 +14,28 @@
 
 constexpr bool DEBUG = false;
 
+void mtmd_audio_embd_pad_rows(std::vector<float> & embd, size_t n_tokens, size_t n_embd_row, size_t n_embd_out) {
+    GGML_ASSERT(n_embd_row > 0 && n_embd_out >= n_embd_row);
+    GGML_ASSERT(n_embd_out % n_embd_row == 0);
+    GGML_ASSERT(embd.size() == n_tokens * n_embd_row);
+
+    if (n_tokens == 0 || n_embd_out == n_embd_row) {
+        return;
+    }
+
+    embd.resize(n_tokens * n_embd_out);
+
+    // last to first: a row's source must be read before its slot is overwritten
+    for (size_t i = n_tokens; i-- > 1;) {
+        auto row = embd.begin() + (i * n_embd_out);
+        std::copy_backward(embd.begin() + i * n_embd_row, embd.begin() + (i + 1) * n_embd_row, row + n_embd_row);
+        std::fill(row + n_embd_row, embd.begin() + (i + 1) * n_embd_out, 0.0f);
+    }
+
+    // row 0 is already in place, only its padding is zeroed
+    std::fill(embd.begin() + n_embd_row, embd.begin() + n_embd_out, 0.0f);
+}
+
 void mtmd_audio_cache::fill_sin_cos_table(uint32_t n) {
     sin_vals.resize(n);
     cos_vals.resize(n);

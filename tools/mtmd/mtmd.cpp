@@ -1001,18 +1001,23 @@ struct mtmd_context {
         }
 
         // if both vision and audio mmproj are present, we need to validate their n_embd
+        // deepstack vision rows are wider (e.g. Qwen3-Omni); the audio rows are zero-padded to that width
         if (ctx_v && ctx_a) {
             int n_embd_v = ctx_v->model.n_mmproj_embd();
             int n_embd_a = ctx_a->model.n_mmproj_embd();
-            if (n_embd_v != n_embd_a) {
+            if (n_embd_a <= 0) {
                 throw std::runtime_error(mtmd_format(
-                    "mismatch between vision and audio mmproj (n_embd_v = %d, n_embd_a = %d)\n",
+                    "invalid audio mmproj, its width is %d\n", n_embd_a));
+            }
+            if (n_embd_v != (int64_t) n_embd_a * (1 + ctx_v->model.n_deepstack_layers)) {
+                throw std::runtime_error(mtmd_format(
+                    "mismatch between vision and audio mmproj (n_embd_v = %d, n_embd_a = %d),"
+                    " the vision width must be the audio width times (1 + deepstack layers of the vision model)\n",
                     n_embd_v, n_embd_a));
             }
         }
 
-        // since we already validate n_embd of vision and audio mmproj,
-        // we can safely assume that they are the same
+        // the vision width is the row width of the context, the audio rows are padded to it
         // a gen-only mmproj is validated below
         int n_embd_mmproj = ctx_v || ctx_a ? (ctx_v ? ctx_v : ctx_a)->model.n_mmproj_embd() : n_embd_text;
         if (n_embd_text > 0 && n_embd_text != n_embd_mmproj) {
@@ -2753,6 +2758,8 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         }
         if (track) {
             if (track->embd.empty()) {
+                // no padding here: this path requires n_embd_out() to equal the audio width
+                // (soundtrack tracks are LFM3-only today, models without deepstack vision)
                 track->embd.resize((size_t) track->n_tokens * ctx->n_embd_out());
                 if (!mtmd_audio_batch_encode(ctx, track->batch_f32, track->source.get(), 0, track->embd)) {
                     track->embd.clear();
@@ -2780,8 +2787,15 @@ static int32_t mtmd_encode_chunk_impl(mtmd_context * ctx, const mtmd_input_chunk
         if (ctx->ctx_a->model.proj_type == PROJECTOR_TYPE_QWEN3TTS_SPKENC && chunk->tokens_audio->batch_f32.entries.size() == 2) {
             return mtmd_qwen3tts_ref_encode(ctx, chunk->tokens_audio.get(), out_embd);
         }
-        out_embd.resize((size_t)chunk->tokens_audio->n_tokens * ctx->n_embd_out());
+        // the audio graph writes rows of the audio width; pad to the vision width if wider
+        const size_t n_tokens = chunk->tokens_audio->n_tokens;
+        const size_t n_embd_a = ctx->ctx_a->model.n_mmproj_embd();
+        const size_t n_embd_out = ctx->n_embd_out();
+        out_embd.resize(n_tokens * n_embd_a);
         bool ok = mtmd_audio_batch_encode(ctx, chunk->tokens_audio->batch_f32, chunk->tokens_audio->source.get(), chunk->tokens_audio->source_idx, out_embd);
+        if (ok && n_embd_out != n_embd_a) {
+            mtmd_audio_embd_pad_rows(out_embd, n_tokens, n_embd_a, n_embd_out);
+        }
         return ok ? 0 : 1;
     }
 

@@ -14,6 +14,13 @@ from .qwen import Qwen3Model, Qwen3MoeModel
 from .qwenvl import Qwen25AudioModel
 
 
+def _vision_config(hparams: dict[str, Any]) -> dict[str, Any]:
+    # the vision config lives under thinker_config for omni models, at top level for plain VL
+    if "thinker_config" in hparams:
+        return hparams["thinker_config"].get("vision_config", {})
+    return hparams.get("vision_config", {})
+
+
 @ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration", "OpenJevModel")
 @ModelBase.example("Qwen/Qwen3-VL-4B-Instruct", "Qwen/Qwen3-VL-30B-A3B-Instruct", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-35B-A3B")
 class Qwen3VLVisionModel(MmprojModel):
@@ -295,11 +302,7 @@ class Qwen3VLTextModel(Qwen3Model):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        if "thinker_config" in self.hparams:
-            vision_config = self.hparams["thinker_config"].get("vision_config", {})
-        else:
-            vision_config = self.hparams.get("vision_config", {})
-        deepstack_layer_num = len(vision_config.get("deepstack_visual_indexes", []))
+        deepstack_layer_num = len(_vision_config(self.hparams).get("deepstack_visual_indexes", []))
         self.gguf_writer.add_num_deepstack_layers(deepstack_layer_num)
 
     @classmethod
@@ -318,8 +321,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
 
     def set_gguf_parameters(self):
         super().set_gguf_parameters()
-        vision_config = self.hparams.get("vision_config", {})
-        deepstack_layer_num = len(vision_config.get("deepstack_visual_indexes", []))
+        deepstack_layer_num = len(_vision_config(self.hparams).get("deepstack_visual_indexes", []))
         self.gguf_writer.add_num_deepstack_layers(deepstack_layer_num)
 
     @classmethod
@@ -377,10 +379,6 @@ class Qwen3OmniMoeTextModel(Qwen3VLMoeTextModel):
                     self.gguf_writer.add_bos_token_id(int(token_id))
                     self.gguf_writer.add_eos_token_id(int(token_id))
                     break
-
-    def set_gguf_parameters(self):
-        super().set_gguf_parameters()
-        self.gguf_writer.add_num_deepstack_layers(0)
 
 
 @ModelBase.register("Qwen3ASRForConditionalGeneration")

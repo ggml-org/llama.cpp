@@ -653,6 +653,53 @@ MAKE_TEST(test_audio_preprocessor_qwen3a_tail) {
     }
 }
 
+// audio rows are zero-padded to the (deepstack) vision width, e.g. Qwen3-Omni
+MAKE_TEST(test_audio_embd_pad_rows) {
+    {
+        // one row, 2 -> 8
+        std::vector<float> embd = {1.f, 2.f};
+        mtmd_audio_embd_pad_rows(embd, 1, 2, 8);
+        t.assert_equal("one row size", (size_t) 8, embd.size());
+        const std::vector<float> want = {1.f, 2.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.f};
+        bool content = embd.size() == want.size();
+        for (size_t i = 0; i < embd.size() && i < want.size(); ++i) {
+            content = content && embd[i] == want[i];
+        }
+        t.assert_true("one row zero-padded", content);
+    }
+    {
+        // three rows, 4 -> 8: rows must keep their order and never leak into each other
+        const size_t n_tokens = 3, n_embd_row = 4, n_embd_out = 8;
+        std::vector<float> embd;
+        for (size_t i = 0; i < n_tokens * n_embd_row; ++i) {
+            embd.push_back((float) i);
+        }
+        mtmd_audio_embd_pad_rows(embd, n_tokens, n_embd_row, n_embd_out);
+        t.assert_equal("three rows size", n_tokens * n_embd_out, embd.size());
+        bool content = embd.size() == n_tokens * n_embd_out;
+        for (size_t i = 0; i < n_tokens && content; ++i) {
+            for (size_t j = 0; content && j < n_embd_out; ++j) {
+                const float want = j < n_embd_row ? (float) (i * n_embd_row + j) : 0.0f;
+                content = content && embd[i * n_embd_out + j] == want;
+            }
+        }
+        t.assert_true("three rows content", content);
+    }
+    {
+        // no-op when the widths match
+        std::vector<float> embd = {1.f, 2.f, 3.f, 4.f};
+        mtmd_audio_embd_pad_rows(embd, 2, 2, 2);
+        t.assert_equal("identity size", (size_t) 4, embd.size());
+        t.assert_true("identity content", embd == std::vector<float>({1.f, 2.f, 3.f, 4.f}));
+    }
+    {
+        // no rows: nothing to pad, and the row 0 fill must not touch out-of-bounds memory
+        std::vector<float> embd;
+        mtmd_audio_embd_pad_rows(embd, 0, 2, 8);
+        t.assert_equal("zero rows size", (size_t) 0, embd.size());
+    }
+}
+
 MAKE_TEST(test_audio_preprocessor_conformer) {
     mtmd_hparams hparams;
     hparams.n_mel_bins        = 128;
