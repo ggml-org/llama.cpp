@@ -309,6 +309,13 @@ static std::string format_literal(const std::string & literal) {
 
 std::string gbnf_format_literal(const std::string & literal) { return format_literal(literal); }
 
+static std::string format_range_literal(const std::string & literal) {
+    return replacePattern(literal, GRAMMAR_RANGE_LITERAL_ESCAPE_RE, [&](const std::smatch & match) {
+        char c = match.str()[0];
+        return GRAMMAR_LITERAL_ESCAPES.at(c);
+    });
+}
+
 // same as std::regex_replace with [^a-zA-Z0-9-]+ -> "-", no std::regex: libstdc++ recurses per char
 std::string gbnf_format_rule_name(const std::string & name) {
     std::string out;
@@ -677,14 +684,14 @@ private:
             std::string rejects;
             auto first = true;
             for (const auto & [sym, child] : node.children) {
-                std::string c = common_unicode_cpt_to_utf8(sym.value);
+                std::string c = format_range_literal(common_unicode_cpt_to_utf8(sym.value));
                 rejects += c;
                 if (first) {
                     first = false;
                 } else {
                     out << " | ";
                 }
-                out << "[" << c << "]";
+                out << "[" << (c == "^" ? "\\x5E" : c) << "]";
                 if (!trie.nodes[child].children.empty()) {
                     out << " (";
                     visit(child, depth + 1);
