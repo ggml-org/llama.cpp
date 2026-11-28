@@ -268,6 +268,7 @@ llama_context::llama_context(
         cparams.yarn_ext_factor = cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN ? 1.0f : 0.0f;
     }
 
+    float rope_attn_factor = hparams.rope_attn_factor;
     if (cparams.yarn_ext_factor != 0) {
         static auto get_mscale = [](float scale, float mscale) {
             return scale <= 1.0f ? 1.0f : (0.1f * mscale * logf(scale) + 1.0f);
@@ -275,8 +276,13 @@ llama_context::llama_context(
 
         const float factor = 1.0f / cparams.rope_freq_scale;
 
-        // ref: https://github.com/huggingface/transformers/blob/6d00f6b0a5679c36510f203e4226e36f517c3032/src/transformers/modeling_rope_utils.py#L336-L348
-        if (hparams.rope_yarn_log_mul != 0.0f) {
+        if (model.arch == LLM_ARCH_OLMO2 && hparams.rope_scaling_type_train == LLAMA_ROPE_SCALING_TYPE_YARN &&
+                cparams.rope_scaling_type == LLAMA_ROPE_SCALING_TYPE_YARN && rope_attn_factor != 1.0f) {
+            // The old OLMo 3 converter stored the final YaRN magnitude in rope.scaling.attn_factor.
+            cparams.yarn_attn_factor = rope_attn_factor;
+            rope_attn_factor = 1.0f;
+        } else if (hparams.rope_yarn_log_mul != 0.0f) {
+            // ref: https://github.com/huggingface/transformers/blob/6d00f6b0a5679c36510f203e4226e36f517c3032/src/transformers/modeling_rope_utils.py#L336-L348
             // note: here we assume `mscale == 1.0f`
             // TODO: start reading the actual value of mscale and handle the case where it is not 1.0f
                   float mscale          = 1.0f;
@@ -305,7 +311,7 @@ llama_context::llama_context(
         cparams.yarn_attn_factor *= 1.0f / (1.0f + 0.1f * logf(factor));
     }
 
-    cparams.yarn_attn_factor *= hparams.rope_attn_factor;
+    cparams.yarn_attn_factor *= rope_attn_factor;
 
     if (cparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {
         if (hparams.pooling_type == LLAMA_POOLING_TYPE_UNSPECIFIED) {

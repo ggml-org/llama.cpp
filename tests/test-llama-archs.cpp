@@ -1026,6 +1026,76 @@ static std::vector<float> get_logits(
     return ret;
 }
 
+static bool check_olmo2_yarn(const size_t seed, const float stdev) {
+    auto gguf_ctx = get_gguf_ctx(LLM_ARCH_OLMO2, false);
+    kv_writer kv(LLM_ARCH_OLMO2, gguf_ctx.get());
+    kv.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, std::vector<uint32_t>{1, 0});
+    kv.add_kv(LLM_KV_ROPE_SCALING_TYPE, "yarn");
+    kv.add_kv(LLM_KV_ROPE_SCALING_FACTOR, 8.0f);
+    kv.add_kv(LLM_KV_ROPE_SCALING_ORIG_CTX_LEN, uint32_t(32));
+
+    const auto check = [&](float expected_full) {
+        auto model = get_model(gguf_ctx.get(), nullptr, seed, stdev, {});
+        float magnitude[] = {0.0f, 0.0f};
+        auto params = llama_context_default_params();
+        params.n_threads = params.n_threads_batch = 1;
+        params.cb_eval_user_data = magnitude;
+        params.cb_eval = [](ggml_tensor * t, bool ask, void * user_data) {
+            const char * name = ggml_get_name(t);
+            const bool swa = strcmp(name, "Qcur-0") == 0;
+            const bool want = t->op == GGML_OP_ROPE && (swa || strcmp(name, "Qcur-1") == 0);
+            if (ask) {
+                return want;
+            }
+            if (want) {
+                const auto norm_sq = [](const ggml_tensor * x) {
+                    GGML_ASSERT(x->type == GGML_TYPE_F32 && ggml_is_contiguous(x));
+                    std::vector<float> values(ggml_nelements(x));
+                    ggml_backend_tensor_get(x, values.data(), 0, ggml_nbytes(x));
+                    float sum = 0.0f;
+                    for (float value : values) {
+                        sum += value * value;
+                    }
+                    return sum;
+                };
+                static_cast<float *>(user_data)[swa ? 0 : 1] = std::sqrt(norm_sq(t) / norm_sq(t->src[0]));
+            }
+            return true;
+        };
+        llama_context_ptr ctx(llama_init_from_model(model.get(), params));
+        if (!ctx) {
+            throw std::runtime_error("failed to create OLMo YaRN test context");
+        }
+        get_logits(model.get(), ctx.get(), {1});
+
+        if (!(std::abs(magnitude[0] - 1.0f) < 1e-5f && std::abs(magnitude[1] - expected_full) < 1e-5f)) {
+            fprintf(stderr, "OLMo YaRN RoPE magnitude: SWA %.6f (expected 1), full %.6f (expected %.6f)\n",
+                    magnitude[0], magnitude[1], expected_full);
+            return false;
+        }
+        return true;
+    };
+
+    const float default_magnitude = 1.2079441547f;
+    if (!check(default_magnitude)) {
+        return false;
+    }
+    kv.add_kv(LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR, default_magnitude);
+    if (!check(default_magnitude)) {
+        return false;
+    }
+    gguf_remove_key(gguf_ctx.get(), llama_arch_kv_name(LLM_ARCH_OLMO2, LLM_KV_ROPE_SCALING_YARN_ATTN_FACTOR).c_str());
+    for (float legacy_factor : {default_magnitude, 1.25f, 1.0f}) {
+        kv.add_kv(LLM_KV_ROPE_SCALING_ATTN_FACTOR, legacy_factor);
+        if (!check(legacy_factor == 1.0f ? default_magnitude : legacy_factor)) {
+            return false;
+        }
+    }
+    kv.add_kv(LLM_KV_ROPE_SCALING_TYPE, "linear");
+    kv.add_kv(LLM_KV_ROPE_SCALING_ATTN_FACTOR, 1.25f);
+    return check(1.25f);
+}
+
 // entries [n/4, n/2) are embd rows, decoded either as token/embd/token chunks or as one mixed batch
 // returns the llama_process() error code
 static int32_t get_logits_mixed(
@@ -1407,6 +1477,13 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
             ud->log_old.callback(level, text, ud->log_old.user_data);
         }
     }, &ud);
+
+    if (arch_matches(arch_filter, LLM_ARCH_OLMO2) &&
+            ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU) &&
+            (target_backend == nullptr || strcmp(target_backend, "CPU") == 0) &&
+            !check_olmo2_yarn(seed, stdev)) {
+        return 1;
+    }
 
     const std::vector<llama_token> tokens = get_tokens(128, 128, seed);
 
