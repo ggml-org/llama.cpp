@@ -184,7 +184,7 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
     // same order as llama_memory_hybrid::seq_rm: the recurrent cache can refuse, so try it first
     if (!get_mem_recr()->seq_rm(seq_id, p0, p1)) {
         // recurrent rollback is limited to recent ubatch history
-        LLAMA_LOG_WARN("%s: recurrent cache refused seq_rm (seq_id=%d, p0=%d, p1=%d); attention cache left unchanged\n",
+        LLAMA_LOG_DEBUG("%s: recurrent cache refused seq_rm (seq_id=%d, p0=%d, p1=%d); attention cache left unchanged\n",
                 __func__, seq_id, p0, p1);
         return false;
     }
