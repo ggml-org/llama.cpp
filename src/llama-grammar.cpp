@@ -530,6 +530,9 @@ const char * llama_grammar_parser::parse_sequence(
     // (though it's technically the same as -1 now)
     auto handle_repetitions = [&](uint64_t min_times, uint64_t max_times) {
         bool no_max = max_times == UINT64_MAX;
+        if (!no_max && min_times > max_times) {
+            throw std::runtime_error("min_times cannot be greater than max_times");
+        }
         if (last_sym_start == rule.size()) {
             throw std::runtime_error(std::string("expecting preceding item to */+/?/{ at ") + pos);
         }
