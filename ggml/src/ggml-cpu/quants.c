@@ -31,6 +31,10 @@ void quantize_row_q2_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, in
     quantize_row_q2_0_ref(x, y, k);
 }
 
+void quantize_row_q2_0m(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
+    quantize_row_q2_0m_ref(x, y, k);
+}
+
 void quantize_row_q4_0(const float * GGML_RESTRICT x, void * GGML_RESTRICT y, int64_t k) {
     quantize_row_q4_0_ref(x, y, k);
 }
@@ -224,6 +228,46 @@ void ggml_vec_dot_q2_0_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, c
         sumf += d0 * sumi;
     }
 
+    *s = sumf;
+}
+
+void ggml_vec_dot_q2_0m_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
+    assert(n % QK2_0M == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_0m * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+    const int nb = n / QK2_0M;
+
+    static_assert(QK2_0M == 2 * QK8_0, "expected two Q8_0 blocks per Q2_0M block");
+
+    float sumf = 0.0f;
+    for (int i = 0; i < nb; ++i) {
+        const float d0 = GGML_CPU_FP16_TO_FP32(x[i].d);
+        const float m0 = GGML_CPU_FP16_TO_FP32(x[i].m);
+
+        for (int k = 0; k < QK2_0M / QK8_0; ++k) {
+            const block_q8_0 * yb = &y[i * (QK2_0M / QK8_0) + k];
+            const float d1 = GGML_CPU_FP16_TO_FP32(yb->d);
+            const uint8_t * qs = x[i].qs + k * (QK8_0 / 4);
+            int sum_q8 = 0;
+            int sum_dot = 0;
+
+            for (int b = 0; b < QK8_0 / 4; ++b) {
+                const uint8_t byte = qs[b];
+                for (int j = 0; j < 4; ++j) {
+                    const int q8 = yb->qs[4 * b + j];
+                    sum_q8 += q8;
+                    sum_dot += ((byte >> (2 * j)) & 3) * q8;
+                }
+            }
+            sumf += d1 * (m0 * sum_q8 + d0 * sum_dot);
+        }
+    }
     *s = sumf;
 }
 

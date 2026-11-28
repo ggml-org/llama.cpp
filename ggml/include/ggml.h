@@ -260,7 +260,8 @@ extern "C" {
         GGML_TYPE_Q1_0    = 41,
         GGML_TYPE_Q2_0    = 42,
         GGML_TYPE_F8_E4M3 = 43,
-        GGML_TYPE_COUNT   = 44,
+        GGML_TYPE_Q2_0M   = 44,
+        GGML_TYPE_COUNT   = 45,
     };
 
     // [TAG_GGML_PREC]

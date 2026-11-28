@@ -191,6 +191,20 @@ typedef struct {
 } block_q2_0;
 static_assert(sizeof(block_q2_0) == sizeof(ggml_half) + QK2_0 / 4, "wrong q2_0 block size/padding");
 
+// Q2_0M: min/max (range-scale) variant of Q2_0, KV-cache only. Same 2-bit codec as
+// Q2_0 (raw codes q in {0, 1, 2, 3}) but with a per-block range step d = (max - min) / 3
+// and a per-block offset m = min, so all four levels span the full data range
+// [min, min+d, min+2d, min+3d=max]. Dequant: y = m + q * d. The +2 B over Q2_0 (one
+// extra fp16 for m) is the price of covering [min, max] with 4 levels. Block size is
+// 64 (same as Q2_0); the range-scale codec is what makes the KV cache KLD low.
+#define QK2_0M 64
+typedef struct {
+    ggml_half d;              // delta (range step)
+    ggml_half m;            // offset (block min)
+    uint8_t qs[QK2_0M / 4];  // 2 bits per element
+} block_q2_0m;
+static_assert(sizeof(block_q2_0m) == 2 * sizeof(ggml_half) + QK2_0M / 4, "wrong q2_0m block size/padding");
+
 #define QK4_0 32
 typedef struct {
     ggml_half d;           // delta

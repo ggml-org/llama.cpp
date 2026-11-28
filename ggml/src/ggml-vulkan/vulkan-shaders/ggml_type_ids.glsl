@@ -30,5 +30,6 @@
 #define GGML_TYPE_NVFP4   40u
 #define GGML_TYPE_Q1_0    41u
 #define GGML_TYPE_Q2_0    42u
+#define GGML_TYPE_Q2_0M   44u
 
 #endif // !defined(GGML_TYPE_IDS_COMP)
