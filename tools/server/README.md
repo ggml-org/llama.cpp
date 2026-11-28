@@ -2679,4 +2679,4 @@ You can also set the DPI used when parsing a PDF as images (default 108), e.g. 2
 
 > **Note:** The old flags `--webui-config` and `--webui-config-file` are deprecated but still work as aliases.
 
-You may find available preferences in [settings-keys.ts](../ui/src/lib/constants/settings-keys.ts).
+You may find available preferences in [settings-keys.constants.ts](../ui/src/lib/constants/settings-keys.constants.ts).
