@@ -181,6 +181,13 @@ set(LLAMA_CONTEXT_TEST_SRC
 )
 llama_build(${LLAMA_CONTEXT_TEST_SRC})
 
+if (WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND GGML_OPENMP_ENABLED)
+    # We enable the clean up macro for OpenMP on Windows + GCC to avoid hanging on test exit
+    find_package(OpenMP REQUIRED COMPONENTS CXX)
+    target_link_libraries(test-llama-context PRIVATE OpenMP::OpenMP_CXX)
+    target_compile_definitions(test-llama-context PRIVATE LLAMA_TEST_OPENMP_CLEANUP)
+endif()
+
 if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
     llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
