@@ -3574,6 +3574,30 @@ static void ggml_sycl_op_tri(ggml_backend_sycl_context & ctx, ggml_tensor * dst)
     tri_f32_sycl(src0_dd, dst_dd, ne0, ne1, ne2, ne3, ttype, main_stream);
 }
 
+static void scale_f32_strided_sycl(const float * x, float * dst, const float scale, const float bias,
+                                   const int64_t ne0, const int64_t ne1, const int64_t ne2,
+                                   const int64_t nelements,
+                                   const size_t nb00, const size_t nb01, const size_t nb02, const size_t nb03,
+                                   dpct::queue_ptr stream) {
+    constexpr int64_t BLOCK = 256;
+    const int64_t n_blocks = (nelements + BLOCK - 1) / BLOCK;
+    stream->parallel_for(
+        sycl::nd_range<1>(sycl::range<1>(n_blocks * BLOCK), sycl::range<1>(BLOCK)),
+        [=](sycl::nd_item<1> it) {
+            const int64_t i = it.get_global_id(0);
+            if (i >= nelements) {
+                return;
+            }
+            const int64_t i3 = i / (ne2 * ne1 * ne0);
+            const int64_t r3 = i - i3 * ne2 * ne1 * ne0;
+            const int64_t i2 = r3 / (ne1 * ne0);
+            const int64_t r2 = r3 - i2 * ne1 * ne0;
+            const int64_t i1 = r2 / ne0;
+            const int64_t i0 = r2 - i1 * ne0;
+            const float v = *(const float *) ((const char *) x + i0 * nb00 + i1 * nb01 + i2 * nb02 + i3 * nb03);
+            dst[i] = v * scale + bias;
+        });
+}
 
 inline void ggml_sycl_op_scale(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(dst->src[0]->type == GGML_TYPE_F32);
@@ -3591,11 +3615,22 @@ inline void ggml_sycl_op_scale(ggml_backend_sycl_context & ctx, ggml_tensor * ds
     // the kernel indexes in 32-bit
     GGML_ASSERT(ggml_nelements(dst->src[0]) <= INT32_MAX);
 
-    scale_f32_sycl(src0_dd, dst_dd, scale, bias, ggml_nelements(dst->src[0]), main_stream);
+    //scale_f32_sycl(src0_dd, dst_dd, scale, bias, ggml_nelements(dst->src[0]), main_stream);
     /*
     DPCT1010:87: SYCL uses exceptions to report errors and does not use the
     error codes. The call was replaced with 0. You need to rewrite this code.
     */
+const ggml_tensor * src0 = dst->src[0];
+if (ggml_is_contiguous(src0)) {
+    scale_f32_sycl(src0_dd, dst_dd, scale, bias, ggml_nelements(src0), main_stream);
+} else {
+    GGML_ASSERT(ggml_is_contiguous(dst));
+    scale_f32_strided_sycl(src0_dd, dst_dd, scale, bias,
+                           src0->ne[0], src0->ne[1], src0->ne[2], ggml_nelements(src0),
+                           src0->nb[0], src0->nb[1], src0->nb[2], src0->nb[3], main_stream);
+}
+
+
     SYCL_CHECK(0);
 }
 
@@ -7681,7 +7716,9 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
             return ggml_is_contiguous(op->src[0]);
         case GGML_OP_SCALE:
             // the scale kernel is f32 only, and reads src0 flat
-            return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
+            // return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32 && ggml_is_contiguous(op->src[0]);
+            return op->type == GGML_TYPE_F32 && op->src[0]->type == GGML_TYPE_F32 &&
+                   (ggml_is_contiguous(op->src[0]) || ggml_is_contiguous(op));
         case GGML_OP_CONT:
             return true;
         case GGML_OP_TRI:
