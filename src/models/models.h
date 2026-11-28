@@ -2871,7 +2871,7 @@ struct llama_model_minimax_m3 : public llama_model_base {
                 ggml_tensor * k,       // [D, n_keys, 1, C]  C = HKV or HKV*n_stream
                 ggml_tensor * v,       // [D, n_keys, 1, C]
                 ggml_tensor * mask,    // [n_keys, R, 1, C] f16, R = HQ*T/(Gp*C)
-                int64_t Gp, float kq_scale, int il) const;
+                int64_t Gp, float kq_scale, int32_t n_kv_max, int il) const;
     };
     std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params & params) const override;
 };
