@@ -34,12 +34,20 @@
 //   bytes [16..]   : raw cl_program binary as returned by
 //                    clGetProgramInfo(CL_PROGRAM_BINARIES)
 //
+// A separate <sha256-hex>.clrej marker records that a flash-attention kernel
+// (or a whole optional program) compiled and then failed its work-group
+// check ("will fall back"). The next process skips that rebuild. The hash
+// includes the same device/driver/source/options material as .clbin, plus
+// the kernel name and required work-group size. An empty kernel name marks
+// the whole program. A driver or source change misses both files.
+//
 // Concurrency: writes go to <name>.tmp.<pid> then atomic rename. On race,
 // last-writer-wins. No locks.
 
 #pragma once
 
 #include <CL/cl.h>
+#include <cstddef>
 #include <string>
 
 // Bumped manually if host-side OpenCL API usage changes in a way that
@@ -73,3 +81,20 @@ void cl_program_cache_try_save(
     cl_device_id                   device,
     const char *                   source,
     const std::string &            compile_opts);
+
+// kernel_name == nullptr or "" and required_wg == 0 mark the whole program:
+// it was built and none of its kernels could be registered. A non-empty name
+// marks that one kernel. Both are no-ops when the cache is disabled.
+bool cl_program_cache_wg_reject_load(
+    const cl_program_cache_state & state,
+    const char *                   source,
+    const std::string &            compile_opts,
+    const char *                   kernel_name,
+    size_t                         required_wg);
+
+void cl_program_cache_wg_reject_save(
+    const cl_program_cache_state & state,
+    const char *                   source,
+    const std::string &            compile_opts,
+    const char *                   kernel_name,
+    size_t                         required_wg);
