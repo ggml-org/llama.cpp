@@ -524,7 +524,7 @@ void common_sampler_reset(struct common_sampler * gsmpl) {
 }
 
 struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
-    return new common_sampler {
+    auto * result = new common_sampler {
         /* .params  = */ gsmpl->params,
         /* .grmr    = */ llama_sampler_clone(gsmpl->grmr),
         /* .rbudget = */ llama_sampler_clone(gsmpl->rbudget),
@@ -534,6 +534,10 @@ struct common_sampler * common_sampler_clone(common_sampler * gsmpl) {
         /* .cur_p   = */ gsmpl->cur_p,
         /* .rng     = */ gsmpl->rng,
     };
+    if (gsmpl->cur_p.data) {
+        result->cur_p.data = result->cur.data() + (gsmpl->cur_p.data - gsmpl->cur.data());
+    }
+    return result;
 }
 
 void common_sampler_copy(const common_sampler * src, common_sampler * dst) {
