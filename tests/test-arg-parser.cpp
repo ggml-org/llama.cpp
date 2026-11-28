@@ -11,10 +11,51 @@
 #include <sstream>
 #include <unordered_set>
 
+#if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
+#include <pthread.h>
+#endif
+
 #undef NDEBUG
 #include <cassert>
 
+static void test_cpu_affinity(void) {
+#if defined(__x86_64__) && defined(__linux__) && !defined(__ANDROID__)
+    cpu_set_t original;
+    if (pthread_getaffinity_np(pthread_self(), sizeof(original), &original) != 0) {
+        fprintf(stderr, "test-arg-parser: skipping CPU affinity test: cannot read affinity\n");
+        return;
+    }
+
+    cpu_set_t restricted;
+    CPU_ZERO(&restricted);
+    int n_tested = 0;
+    for (int cpu = CPU_SETSIZE - 1; cpu >= 0 && n_tested < 2; --cpu) {
+        if (!CPU_ISSET(cpu, &original)) {
+            continue;
+        }
+        CPU_SET(cpu, &restricted);
+        if (pthread_setaffinity_np(pthread_self(), sizeof(restricted), &restricted) != 0) {
+            fprintf(stderr, "test-arg-parser: skipping CPU affinity test: cannot restrict affinity\n");
+            assert(pthread_setaffinity_np(pthread_self(), sizeof(original), &original) == 0);
+            return;
+        }
+
+        const int32_t n_math = common_cpu_get_num_math();
+        cpu_set_t after;
+        const int status = pthread_getaffinity_np(pthread_self(), sizeof(after), &after);
+        assert(pthread_setaffinity_np(pthread_self(), sizeof(original), &original) == 0);
+        assert(status == 0);
+        assert(CPU_EQUAL(&restricted, &after));
+        assert(n_math > 0);
+        assert(n_math <= CPU_COUNT(&restricted));
+        ++n_tested;
+    }
+    assert(n_tested > 0);
+#endif
+}
+
 static void test(void) {
+    test_cpu_affinity();
     common_params params;
 
     auto assert_output_limits = [](int32_t n_batch, int32_t n_parallel, int32_t n_draft,
