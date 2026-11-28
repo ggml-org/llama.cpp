@@ -188,6 +188,31 @@ std::string common_params_sampling::print() const {
     return std::string(result);
 }
 
+// find tokens whose pieces spell text exactly
+// a leading newline takes the space that some tokenizers add before plain text, then it is cut off
+static bool tokenize_exact(const llama_vocab * vocab, const std::string & text, std::vector<llama_token> & result) {
+    const auto tokens = common_tokenize(vocab, "\n" + text, false, true);
+
+    std::string spelled;
+    std::vector<size_t> ends;
+    for (const auto token : tokens) {
+        spelled += common_token_to_piece(vocab, token, true);
+        ends.push_back(spelled.size());
+    }
+    if (!string_ends_with(spelled, text)) {
+        return false;
+    }
+
+    const size_t cut = spelled.size() - text.size();
+    for (size_t i = 0; i < ends.size(); i++) {
+        if (ends[i] == cut) {
+            result.assign(tokens.begin() + i + 1, tokens.end());
+            return true;
+        }
+    }
+    return false;
+}
+
 struct common_sampler * common_sampler_init(
         const struct llama_model * model,
         struct common_params_sampling & params) {
@@ -288,18 +313,21 @@ struct common_sampler * common_sampler_init(
     }
 
     // Compute prefill tokens from the generation prompt
+    std::vector<llama_token> gen_tokens;
+    std::vector<std::string> gen_pieces;
     std::vector<llama_token> prefill_tokens;
     if (!params.generation_prompt.empty()) {
         GGML_ASSERT(vocab != nullptr);
-        auto tokens = common_tokenize(vocab, params.generation_prompt, false, true);
-        for (size_t i = 0; i < tokens.size(); i++) {
-            std::string piece = common_token_to_piece(vocab, tokens[i], true);
+        gen_tokens = common_tokenize(vocab, params.generation_prompt, false, true);
+        for (size_t i = 0; i < gen_tokens.size(); i++) {
+            gen_pieces.push_back(common_token_to_piece(vocab, gen_tokens[i], true));
+            const std::string & piece = gen_pieces.back();
             if (i == 0 && std::isspace(piece[0]) && !std::isspace(params.generation_prompt[0])) {
                 // Some tokenizers will add a space before the first special token, need to exclude
                 continue;
             }
-            LOG_DBG("%s: prefill token: %d = %s\n", __func__, tokens[i], piece.c_str());
-            prefill_tokens.push_back(tokens[i]);
+            LOG_DBG("%s: prefill token: %d = %s\n", __func__, gen_tokens[i], piece.c_str());
+            prefill_tokens.push_back(gen_tokens[i]);
         }
     }
 
@@ -307,15 +335,52 @@ struct common_sampler * common_sampler_init(
     // tokens the template already placed in the prompt.
     // Only applies to output-format and tool-call grammars; user-supplied grammars must not be prefilled.
     if (grmr && !params.grammar_lazy && common_grammar_needs_prefill(params.grammar)) {
-        try {
-            for (const auto & token : prefill_tokens) {
-                llama_sampler_accept(grmr, token);
-                LOG_DBG("%s: grammar accepted prefill token (%d)\n", __func__, token);
+        const std::string & gen = params.generation_prompt;
+
+        auto accept = [&](llama_token token) {
+            llama_sampler_accept(grmr, token);
+            LOG_DBG("%s: grammar accepted prefill token (%d)\n", __func__, token);
+        };
+
+        // the grammar has the plain text as written in the template, but some tokenizers change it
+        // e.g. SentencePiece adds a space after a special token: "<|im_start|>", " a", "ssi", "stant"
+        auto accept_text = [&](size_t tok_begin, size_t tok_end, const std::string & text) {
+            std::vector<llama_token> tokens(gen_tokens.begin() + tok_begin, gen_tokens.begin() + tok_end);
+            std::string spelled;
+            for (size_t i = tok_begin; i < tok_end; i++) {
+                spelled += gen_pieces[i];
             }
-        } catch (std::exception &e) {
+            if (spelled != text && tokenize_exact(vocab, text, tokens)) {
+                LOG_DBG("%s: prefill text '%s' re-tokenized, tokens spelled '%s'\n", __func__, text.c_str(), spelled.c_str());
+            }
+            for (const auto token : tokens) {
+                accept(token);
+            }
+        };
+
+        try {
+            // special tokens go in as tokens, as the grammar can match them by id
+            size_t pos       = 0;
+            size_t tok_begin = 0;
+            for (size_t i = 0; i < gen_tokens.size(); i++) {
+                const auto attr = llama_vocab_get_attr(vocab, gen_tokens[i]);
+                if (!(attr & (LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED)) || gen_pieces[i].empty()) {
+                    continue;
+                }
+                const size_t at = gen.find(gen_pieces[i], pos);
+                if (at == std::string::npos) {
+                    continue;
+                }
+                accept_text(tok_begin, i, gen.substr(pos, at - pos));
+                accept(gen_tokens[i]);
+                pos       = at + gen_pieces[i].size();
+                tok_begin = i + 1;
+            }
+            accept_text(tok_begin, gen_tokens.size(), gen.substr(pos));
+        } catch (std::exception &) {
             LOG_ERR("%s: error initializing grammar sampler for grammar:\n%s\n\nGeneration prompt:\n'%s'\n", __func__,
                 common_grammar_value(params.grammar).c_str(), params.generation_prompt.c_str());
-            throw e;
+            throw;
         }
     }
 
