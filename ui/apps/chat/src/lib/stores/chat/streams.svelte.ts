@@ -36,6 +36,7 @@ export interface ChatStreamHost {
 	streamConnectionState: StreamConnectionState;
 	getOrCreateAbortController(convId: string): AbortController;
 	setChatLoading(convId: string, loading: boolean): void;
+	setChatReasoning(convId: string, reasoning: boolean): void;
 	setChatStreaming(
 		convId: string,
 		response: string,
@@ -381,6 +382,7 @@ export class ChatStreamManager {
 					streamedContent += chunk;
 					const displayed = isAppendMode ? existingContent + streamedContent : streamedContent;
 
+					this.host.setChatReasoning(convId, false);
 					writeActive({ content: displayed });
 					this.host.setChatStreaming(convId, displayed, targetMessageId);
 				},
@@ -421,10 +423,16 @@ export class ChatStreamManager {
 						: streamedReasoningContent;
 
 					writeActive({ reasoningContent: displayed });
+					this.host.setChatReasoning(convId, true);
 				},
 				undefined,
 				undefined,
-				undefined,
+				(completionId: string) => {
+					const updates = attachedModel ? { completionId, model: attachedModel } : { completionId };
+
+					writeActive(updates);
+					DatabaseService.updateMessage(targetMessageId, updates).catch(console.error);
+				},
 				undefined,
 				convId,
 				abortController.signal,
