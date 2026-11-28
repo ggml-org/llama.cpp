@@ -531,6 +531,7 @@ struct vk_op_topk_moe_push_constants {
     uint32_t n_expert_used;
     float clamp_min;
     float clamp_max;
+    float norm_bias;
     uint32_t gating_func;
     uint32_t has_bias;
     uint32_t with_norm;

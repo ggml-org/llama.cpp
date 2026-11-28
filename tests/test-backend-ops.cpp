@@ -15294,6 +15294,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_topk_moe({384,  1, 1, 1}, 6, true, true, GATING_FUNC_SIGMOID, scale_w, 1, true));
     }
 
+    test_cases.emplace_back(new test_topk_moe({384, 1, 1, 1}, 6, true, true, GATING_FUNC_SQRT_SOFTPLUS, 1.5f, 1, true)); // DeepSeek-V4.1
+    test_cases.emplace_back(new test_topk_moe({128, 1, 1, 1}, 8, true, true, GATING_FUNC_SIGMOID, 8.0f, 1, true)); // Inkling 2 Mini
+
     // Cover the supported boundaries, common k = 8 shapes, interleaved views and adds, and k = 16 fallback.
     test_cases.emplace_back(new test_moe_reduce(63,  2, 17));
     test_cases.emplace_back(new test_moe_reduce(2048, 8, 128));
