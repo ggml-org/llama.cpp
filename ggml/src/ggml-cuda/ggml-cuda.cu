@@ -169,6 +169,24 @@ static bool ggml_cuda_pinned_memory_disabled() {
     return disabled;
 }
 
+static void * ggml_cuda_host_malloc(size_t size) {
+    if (ggml_cuda_pinned_memory_disabled()) {
+        return nullptr;
+    }
+
+    void * ptr = nullptr;
+    cudaError_t err = cudaMallocHost((void **) &ptr, size);
+    if (err != cudaSuccess) {
+        // clear the error
+        (void)cudaGetLastError();
+        GGML_LOG_DEBUG("%s: failed to allocate %.2f MiB of pinned memory: %s\n", __func__,
+                           size / 1024.0 / 1024.0, cudaGetErrorString(err));
+        return nullptr;
+    }
+
+    return ptr;
+}
+
 static bool ggml_cuda_register_host_enabled() {
     static const bool enabled = ggml_cuda_env_flag("GGML_CUDA_REGISTER_HOST");
     return enabled;
@@ -1019,6 +1037,82 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
 }
 
 
+#if defined(GGML_USE_HIP)
+// hipMemcpyAsync() from pageable memory keeps the source range mapped for DMA; for a model loaded with mmap() this exceeds the resident memory limit and the copy hangs (ggml-org/llama.cpp#19482).
+// Upload in chunks through a temporary pinned buffer. Two streams are used in a ping-pong so that filling one half of the buffer overlaps with the DMA of the other; a host function marks a half free once its copy is done. row_size == size and n_rows == 1 for a plain contiguous copy.
+struct ggml_cuda_upload_half {
+    std::mutex              mutex;
+    std::condition_variable cond;
+    bool                    done = true;
+};
+
+// called by the driver once the copy that used this half is done; the caller synchronizes the
+// stream before returning, so the state this points to is guaranteed to be alive here
+static void ggml_cuda_upload_half_done(void * user_data) {
+    auto * half = (ggml_cuda_upload_half *) user_data;
+
+    std::lock_guard<std::mutex> lock(half->mutex);
+    half->done = true;
+    half->cond.notify_all();
+}
+
+static bool ggml_cuda_memcpy_host_to_device_staged(
+        char * dst, size_t stride_dst,
+        const char * src, size_t stride_src,
+        size_t row_size, size_t n_rows, cudaStream_t stream) {
+    if (row_size == 0 || n_rows == 0) {
+        return true;
+    }
+
+    const size_t chunk = std::min(row_size, (size_t) (64 * 1024 * 1024));
+
+    // one pinned allocation, split into two halves for the ping-pong
+    void * host = ggml_cuda_host_malloc(2 * chunk);
+    if (host == nullptr) {
+        return false;
+    }
+
+    cudaStream_t strm[2] = { stream, nullptr };
+    if (cudaStreamCreateWithFlags(&strm[1], cudaStreamNonBlocking) != cudaSuccess) {
+        (void) cudaGetLastError();
+        cudaFreeHost(host);
+        return false;
+    }
+
+    ggml_cuda_upload_half half[2];
+
+    size_t k = 0;
+    for (size_t r = 0; r < n_rows; r++) {
+        for (size_t off = 0; off < row_size; off += chunk, k++) {
+            const size_t n = std::min(chunk, row_size - off);
+            const int    s = k & 1;
+
+            char * h = (char *) host + s*chunk;
+
+            // wait for the copy that last used this half
+            {
+                std::unique_lock<std::mutex> lock(half[s].mutex);
+                half[s].cond.wait(lock, [&] { return half[s].done; });
+                half[s].done = false;
+            }
+
+            memcpy(h, src + r*stride_src + off, n);
+            CUDA_CHECK(cudaMemcpyAsync(dst + r*stride_dst + off, h, n, cudaMemcpyHostToDevice, strm[s]));
+            CUDA_CHECK(cudaLaunchHostFunc(strm[s], ggml_cuda_upload_half_done, &half[s]));
+        }
+    }
+
+    // waits for the copies and the host functions, so the local state outlives all callbacks
+    CUDA_CHECK(cudaStreamSynchronize(strm[0]));
+    CUDA_CHECK(cudaStreamSynchronize(strm[1]));
+
+    cudaFreeHost(host);
+    CUDA_CHECK(cudaStreamDestroy(strm[1]));
+
+    return true;
+}
+#endif
+
 // cuda buffer
 
 struct ggml_backend_cuda_buffer_context {
@@ -1084,6 +1178,15 @@ static void ggml_backend_cuda_buffer_set_tensor(ggml_backend_buffer_t buffer, gg
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+#if defined(GGML_USE_HIP)
+    // stage large copies, see ggml_cuda_memcpy_host_to_device_staged
+    if (size >= 1024*1024 &&
+            ggml_cuda_memcpy_host_to_device_staged(
+                (char *) tensor->data + offset, size,
+                (const char *) data, size, size, 1, cudaStreamPerThread)) {
+        return;
+    }
+#endif
     CUDA_CHECK(cudaMemcpyAsync((char *) tensor->data + offset, data, size, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
 }
@@ -1101,6 +1204,15 @@ static void ggml_backend_cuda_buffer_set_tensor_2d(ggml_backend_buffer_t buffer,
     ggml_backend_cuda_buffer_context * ctx = (ggml_backend_cuda_buffer_context *) buffer->context;
 
     ggml_cuda_set_device(ctx->device);
+#if defined(GGML_USE_HIP)
+    // stage large copies, see ggml_cuda_memcpy_host_to_device_staged
+    if (size*n_copies >= 1024*1024 &&
+            ggml_cuda_memcpy_host_to_device_staged(
+                (char *) tensor->data + offset, stride_tensor,
+                (const char *) data, stride_data, size, n_copies, cudaStreamPerThread)) {
+        return;
+    }
+#endif
     CUDA_CHECK(cudaMemcpy2DAsync(
         (char *) tensor->data + offset, stride_tensor, data, stride_data, size, n_copies, cudaMemcpyHostToDevice, cudaStreamPerThread));
     CUDA_CHECK(cudaStreamSynchronize(cudaStreamPerThread));
@@ -1770,24 +1882,6 @@ static bool ggml_backend_buft_is_cuda_host(ggml_backend_buffer_type_t buft) {
 
 static void ggml_backend_cuda_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
     CUDA_CHECK(cudaFreeHost(buffer->context));
-}
-
-static void * ggml_cuda_host_malloc(size_t size) {
-    if (ggml_cuda_pinned_memory_disabled()) {
-        return nullptr;
-    }
-
-    void * ptr = nullptr;
-    cudaError_t err = cudaMallocHost((void **) &ptr, size);
-    if (err != cudaSuccess) {
-        // clear the error
-        (void)cudaGetLastError();
-        GGML_LOG_DEBUG("%s: failed to allocate %.2f MiB of pinned memory: %s\n", __func__,
-                           size / 1024.0 / 1024.0, cudaGetErrorString(err));
-        return nullptr;
-    }
-
-    return ptr;
 }
 
 static ggml_backend_buffer_t ggml_backend_cuda_host_buffer_type_alloc_buffer(ggml_backend_buffer_type_t buft, size_t size) {
