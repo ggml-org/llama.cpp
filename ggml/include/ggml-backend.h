@@ -389,6 +389,40 @@ extern "C" {
     // Set a callback to be called for each resulting node during graph compute
     GGML_API void                 ggml_backend_sched_set_eval_callback(ggml_backend_sched_t sched, ggml_backend_sched_eval_callback callback, void * user_data);
 
+    // Persistent expert weight pool for MoE CPU offloading (RFC #20757)
+    //
+    // Registers a GGML_OP_MUL_MAT_ID weight tensor `w` (in a host buffer, with the experts
+    // along ne[2]) to be served from a persistent pool of `n_slots` expert slots allocated on
+    // `backend_id`. The pool survives across graph computations: experts that are already in
+    // the pool are not copied again, missing experts are copied in before use and the least
+    // recently used slots are evicted when the pool is full.
+    //
+    // The caller must:
+    //   - use the returned pool tensor in place of `w` as src[0] of GGML_OP_MUL_MAT_ID
+    //   - remap the expert ids through `*map_table` (an I32 tensor with n_expert elements whose
+    //     contents are updated by the scheduler before each use) by wrapping the ids with
+    //     ggml_get_rows(ggml_reshape_2d(map_table, 1, n_expert), ids)
+    //   - only route a graph through the pool when the maximum number of distinct experts it
+    //     can select (n_expert_used * n_tokens) does not exceed n_slots, otherwise fall back
+    //     to using `w` directly
+    //
+    // Returns NULL if the pool could not be allocated (e.g. out of memory on the backend).
+    GGML_API struct ggml_tensor * ggml_backend_sched_register_expert_pool(
+        ggml_backend_sched_t   sched,
+        struct ggml_tensor   * w,
+        int                    backend_id,
+        int                    n_slots,
+        struct ggml_tensor  ** map_table);
+
+    // total expert-pool cache events over the lifetime of the scheduler, summed over all
+    // pools; the same counters behind the GGML_MOE_POOL_STATS log lines. exposed so tests
+    // and tooling can verify the hit-rate telemetry without parsing logs
+    GGML_API void ggml_backend_sched_get_expert_pool_stats(
+        const ggml_backend_sched_t sched,
+        long long * hits,   // may be NULL
+        long long * misses); // may be NULL
+
+
     // Set a callback to be called when the inputs weights of a split are being copied
     GGML_API void                 ggml_backend_sched_set_copy_callback(ggml_backend_sched_t sched, ggml_backend_sched_copy_callback callback, void * user_data);
 
