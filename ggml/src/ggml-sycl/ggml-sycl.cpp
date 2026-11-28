@@ -4376,6 +4376,7 @@ inline bool ggml_sycl_supports_reorder_dmmv(enum ggml_type type) {
         case GGML_TYPE_Q4_K:
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
+        case GGML_TYPE_IQ3_S:
             return true;
         default:
             return false;
@@ -4411,6 +4412,7 @@ static bool ggml_sycl_supports_reorder_esimd(enum ggml_type type) {
         case GGML_TYPE_Q5_K:
         case GGML_TYPE_Q6_K:
         case GGML_TYPE_Q8_0:
+        case GGML_TYPE_IQ3_S:
             return true;
         default:
             return false;
@@ -5131,8 +5133,9 @@ static bool can_use_dequantize_mul_mat_vec(const ggml_tensor * src0, const ggml_
     // need ne[0] % DMMV_X == 0.
     const int64_t dmmv_x_required = (src0->type == GGML_TYPE_BF16 || src0->type == GGML_TYPE_F16) ?
                                     2*GGML_SYCL_DMMV_X : GGML_SYCL_DMMV_X;
-    return ggml_sycl_supports_dmmv(src0->type) && src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 &&
-           src0->ne[0] % dmmv_x_required == 0 && src1->ne[1] == 1;
+    return (ggml_sycl_supports_dmmv(src0->type) || ggml_sycl_supports_reorder_esimd(src0->type)) &&
+           src1->type == GGML_TYPE_F32 && dst->type == GGML_TYPE_F32 && src0->ne[0] % dmmv_x_required == 0 &&
+           src1->ne[1] == 1;
 }
 
 // reordered weights of the types in ggml_sycl_xmx_supports_type() take the XMX kernel for wider batches
@@ -5234,6 +5237,8 @@ static void ggml_sycl_mul_mat(ggml_backend_sycl_context & ctx, const ggml_tensor
             use = use || !use_mul_mat_vec_q;
         }
         use_dequantize_mul_mat_vec = use_dequantize_mul_mat_vec && use;
+    } else if (!ggml_sycl_supports_dmmv(src0->type)) {
+        use_dequantize_mul_mat_vec = false;  // only a reordered ESIMD kernel exists
     }
 
     if (!split && src0->type == GGML_TYPE_F16 && ggml_is_permuted(src0) && ggml_is_permuted(src1) && src1->ne[1] == 1) {

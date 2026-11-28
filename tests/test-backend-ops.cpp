@@ -13636,6 +13636,19 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_F32, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
     test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 32, 509, 2112, {1, 1}, {1, 1}));
 
+    // single-column IQ3_S decode: odd m, a single K block, long K, real decode shapes
+    for (auto [m, k] : std::vector<std::pair<int64_t, int64_t>>{
+             { 16,   256   },
+             { 17,   512   },
+             { 48,   2560  },
+             { 1000, 1024  },
+             { 4100, 256   },
+             { 4096, 14336 },
+             { 5120, 17408 }
+    }) {
+        test_cases.emplace_back(new test_mul_mat(GGML_TYPE_IQ3_S, GGML_TYPE_F32, m, 1, k, { 1, 1 }, { 1, 1 }));
+    }
+
     // few src1 rows (speculative verify): odd m, a single K block, long K, every tile width, broadcast batches
     for (int64_t n : {2, 3, 5, 8, 9, 13, 16}) {
         for (auto [m, k] : std::vector<std::pair<int64_t, int64_t>>{{40, 32}, {100, 96}, {1000, 5120}, {3000, 1024}, {6144, 5120}, {17408, 512}}) {
@@ -15770,6 +15783,15 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     for (int64_t m : {4096, 6144, 6272, 14336}) {
         for (int bs : {1, 2, 3, 4, 8}) {
             test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q4_K, GGML_TYPE_F32, m, bs, 4096, {1, 1}, {1, 1}));
+        }
+    }
+
+    // decode, speculative verify and small batches on a 27B-class FFN; the matrices are larger than
+    // the L3 cache, so repeated runs still stream the weights from memory
+    for (ggml_type type : { GGML_TYPE_IQ3_S }) {
+        for (int n : { 1 }) {
+            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 17408, n, 5120, { 1, 1 }, { 1, 1 }));
+            test_cases.emplace_back(new test_mul_mat(type, GGML_TYPE_F32, 5120, n, 17408, { 1, 1 }, { 1, 1 }));
         }
     }
 
