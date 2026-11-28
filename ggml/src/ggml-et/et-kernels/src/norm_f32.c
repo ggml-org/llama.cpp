@@ -52,6 +52,12 @@ int entry_point(struct ggml_et_norm_params * params, void * env) {
         return -1;  // Null data pointer
     }
 
+#ifdef ET_UBERKERNEL
+    FENCE;
+    evict_region_past_l2(src0_data, (size_t) src0->ne[0] * src0->ne[1] * src0->ne[2] * src0->ne[3] * src0->nb[0]);
+    WAIT_CACHEOPS;
+    FENCE;
+#endif
 
     if (eps < 0.0f) {
         return -1;  // Invalid epsilon
