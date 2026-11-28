@@ -5173,6 +5173,9 @@ bool server_context::load_model(common_params & params) {
 void server_context::start_loop() {
     auto & params = impl->params_base;
     impl->queue_tasks.start_loop(params.sleep_idle_seconds * 1000);
+    // inference has stopped, wake up readers waiting on in-flight tasks
+    // note: this cannot be done in terminate(), as it may run inside the signal handler
+    impl->queue_results.terminate();
 }
 
 void server_context::terminate() {
