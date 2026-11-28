@@ -13517,6 +13517,10 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         test_cases.emplace_back(new test_mul_mat_id(GGML_TYPE_NVFP4, GGML_TYPE_F32, 4, 2, false, 32, n, 256, 0, false, false, 0, true));
     }
 
+    // largest-tile dispatch needs both m and n over 64: Intel Xe2 under ANV deadlocks there, so the
+    // Vulkan backend clamps to the medium tile
+    test_cases.emplace_back(new test_mul_mat(GGML_TYPE_Q8_0, GGML_TYPE_F32, 128, 128, 256, { 1,  1}, {1, 1}));
+
 #if 0
     // > 2^31-element dst (8.9 GB), about 45 GB peak memory. Too large to be enabled by default.
     // kernel_mul_mm dst offset of the last batch is past INT32_MAX: rows 0-31 use full tiles, rows 32-39 use edge tiles.
