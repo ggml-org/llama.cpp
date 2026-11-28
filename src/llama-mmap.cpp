@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <cerrno>
 #include <algorithm>
+#include <limits>
 
 #ifdef __has_include
     #if __has_include(<unistd.h>)
@@ -68,6 +69,7 @@ struct llama_file::impl {
     // Keep the buffered handle as the logical cursor; the direct handle only issues aligned I/O.
     HANDLE fp_win32        = INVALID_HANDLE_VALUE;
     HANDLE fp_win32_direct = INVALID_HANDLE_VALUE;
+    HANDLE fp_win32_read   = INVALID_HANDLE_VALUE;
 
     std::string GetErrorMessageWin32(DWORD error_code) const {
         std::string ret;
@@ -170,6 +172,16 @@ struct llama_file::impl {
             throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
         }
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
+        if (std::strcmp(mode, "rb") == 0) {
+            fp_win32_read = ReOpenFile(
+                fp_win32,
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                FILE_FLAG_OVERLAPPED);
+            if (fp_win32_read == INVALID_HANDLE_VALUE) {
+                fp_win32_read_error = GetLastError();
+            }
+        }
         seek(0, SEEK_END);
         size = tell();
         seek(0, SEEK_SET);
@@ -178,6 +190,14 @@ struct llama_file::impl {
     impl(FILE * file) : fname("(file*)"), owns_fp(false) {
         fp = file;
         fp_win32 = (HANDLE) _get_osfhandle(_fileno(fp));
+        fp_win32_read = ReOpenFile(
+            fp_win32,
+            GENERIC_READ,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            FILE_FLAG_OVERLAPPED);
+        if (fp_win32_read == INVALID_HANDLE_VALUE) {
+            fp_win32_read_error = GetLastError();
+        }
         seek(0, SEEK_END);
         size = tell();
         seek(0, SEEK_SET);
@@ -359,6 +379,56 @@ struct llama_file::impl {
         }
     }
 
+    void read_at(void * ptr, size_t len, size_t offset) const {
+        if (offset > size || len > size - offset) {
+            throw std::runtime_error("unexpectedly reached end of file");
+        }
+        if (len == 0) {
+            return;
+        }
+        if (fp_win32_read == INVALID_HANDLE_VALUE) {
+            throw std::runtime_error(format("failed to open file for positional reads: %s", GetErrorMessageWin32(fp_win32_read_error).c_str()));
+        }
+
+        HANDLE event = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+        if (event == nullptr) {
+            throw std::runtime_error(format("failed to create read event: %s", GetErrorMessageWin32(GetLastError()).c_str()));
+        }
+
+        size_t done = 0;
+        while (done < len) {
+            ResetEvent(event);
+            const uint64_t pos = offset + done;
+            OVERLAPPED ov = {};
+            ov.Offset     = (DWORD) pos;
+            ov.OffsetHigh = (DWORD) (pos >> 32);
+            ov.hEvent     = event;
+
+            const DWORD to_read = (DWORD) std::min<size_t>(len - done, MAXDWORD);
+            DWORD n_read = 0;
+            BOOL ok = ReadFile(fp_win32_read, static_cast<uint8_t *>(ptr) + done, to_read, nullptr, &ov);
+            if (!ok) {
+                const DWORD error = GetLastError();
+                if (error != ERROR_IO_PENDING) {
+                    CloseHandle(event);
+                    throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(error).c_str()));
+                }
+            }
+            ok = GetOverlappedResult(fp_win32_read, &ov, &n_read, TRUE);
+            if (!ok) {
+                const DWORD error = GetLastError();
+                CloseHandle(event);
+                throw std::runtime_error(format("read error: %s", GetErrorMessageWin32(error).c_str()));
+            }
+            if (n_read == 0) {
+                CloseHandle(event);
+                throw std::runtime_error("unexpectedly reached end of file");
+            }
+            done += n_read;
+        }
+        CloseHandle(event);
+    }
+
     uint32_t read_u32() {
         uint32_t val;
         read_raw(&val, sizeof(val));
@@ -391,6 +461,9 @@ struct llama_file::impl {
     }
 
     ~impl() {
+        if (fp_win32_read != INVALID_HANDLE_VALUE) {
+            CloseHandle(fp_win32_read);
+        }
         if (fp_win32_direct != INVALID_HANDLE_VALUE) {
             CloseHandle(fp_win32_direct);
         }
@@ -399,6 +472,7 @@ struct llama_file::impl {
         }
     }
     std::string fname;
+    DWORD fp_win32_read_error = ERROR_SUCCESS;
 #else
     impl(const char * fname, const char * mode, [[maybe_unused]] const bool use_direct_io = false) : fname(fname) {
 #ifdef __linux__
@@ -421,6 +495,14 @@ struct llama_file::impl {
         fd = open(fname.c_str(), O_RDONLY | O_DIRECT);
 
         if (fd != -1) {
+            fd_read = open(fname.c_str(), O_RDONLY);
+            if (fd_read == -1) {
+                const int error = errno;
+                close(fd);
+                fd = -1;
+                errno = error;
+                return false;
+            }
             struct stat file_stats{};
             fstat(fd, &file_stats);
 
@@ -442,6 +524,10 @@ struct llama_file::impl {
         if (fp == NULL) {
             throw std::runtime_error(format("failed to open %s: %s", fname.c_str(), strerror(errno)));
         }
+        if (fd_read != -1) {
+            close(fd_read);
+            fd_read = -1;
+        }
         seek(0, SEEK_END);
         size = tell();
         seek(0, SEEK_SET);
@@ -452,6 +538,10 @@ struct llama_file::impl {
         seek(0, SEEK_END);
         size = tell();
         seek(0, SEEK_SET);
+        fd_read = dup(fileno(fp));
+        if (fd_read == -1) {
+            fd_read_error = errno;
+        }
     }
 
     size_t tell() const {
@@ -592,6 +682,38 @@ struct llama_file::impl {
         }
     }
 
+    void read_at(void * ptr, size_t len, size_t offset) const {
+        if (offset > size || len > size - offset) {
+            throw std::runtime_error("unexpectedly reached end of file");
+        }
+        if (len == 0) {
+            return;
+        }
+        const int read_fd = fd_read != -1 ? fd_read : (owns_fp && fp != nullptr ? fileno(fp) : -1);
+        if (read_fd == -1) {
+            if (fd_read_error != 0) {
+                throw std::runtime_error(format("failed to open file for positional reads: %s", strerror(fd_read_error)));
+            }
+            throw std::runtime_error("file is not open for positional reads");
+        }
+
+        size_t done = 0;
+        while (done < len) {
+            const size_t to_read = std::min(len - done, (size_t) std::numeric_limits<ssize_t>::max());
+            const ssize_t n_read = pread(read_fd, static_cast<uint8_t *>(ptr) + done, to_read, (off_t) (offset + done));
+            if (n_read < 0 && errno == EINTR) {
+                continue;
+            }
+            if (n_read < 0) {
+                throw std::runtime_error(format("read error: %s", strerror(errno)));
+            }
+            if (n_read == 0) {
+                throw std::runtime_error("unexpectedly reached end of file");
+            }
+            done += (size_t) n_read;
+        }
+    }
+
     uint32_t read_u32() {
         uint32_t ret;
         read_raw(&ret, sizeof(ret));
@@ -618,6 +740,9 @@ struct llama_file::impl {
     }
 
     ~impl() {
+        if (fd_read != -1) {
+            close(fd_read);
+        }
         if (fd != -1) {
             close(fd);
         } else if (fp && owns_fp) {
@@ -625,6 +750,8 @@ struct llama_file::impl {
         }
     }
     int fd = -1;
+    int fd_read = -1;
+    int fd_read_error = 0;
     std::string fname;
 #endif
 
@@ -670,6 +797,7 @@ int llama_file::file_id() const {
 void llama_file::seek(size_t offset, int whence) const { pimpl->seek(offset, whence); }
 void llama_file::read_raw(void * ptr, size_t len) { pimpl->read_raw(ptr, len); }
 void llama_file::read_raw_unsafe(void * ptr, size_t len) { pimpl->read_raw_unsafe(ptr, len); }
+void llama_file::read_at(void * ptr, size_t len, size_t offset) const { pimpl->read_at(ptr, len, offset); }
 
 uint32_t llama_file::read_u32() { return pimpl->read_u32(); }
 

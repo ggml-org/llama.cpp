@@ -1289,6 +1289,9 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             common_params_print_completion(ctx_arg);
             exit(0);
         }
+        if (ctx_arg.params.moe_cache_host_size > 0 && ctx_arg.params.moe_cache_size == 0) {
+            throw std::invalid_argument("--moe-cache-host-mib requires --moe-cache-mib");
+        }
         params.lr.init();
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
@@ -2758,6 +2761,16 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.moe_cache_size = (size_t) value*1024*1024;
         }
     ).set_env("LLAMA_ARG_MOE_CACHE_MIB"));
+    add_opt(common_arg(
+        {"--moe-cache-host-mib"}, "N",
+        "RAM cache size in MiB for recently used routed MoE experts. on a miss, read the expert from the GGUF file. use with --moe-cache-mib. each context gets a cache of this size, split among GPUs like the layers (default: 0, disabled)",
+        [](common_params & params, int value) {
+            if (value < 0) {
+                throw std::invalid_argument("invalid value");
+            }
+            params.moe_cache_host_size = (size_t) value*1024*1024;
+        }
+    ).set_env("LLAMA_ARG_MOE_CACHE_HOST_MIB"));
     add_opt(common_arg(
         {"--moe-cache-cpu-share"}, "F",
         string_format("share of the MoE cache misses that the CPU computes from the host experts instead of uploading them to the GPU once the cache is full, from 0 to 1 (default: %.2f)", (double) params.moe_cache_cpu_share),

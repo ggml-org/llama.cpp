@@ -96,12 +96,16 @@ static void test(void) {
         base.n_parallel = 4;
         base.n_outputs_max_per_seq = 8;
         base.n_ubatch = 512;
+        base.moe_cache_size = 1024;
+        base.moe_cache_host_size = 2048;
 
         {
             const auto draft = common_base_params_to_speculative(base);
             assert(draft.n_outputs_max == 4);
             assert(draft.n_outputs_max_per_seq == 1);
             assert(draft.n_ubatch == 512); // inherits the target by default
+            assert(draft.moe_cache_size == 0);
+            assert(draft.moe_cache_host_size == 0);
         }
 
         base.speculative.draft.n_ubatch = 8;
@@ -334,6 +338,20 @@ static void test(void) {
     argv = {"binary_name", "-lm", "dio"};
     assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), params, LLAMA_EXAMPLE_COMMON));
     assert(params.load_mode == LLAMA_LOAD_MODE_DIRECT_IO);
+
+    {
+        common_params moe_cache_params;
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache-mib", "64", "--moe-cache-host-mib", "123"};
+        assert(true == common_params_parse(argv.size(), list_str_to_char(argv).data(), moe_cache_params, LLAMA_EXAMPLE_COMMON));
+        assert(moe_cache_params.moe_cache_host_size == 123*1024*1024);
+
+        moe_cache_params = {};
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache-host-mib", "123"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), moe_cache_params, LLAMA_EXAMPLE_COMMON));
+
+        argv = {"binary_name", "-m", "model.gguf", "--moe-cache-host-mib", "-1"};
+        assert(false == common_params_parse(argv.size(), list_str_to_char(argv).data(), moe_cache_params, LLAMA_EXAMPLE_COMMON));
+    }
 
     // multi-value args (CSV)
     argv = {"binary_name", "--lora", "file1.gguf,\"file2,2.gguf\",\"file3\"\"3\"\".gguf\",file4\".gguf"};
