@@ -1719,6 +1719,8 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
         return;
     }
 
+    if (params.n_chunks >= 0) { n_chunk = std::min(n_chunk, params.n_chunks); }
+
     const int n_batch = params.n_batch;
     const int num_batches = (static_cast<int>(n_ctx) + n_batch - 1) / n_batch;
     // Calculate n_seq based on the logits file's n_ctx, but cap it at what the context supports
