@@ -528,11 +528,7 @@ block_b_prefetch block_b_load(uint ib_outer, uint ib_inner, uint loadr) {
 
 void block_b_to_shmem(block_b_prefetch blk, uint buf_ib, uint ks, uint loadr, bool in_bounds) {
     const ivec4 v = in_bounds ? blk.qs : ivec4(0);
-    const uint base = buf_ib * QPITCH + ks * (BK / 4) + loadr * 4;
-    buf_b_qs[base    ] = v.x;
-    buf_b_qs[base + 1] = v.y;
-    buf_b_qs[base + 2] = v.z;
-    buf_b_qs[base + 3] = v.w;
+    buf_b_qs[(buf_ib * QPITCH + ks * (BK / 4)) / 4 + loadr] = uvec4(v);
     if (loadr == 0) {
         buf_b_d[ks * BN + buf_ib] = in_bounds ? float(blk.d) : 0.0f;
 #if defined(DATA_A_Q4_1) || defined(DATA_A_Q5_1) || defined(DATA_A_Q4_K) || defined(DATA_A_Q5_K)
