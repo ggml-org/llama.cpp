@@ -1953,6 +1953,10 @@ int ggml_cuda_try_fuse(ggml_backend_cuda_context * cuda_ctx, ggml_cgraph * cgrap
     // a scaled matmul only takes part in the gate/up/GLU fusion, which passes its weight scale on
     const bool scaled_mm = (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID) && ggml_get_src_scale(node, 0);
 
+    if (cuda_ctx->batch_invariant && (node->op == GGML_OP_MUL_MAT || node->op == GGML_OP_MUL_MAT_ID)) {
+        return 0;
+    }
+
     if (node->op == GGML_OP_MUL_MAT_ID && cuda_ctx->stream_context().concurrent_events.empty() &&
             ggml_cuda_match_shared_expert(cgraph, i, i + 3) &&
             ggml_cuda_should_fuse_mul_mat_vec_q(cgraph->nodes[i + 2]->src[1])) {
