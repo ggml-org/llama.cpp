@@ -12,6 +12,47 @@
 #extension GL_EXT_float_e4m3 : require
 #endif
 
+// Pack/unpack of 8-bit vectors. Qualcomm drivers miscompile unpack8() and pack32() on 8-bit
+// vectors, so AVOID_8BIT_VECTORS is set on those devices and plain integer ops are used instead.
+// On other devices it is false and the original instructions are used.
+layout (constant_id = 63) const bool AVOID_8BIT_VECTORS = false;
+
+int32_t pack_i8x4(const ivec4 v) {
+    if (AVOID_8BIT_VECTORS) {
+        return int32_t((uint(v.x) & 0xFFu) | ((uint(v.y) & 0xFFu) << 8) | ((uint(v.z) & 0xFFu) << 16) | (uint(v.w) << 24));
+    }
+    return pack32(i8vec4(v));
+}
+uint32_t pack_u8x4(const uvec4 v) {
+    if (AVOID_8BIT_VECTORS) {
+        return (v.x & 0xFFu) | ((v.y & 0xFFu) << 8) | ((v.z & 0xFFu) << 16) | (v.w << 24);
+    }
+    return pack32(u8vec4(v));
+}
+uvec4 unpack_u8x4(const uint32_t w) {
+    if (AVOID_8BIT_VECTORS) {
+        return uvec4(bitfieldExtract(w, 0, 8), bitfieldExtract(w, 8, 8), bitfieldExtract(w, 16, 8), bitfieldExtract(w, 24, 8));
+    }
+    return uvec4(unpack8(w));
+}
+ivec4 unpack_i8x4(const int32_t w) {
+    if (AVOID_8BIT_VECTORS) {
+        return ivec4(bitfieldExtract(w, 0, 8), bitfieldExtract(w, 8, 8), bitfieldExtract(w, 16, 8), bitfieldExtract(w, 24, 8));
+    }
+    return ivec4(unpack8(w));
+}
+
+// Every unpack8() and pack32() on 8-bit vectors has to go through the helpers above, or the shader
+// silently breaks on Qualcomm. Make any other use a compile error: unpack8() is not available, and
+// pack32() only accepts 16-bit vectors. Coopmat shaders, which are not used on Qualcomm devices, keep
+// the builtins by defining ALLOW_8BIT_VECTOR_BUILTINS, and so does the hardware FP4 path.
+#if !defined(ALLOW_8BIT_VECTOR_BUILTINS) && !defined(USE_OCP_FP4)
+uint32_t pack32_16bit_only(const u16vec2 v) { return pack32(v); }
+int32_t pack32_16bit_only(const i16vec2 v) { return pack32(v); }
+#define pack32 pack32_16bit_only
+#define unpack8 unpack8_not_allowed_use_unpack_u8x4_or_unpack_i8x4
+#endif
+
 #if defined(DATA_A_F32)
 #define QUANT_K 1
 #define QUANT_R 1
@@ -1899,12 +1940,12 @@ void init_iq_shmem(uvec3 wgsize)
 
 #ifdef KVALUES_IQ4NL_I8
 i32vec2 iq4nl_to_i8x8(uint32_t vui) {
-    const u8vec4 i0 = unpack8( vui       & 0x0F0F0F0F);
-    const u8vec4 i1 = unpack8((vui >> 4) & 0x0F0F0F0F);
+    const uvec4 i0 = unpack_u8x4( vui       & 0x0F0F0F0F);
+    const uvec4 i1 = unpack_u8x4((vui >> 4) & 0x0F0F0F0F);
 
     return i32vec2(
-        pack32(i8vec4(kvalues_iq4nl[i0.x], kvalues_iq4nl[i0.y], kvalues_iq4nl[i0.z], kvalues_iq4nl[i0.w])),
-        pack32(i8vec4(kvalues_iq4nl[i1.x], kvalues_iq4nl[i1.y], kvalues_iq4nl[i1.z], kvalues_iq4nl[i1.w])));
+        pack_i8x4(ivec4(kvalues_iq4nl[i0.x], kvalues_iq4nl[i0.y], kvalues_iq4nl[i0.z], kvalues_iq4nl[i0.w])),
+        pack_i8x4(ivec4(kvalues_iq4nl[i1.x], kvalues_iq4nl[i1.y], kvalues_iq4nl[i1.z], kvalues_iq4nl[i1.w])));
 }
 #endif
 #endif

@@ -99,8 +99,8 @@ layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 dat
 }
 
 #define FA_DEQUANT4_Q8_0(BUF) {                                                                   \
-    const i8vec2 v0 = unpack8(int32_t(BUF.data[a_offset + ib].qs[iqs / 2    ])).xy;               \
-    const i8vec2 v1 = unpack8(int32_t(BUF.data[a_offset + ib].qs[iqs / 2 + 1])).xy;               \
+    const ivec2 v0 = unpack_i8x4(int32_t(BUF.data[a_offset + ib].qs[iqs / 2    ])).xy;            \
+    const ivec2 v1 = unpack_i8x4(int32_t(BUF.data[a_offset + ib].qs[iqs / 2 + 1])).xy;            \
     return FLOAT_TYPE(BUF.data[a_offset + ib].d) * FLOAT_TYPEV4(v0.x, v0.y, v1.x, v1.y);          \
 }
 
@@ -110,7 +110,7 @@ layout (binding = 1) readonly buffer K_PACKED_Q5_1_P32 { block_q5_1_packed32 dat
     const uint qsw = uint(BUF.data[a_offset + ib].qs[qs_i])                                       \
                    | (uint(BUF.data[a_offset + ib].qs[qs_i + 1u]) << 16);                         \
     const FLOAT_TYPE d = FLOAT_TYPE(BUF.data[a_offset + ib].d);                                   \
-    const u8vec4 q = unpack8((qsw >> shift) & 0x0F0F0F0Fu);                                       \
+    const uvec4 q = unpack_u8x4((qsw >> shift) & 0x0F0F0F0Fu);                                    \
     return d * FLOAT_TYPEV4(kvalues_iq4nl[q.x], kvalues_iq4nl[q.y],                               \
                             kvalues_iq4nl[q.z], kvalues_iq4nl[q.w]);                              \
 }

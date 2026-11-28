@@ -140,16 +140,16 @@ FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const i
 #if defined(DATA_A_MXFP4)
 // 1-byte loads for mxfp4 blocks (17 bytes)
 i32vec2 repack(uint ib, uint iqs) {
-    const uint32_t qs = pack32(u8vec4(data_a[ib].qs[iqs * 4    ],
+    const uint32_t qs = pack_u8x4(uvec4(data_a[ib].qs[iqs * 4    ],
                                       data_a[ib].qs[iqs * 4 + 1],
                                       data_a[ib].qs[iqs * 4 + 2],
                                       data_a[ib].qs[iqs * 4 + 3]));
 
-    const u8vec4 i_a0 = unpack8( qs       & 0x0F0F0F0F);
-    const u8vec4 i_a1 = unpack8((qs >> 4) & 0x0F0F0F0F);
+    const uvec4 i_a0 = unpack_u8x4( qs       & 0x0F0F0F0F);
+    const uvec4 i_a1 = unpack_u8x4((qs >> 4) & 0x0F0F0F0F);
 
-    return i32vec2(pack32(i8vec4(kvalues_mxfp4[i_a0.x], kvalues_mxfp4[i_a0.y], kvalues_mxfp4[i_a0.z], kvalues_mxfp4[i_a0.w])),
-                   pack32(i8vec4(kvalues_mxfp4[i_a1.x], kvalues_mxfp4[i_a1.y], kvalues_mxfp4[i_a1.z], kvalues_mxfp4[i_a1.w])));
+    return i32vec2(pack_i8x4(ivec4(kvalues_mxfp4[i_a0.x], kvalues_mxfp4[i_a0.y], kvalues_mxfp4[i_a0.z], kvalues_mxfp4[i_a0.w])),
+                   pack_i8x4(ivec4(kvalues_mxfp4[i_a1.x], kvalues_mxfp4[i_a1.y], kvalues_mxfp4[i_a1.z], kvalues_mxfp4[i_a1.w])));
 }
 
 FLOAT_TYPE mul_q8_1(const int32_t q_sum, const float da, const vec2 dsb, const int32_t sum_divisor) {
@@ -290,7 +290,7 @@ float get_d_scale(uint ib, uint iqs) {
     const uint iqs_k = (ib % 8) * 8 + iqs;
     const uint is = iqs_k / 4;
 
-    const int8_t scale = int8_t(((data_a[ib_k].scales[is % 8      ] >> (4 * (is / 8))) & 0x0F0F) |
+    const int scale = int(((data_a[ib_k].scales[is % 8      ] >> (4 * (is / 8))) & 0x0F0F) |
                                (((data_a[ib_k].scales[8 + (is % 4)] >> (2 * (is / 4))) & 0x0303) << 4));
     return float(data_a[ib_k].d) * float(scale - 32);
 }
@@ -360,7 +360,7 @@ vec2 get_dm_scale(uint ib, uint iqs) {
 
     const uint8_t sc    = uint8_t(((scales[scidx0] >> scidxshift0) & 0xF) | ((scales[0] >> scidxshift1) & 0x30));
     const uint8_t mbyte = uint8_t(((scales[mbidx0] >> mbidxshift0) & 0xF) | ((scales[1] >> mbidxshift1) & 0x30));
-    u8vec2 scale_dm = u8vec2(sc, mbyte);
+    uvec2 scale_dm = uvec2(sc, mbyte);
 
     return FLOAT_TYPEV2(data_a_packed32[ib_k].dm) * FLOAT_TYPEV2(scale_dm);
 }
