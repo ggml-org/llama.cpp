@@ -416,7 +416,8 @@ bool llama_batch_allocr::init(
                             "%s: the tokens of sequence %d in the input batch have inconsistent sequence positions:\n"
                             " - the last position stored in the memory module of the context (i.e. the KV cache) for sequence %d is X = %d\n"
                             " - the tokens for sequence %d in the input batch have a starting position of Y = %d\n"
-                            " for M-RoPE, it is required that the position satisfies: X < Y\n",
+                            " for M-RoPE, it is required that the position satisfies: X < Y\n"
+                            " (if llama_memory_seq_rm was called on a hybrid model, the recurrent cache may have refused rollback outside the last ubatch)\n",
                             __func__, s, s, p0, s, seq_pos_min(s));
 
                     return false;
