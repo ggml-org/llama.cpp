@@ -749,8 +749,80 @@ static inline __m256 q2_0_acc_block_avx2(const block_q2_0 * x, const block_q8_0 
 }
 #endif
 
+#if defined(__AVX512VNNI__)
+// vpmultishiftqb: 0,2,4,6 pick the four 2-bit fields of the lane's low dword, 32,34,36,38 the high dword.
+// Each 64-bit lane expands two code bytes to eight code bytes, in order.
+static inline __m512i q2_0_unpack_64_avx512(const uint8_t * qs16) {
+#if defined(__AVX512VBMI__)
+    const __m512i ctrl = _mm512_set1_epi64(0x2624222006040200LL);
+    const __m512i v    = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *) qs16));
+    return _mm512_and_si512(_mm512_multishift_epi64_epi8(ctrl, v), _mm512_set1_epi8(3));
+#else
+    // same OR-not-ADD expansion as q2_0_unpack_32_avx2: the overlapping copies only land on bits the mask clears
+    const __m512i mask3 = _mm512_set1_epi32(0x03030303);
+    __m512i v = _mm512_cvtepu8_epi32(_mm_loadu_si128((const __m128i *) qs16));
+    v = _mm512_or_si512(v, _mm512_slli_epi32(v, 12));
+    v = _mm512_or_si512(v, _mm512_slli_epi32(v, 6));
+    return _mm512_and_si512(v, mask3);
+#endif
+}
+
+// one 64-weight group (two q8_0 blocks) against a zmm of activations
+static inline __m512 q2_0_dot_64_avx512(const block_q2_0 * x,
+                                        const block_q8_0 * y0,
+                                        const block_q8_0 * y1,
+                                        __m512             acc) {
+    const __m512i ones  = _mm512_set1_epi8(1);
+    const __m512i codes = q2_0_unpack_64_avx512(x->qs);
+    const __m512i qy    = _mm512_inserti64x4(_mm512_castsi256_si512(_mm256_loadu_si256((const __m256i *) y0->qs)),
+                                             _mm256_loadu_si256((const __m256i *) y1->qs), 1);
+    // sum((c-1)*y) = sum(c*y) - sum(y)
+    const __m512i d32   = _mm512_dpbusd_epi32(_mm512_setzero_si512(), codes, qy);
+    const __m512i sy32  = _mm512_dpbusd_epi32(_mm512_setzero_si512(), ones,  qy);
+    const __m512i s32   = _mm512_sub_epi32(d32, sy32);
+
+    const float  dx = GGML_CPU_FP16_TO_FP32(x->d);
+    const float  d0 = dx * GGML_CPU_FP16_TO_FP32(y0->d);
+    const float  d1 = dx * GGML_CPU_FP16_TO_FP32(y1->d);
+    // lanes 0-7 cover y0, lanes 8-15 cover y1
+    const __m512 sc = _mm512_mask_blend_ps(0xFF00, _mm512_set1_ps(d0), _mm512_set1_ps(d1));
+    return _mm512_fmadd_ps(_mm512_cvtepi32_ps(s32), sc, acc);
+}
+#endif
+
 void ggml_vec_dot_q2_0_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, size_t bx, const void * GGML_RESTRICT vy, size_t by, int nrc) {
-#if defined(__AVX2__)
+#if defined(__AVX512VNNI__)
+    assert(n % QK2_0 == 0);
+    assert(nrc == 1);
+    UNUSED(nrc);
+    UNUSED(bx);
+    UNUSED(by);
+    UNUSED(bs);
+
+    const block_q2_0 * GGML_RESTRICT x = vx;
+    const block_q8_0 * GGML_RESTRICT y = vy;
+    const int nb = n / QK2_0;
+
+    __m512 acc0 = _mm512_setzero_ps();
+    __m512 acc1 = _mm512_setzero_ps();
+    __m512 acc2 = _mm512_setzero_ps();
+    __m512 acc3 = _mm512_setzero_ps();
+    int i = 0;
+    for (; i + 3 < nb; i += 4) {
+        acc0 = q2_0_dot_64_avx512(x + i + 0, y + 2*i + 0, y + 2*i + 1, acc0);
+        acc1 = q2_0_dot_64_avx512(x + i + 1, y + 2*i + 2, y + 2*i + 3, acc1);
+        acc2 = q2_0_dot_64_avx512(x + i + 2, y + 2*i + 4, y + 2*i + 5, acc2);
+        acc3 = q2_0_dot_64_avx512(x + i + 3, y + 2*i + 6, y + 2*i + 7, acc3);
+    }
+    for (; i + 1 < nb; i += 2) {
+        acc0 = q2_0_dot_64_avx512(x + i + 0, y + 2*i + 0, y + 2*i + 1, acc0);
+        acc1 = q2_0_dot_64_avx512(x + i + 1, y + 2*i + 2, y + 2*i + 3, acc1);
+    }
+    if (i < nb) {
+        acc0 = q2_0_dot_64_avx512(x + i, y + 2*i + 0, y + 2*i + 1, acc0);
+    }
+    *s = _mm512_reduce_add_ps(_mm512_add_ps(_mm512_add_ps(acc0, acc1), _mm512_add_ps(acc2, acc3)));
+#elif defined(__AVX2__)
     assert(n % QK2_0 == 0);
     assert(nrc == 1);
     UNUSED(nrc);
