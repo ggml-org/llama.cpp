@@ -795,23 +795,20 @@ static ggml_type llama_tensor_get_type(quantize_state_impl & qs,
 
     ggml_type new_type = default_type;
 
-    // get more optimal quantization type based on the tensor shape, layer, etc.
-    if (ggml_is_quantized(default_type)) {
-        // if the user provided tensor types, use those
-        const ggml_type manual_type = tensor_type_override_for(qs, tensor->name);
-        const bool manual = manual_type != GGML_TYPE_COUNT;
-        if (manual && manual_type != new_type) {
-            LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
-                __func__, tensor->name, ggml_type_name(new_type), ggml_type_name(manual_type));
-            new_type = manual_type;
-        }
-
-        // otherwise, use the standard logic
-        if (!manual && !params->pure) { new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category); }
-
-        // if incompatible tensor shape, fallback to a compatible type
-        new_type = tensor_type_fallback(qs, tensor, new_type);
+    // if the user provided tensor types, use those (also for F32, F16 and BF16 targets)
+    const ggml_type manual_type = tensor_type_override_for(qs, tensor->name);
+    const bool manual = manual_type != GGML_TYPE_COUNT;
+    if (manual && manual_type != new_type) {
+        LLAMA_LOG_WARN("%s: %-36s - applying manual override: %s -> %s\n",
+            __func__, tensor->name, ggml_type_name(new_type), ggml_type_name(manual_type));
+        new_type = manual_type;
     }
+
+    // otherwise, get a more optimal quantization type based on the tensor shape, layer, etc.
+    if (!manual && !params->pure && ggml_is_quantized(default_type)) { new_type = llama_tensor_get_type_impl(qs, new_type, tensor, params->ftype, tm.category); }
+
+    // if incompatible tensor shape, fallback to a compatible type
+    new_type = tensor_type_fallback(qs, tensor, new_type);
 
     return new_type;
 }
