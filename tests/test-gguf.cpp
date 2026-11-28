@@ -1003,9 +1003,10 @@ static struct random_gguf_context_result get_random_gguf_context(ggml_backend_t 
 
         const int n_dims = 1 + rng() % GGML_MAX_DIMS;
         int64_t ne[GGML_MAX_DIMS];
-        ne[0] = (1 + rng() % 10) * ggml_blck_size(type);
+        // zero-sized dimensions (including dim 0, still a multiple of the block size) must survive the roundtrip
+        ne[0] = (rng() % 11) * ggml_blck_size(type);
         for (int j = 1; j < n_dims; ++j) {
-            ne[j] = 1 + rng() % 10;
+            ne[j] = rng() % 11;
         }
 
         struct ggml_tensor * tensor = ggml_new_tensor(ctx, type, n_dims, ne);
@@ -1137,6 +1138,19 @@ static bool all_tensors_in_other(const gguf_context * ctx, const gguf_context * 
     return ok;
 }
 
+static bool same_tensor_shapes(struct ggml_context * orig, struct ggml_context * read) {
+    bool ok = true;
+
+    for (struct ggml_tensor * t_orig = ggml_get_first_tensor(orig); t_orig; t_orig = ggml_get_next_tensor(orig, t_orig)) {
+        const struct ggml_tensor * t_read = ggml_get_tensor(read, t_orig->name);
+        if (!t_read || !ggml_are_same_shape(t_orig, t_read)) {
+            ok = false;
+        }
+    }
+
+    return ok;
+}
+
 static bool same_tensor_data(const struct ggml_context * orig, const struct ggml_context * read) {
     bool ok = true;
 
@@ -1237,8 +1251,8 @@ static std::pair<int, int> test_roundtrip(
 
     struct ggml_context * ctx_1 = nullptr;
     struct gguf_init_params gguf_params = {
-        /*no_alloc =*/ false,
-        /*ctx      =*/ only_meta ? nullptr : &ctx_1,
+        /*no_alloc =*/ only_meta,
+        /*ctx      =*/ &ctx_1,
     };
     struct gguf_context * gguf_ctx_1 = nullptr;
     const std::vector<uint8_t> data = read_mode == ROUNDTRIP_READ_MODE_FILE
@@ -1256,6 +1270,18 @@ static std::pair<int, int> test_roundtrip(
     } else {
         GGML_ASSERT(fseek(file, prefix, SEEK_SET) == 0);
         gguf_ctx_1 = gguf_init_from_file_ptr(file, gguf_params);
+    }
+
+    if (gguf_ctx_1 == nullptr || ctx_1 == nullptr) {
+        printf("%s: read_back: \033[1;31mFAIL\033[0m\n\n", __func__);
+        ggml_backend_buffer_free(bbuf);
+        ggml_free(ctx_0);
+        ggml_free(ctx_1);
+        gguf_free(gguf_ctx_0);
+        gguf_free(gguf_ctx_1);
+        ggml_backend_free(backend);
+        fclose(file);
+        return std::make_pair(npass, ntest + 1);
     }
 
     printf("%s: same_version: ", __func__);
@@ -1314,6 +1340,15 @@ static std::pair<int, int> test_roundtrip(
 
     printf("%s: all_read_tensors_in_orig: ", __func__);
     if (all_tensors_in_other(gguf_ctx_1, gguf_ctx_0)) {
+        printf("\033[1;32mOK\033[0m\n");
+        npass++;
+    } else {
+        printf("\033[1;31mFAIL\033[0m\n");
+    }
+    ntest++;
+
+    printf("%s: same_tensor_shapes: ", __func__);
+    if (same_tensor_shapes(ctx_0, ctx_1)) {
         printf("\033[1;32mOK\033[0m\n");
         npass++;
     } else {
