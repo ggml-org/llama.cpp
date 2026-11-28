@@ -426,6 +426,37 @@ static int test_quantize_imatrix_degenerate(bool verbose) {
     return num_failed;
 }
 
+// Quantize the same 32 weights at the start of one block and after 32 zeros in another.
+// Both copies should decode to identical values.
+static int test_quantize_iq3_s_zero_group(bool verbose) {
+    constexpr int block = 256;
+    constexpr int group = 32;
+    const ggml_type type = GGML_TYPE_IQ3_S;
+    float x[2*block] = {};
+    float out[2*block];
+
+    for (int i = 0; i < group; ++i) {
+        x[i] = i % 2 ? -(i + 1) : i + 1;
+        x[block + group + i] = x[i];
+    }
+
+    std::vector<float> imatrix(block, 1.0f);
+    std::vector<uint8_t> q(2*ggml_row_size(type, block));
+    ggml_quantize_chunk(type, x, q.data(), 0, 2, block, imatrix.data());
+    ggml_get_type_traits(type)->to_float(q.data(), out, 2*block);
+
+    for (int i = 0; i < group; ++i) {
+        if (out[i] != out[block + group + i]) {
+            printf("iq3_s zero group: FAILED at index %d (first %f, shifted %f)\n", i, out[i], out[block + group + i]);
+            return 1;
+        }
+    }
+    if (verbose) {
+        printf("iq3_s zero group: ok\n");
+    }
+    return 0;
+}
+
 int main(int argc, char * argv[]) {
     bool verbose = false;
 
@@ -449,6 +480,7 @@ int main(int argc, char * argv[]) {
     num_failed += test_f8_e4m3(verbose);
     num_failed += test_vec_dot_q(verbose);
     num_failed += test_quantize_imatrix_degenerate(verbose);
+    num_failed += test_quantize_iq3_s_zero_group(verbose);
 
     if (num_failed || verbose) {
         printf("%d tests failed\n", num_failed);
