@@ -337,21 +337,28 @@ static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, cons
 // DPP control codes.
 #define GGML_HIP_DPP_QUAD_PERM_1032  0x0b1 // quad_perm:[1,0,3,2]
 #define GGML_HIP_DPP_QUAD_PERM_2301  0x04e // quad_perm:[2,3,0,1]
+#define GGML_HIP_DPP_QUAD_PERM_ID    0xe40 // quad_perm:[0,1,2,3], identity permutation, GFX10+ only
 #define GGML_HIP_DPP_ROW_HALF_MIRROR 0x141 // row_half_mirror
 #define GGML_HIP_DPP_ROW_ROR_8       0x128 // row_ror:8
 #define GGML_HIP_DPP_ROW_BCAST_15    0x142 // row_bcast:15, GCN/CDNA only
 #define GGML_HIP_DPP_ROW_BCAST_31    0x143 // row_bcast:31, GCN/CDNA only
+#define GGML_HIP_DPP_ROW_SHR_1       0x111 // row_shr:1
+#define GGML_HIP_DPP_ROW_SHR_2       0x112 // row_shr:2
+#define GGML_HIP_DPP_ROW_SHR_4       0x114 // row_shr:4
+#define GGML_HIP_DPP_ROW_SHR_8       0x118 // row_shr:8
 #define GGML_HIP_DPP_WAVE_ROR_1      0x13c // wave_ror:1
 
 // DS swizzle mask codes.
 #define GGML_HIP_SWIZZLE_SWAP16      0x401F // XOR16 within each 32-lane group
 
-template <int dpp_ctrl, typename T>
+// Lanes excluded from the DPP operation (row_mask, out-of-bounds) receive a fallback value: x, or 0 when mask_fallback_is_x is false.
+template <int dpp_ctrl, int row_mask = 0xf, bool mask_fallback_is_x = true, typename T>
 static __device__ __forceinline__ T ggml_hip_dpp_update(T x) {
     static_assert(sizeof(T) == 4, "DPP updates require 32-bit values");
     union { T t; int i; } value;
     value.t = x;
-    value.i = __builtin_amdgcn_update_dpp(value.i, value.i, dpp_ctrl, 0xf, 0xf, true);
+    const int fallback = mask_fallback_is_x ? value.i : 0;
+    value.i = __builtin_amdgcn_update_dpp(fallback, value.i, dpp_ctrl, row_mask, 0xf, true);
     return value.t;
 }
 
