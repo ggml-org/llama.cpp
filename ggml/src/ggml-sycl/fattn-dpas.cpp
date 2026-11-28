@@ -48,8 +48,19 @@ bool ggml_sycl_flash_attn_ext_dpas_supported(int device, const ggml_tensor * dst
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * sinks = dst->src[4];
 
-    if (Q->type != GGML_TYPE_F32 || (K->type != GGML_TYPE_Q4_0 && K->type != GGML_TYPE_Q8_0) || V->type != K->type ||
-        (sinks && sinks->type != GGML_TYPE_F32)) {
+    const bool f16kv = K->type == GGML_TYPE_F16 && V->type == GGML_TYPE_F16;
+    if (f16kv) {
+        // Experimental F16-KV arm (GGML_SYCL_FA_DPAS_FP16_KG, default 0 = off): decode shapes only.
+        // Reads the F16 cache directly with hf-hf DPAS (same instruction the P.V stage already
+        // uses) -- no cache-format change, no dequant; the F16 rows are the dpas b-operands.
+        if (!g_ggml_sycl_fa_dpas_fp16_kg) {
+            return false;
+        }
+    } else if (Q->type != GGML_TYPE_F32 || (K->type != GGML_TYPE_Q4_0 && K->type != GGML_TYPE_Q8_0) ||
+               V->type != K->type || (sinks && sinks->type != GGML_TYPE_F32)) {
+        return false;
+    }
+    if (Q->type != GGML_TYPE_F32 || (sinks && sinks->type != GGML_TYPE_F32)) {
         return false;
     }
     if (!fattn_dpas_head_ok(K->ne[0]) || V->ne[0] != K->ne[0] || Q->ne[0] != K->ne[0]) {
@@ -63,6 +74,12 @@ bool ggml_sycl_flash_attn_ext_dpas_supported(int device, const ggml_tensor * dst
     }
     if (Q->ne[3] != K->ne[3] || V->ne[3] != K->ne[3]) {
         return false;
+    }
+    if (f16kv) {
+        // D=256 decode shapes: single token (ne01==1) or small verify batches (ne01*G <= 32 rows)
+        if (K->ne[0] != 256 || !(Q->ne[1] == 1 || Q->ne[1] * (Q->ne[2] / K->ne[2]) <= 32)) {
+            return false;
+        }
     }
 
     float max_bias      = 0.0f;
@@ -86,9 +103,11 @@ bool ggml_sycl_flash_attn_ext_dpas_supported(int device, const ggml_tensor * dst
     // q4_0 / q8_0 rows are read as dwords from the dword at or before the row start: rows must start on 2-byte bounds
     // (head sizes with an odd block count, e.g. 96, put every other head 2 bytes into a dword)
     // so a row's first/last dword may hold 2 bytes outside it; aligned dwords never cross the 128-byte buffer alignment
+    // F16 rows are read as 16-byte vectors (the unstaged arms load fa_dpas_int4), so they must be 16-byte aligned
+    const int row_align = f16kv ? 16 : 2;
     for (const ggml_tensor * t : { K, V }) {
-        if (t->nb[0] != ggml_type_size(t->type) || t->nb[1] % 2 != 0 || t->nb[2] % 2 != 0 || t->nb[3] % 2 != 0 ||
-            (uintptr_t) t->data % 2 != 0) {
+        if (t->nb[0] != ggml_type_size(t->type) || t->nb[1] % row_align != 0 || t->nb[2] % row_align != 0 ||
+            t->nb[3] % row_align != 0 || (uintptr_t) t->data % row_align != 0) {
             return false;
         }
     }
@@ -199,9 +218,11 @@ struct fa_dpas_params {
 };
 
 // One work-group = one KV head x nq query tokens x one slice of the keys: S = Q K^T by s8 x s4 / s8 x s8 DPAS on the
-// raw K blocks, online softmax, O^T += V^T P^T by f16 DPAS. ST: stage K/V tiles in SLM (1: 16-byte, 2: dword loads).
+// raw K blocks, online softmax, O^T += V^T P^T by f16 DPAS. KG: key groups per tile (16 keys each, TK = 16*KG).
+// ST: stage K/V tiles in SLM (1: 16-byte, 2: dword loads).
 // LG: 256-register file (no spills at 32 rows, same occupancy). Q8: K/V are q8_0, else q4_0.
-template <int D, int NR16, int KG, int TC, int ST, bool LG, bool Q8>
+// F16: K/V are plain f16 -- hf-hf DPAS both stages, no block unpacking (experimental GGML_SYCL_FA_DPAS_FP16_KG arm).
+template <int D, int NR16, int KG, int TC, int ST, bool LG, bool Q8, bool F16 = false>
 static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int ne03, dpct::queue_ptr stream) {
     constexpr int RMAX  = 16 * NR16;
     constexpr int RTMAX = RMAX / 8;                         // 8-row tiles in Q.K
@@ -213,23 +234,29 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
     constexpr int DPS   = D <= 128 ? 8 : D <= 256 ? 16 : 32; // head dims per sub-group in P.V, inside one 32-dim block
     constexpr int NPV   = D / DPS;                          // sub-groups doing P.V, the rest only reach its barrier
     constexpr bool ALLPV = NPV == FA_DPAS_NSG;              // every sub-group does P.V: no runtime check in the loops
+    static_assert(ST != 3 || ALLPV, "half staging restages V behind a barrier, so every sub-group must do P.V");
     constexpr int XT    = DPS / 8;                          // 8-dim tiles per sub-group in P.V
     constexpr int PS    = TK + 16;                          // f16 row stride of P
-    constexpr int RW    = NB * BB / 4;                      // dwords per row
-    constexpr bool ODD  = (NB * BB) % 4 != 0;               // odd block count: rows may start 2 bytes into a dword
+    constexpr int RW    = F16 ? D / 2 : NB * BB / 4;        // dwords per row
+    constexpr bool ODD  = !F16 && (NB * BB) % 4 != 0;       // odd block count: rows may start 2 bytes into a dword
     constexpr int SW    = RW + 1;                           // odd SLM row stride: no bank conflicts for lane = key
+    constexpr int NC    = D / 16;                           // f16 dpas chunks: 16 dims per hf-hf call
+    // ST == 3: half-staged -- K/V tiles move through SLM in KG/2-key halves so KG=8
+    // fits the same SLM that KG=4 uses; QK^T covers 2x the key-groups per SLM byte
+    static_assert(ST != 3 || (KG % 2 == 0 && TK % 2 == 0), "half staging needs even KG");
     static_assert(D % QK4_0 == 0 && D % DPS == 0 && NPV <= FA_DPAS_NSG && QK4_0 % DPS == 0, "unsupported head size");
     static_assert(ST != 1 || RW % 4 == 0, "16-byte staging needs rows of 16-byte multiples");
+    static_assert(ST != 3 || RW % 4 == 0, "half staging (16-byte) needs rows of 16-byte multiples");
 
     stream->submit([&](sycl::handler & cgh) {
-        sycl::local_accessor<fa_dpas_short8, 1> sQ8(sycl::range<1>(RTMAX * NB * 16), cgh); // Q s8 [tile][block][lane]
-        sycl::local_accessor<fa_dpas_float8, 1> sDQ(sycl::range<1>(RTMAX * NB), cgh);      // Q scales [tile][block]
+        sycl::local_accessor<fa_dpas_short8, 1> sQ8(sycl::range<1>(F16 ? RTMAX * NC * 16 : RTMAX * NB * 16), cgh); // Q s8 / Q f16 [tile][chunk][lane]
+        sycl::local_accessor<fa_dpas_float8, 1> sDQ(sycl::range<1>(F16 ? 1 : RTMAX * NB), cgh);            // Q scales [tile][block]
         sycl::local_accessor<float, 1>          sS(sycl::range<1>(RMAX * TK), cgh);        // S [row][key]
         sycl::local_accessor<fa_dpas_int8, 1>   sP(sycl::range<1>(RMAX * PS / 16), cgh);   // P f16 [row][key]
         sycl::local_accessor<float, 1>          sM(sycl::range<1>(RMAX), cgh);
         sycl::local_accessor<float, 1>          sL(sycl::range<1>(RMAX), cgh);
         sycl::local_accessor<float, 1>          sA(sycl::range<1>(RMAX), cgh);
-        sycl::local_accessor<uint32_t, 1>       sKV(sycl::range<1>(ST ? TK * SW : 1), cgh);
+        sycl::local_accessor<uint32_t, 1>       sKV(sycl::range<1>(ST == 3 ? (TK / 2) * SW : (ST ? TK * SW : 1)), cgh);
         const sycl::nd_range<3> ndr(sycl::range<3>((size_t) ne03 * p.nqc, nkvh, (size_t) p.nsplit * FA_DPAS_WG),
                                     sycl::range<3>(1, 1, FA_DPAS_WG));
         auto kern = [=](sycl::nd_item<3> it) [[sycl::reqd_sub_group_size(16)]] {
@@ -246,10 +273,28 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                 const int lane  = tid % 16;
                 short *   sQs   = (short *) &sQ8[0];
                 short *   sPs   = (short *) &sP[0];
-
-                // Q -> s8, one scale per row and block. Lane l holds the 2 dims of K column elements 2 l, 2 l + 1:
-                // q4_0 packs dims l and l + 16 into byte l, q8_0 stores dims in order
-                for (int e = tid; e < RT * 8 * NB; e += FA_DPAS_WG) {
+                if constexpr (F16) {
+                    // Q -> f16 (scale folded in), staged [row tile][16-dim chunk][lane = dim in chunk][row in tile]:
+                    // lane l of the hf-hf dpas A operand holds Q dim (ct*16 + l) of rows t*8 .. t*8+7
+                    for (int e = tid; e < RT * 8 * NC; e += FA_DPAS_WG) {
+                        const int  r    = e / NC;
+                        const int  ct   = e % NC;
+                        const int  c    = c0 + r / G;
+                        const bool real = r < R && c < p.ne01;
+                        const float * qr = (const float *) (p.Q + seq * p.nb03 + (int64_t) (real ? c : 0) * p.nb01 +
+                                                            (int64_t) (kvh * G + (real ? r % G : 0)) * p.nb02) + ct * 16;
+                        const int t = r / 8;
+                        const int m = r % 8;
+#pragma unroll
+                        for (int l = 0; l < 16; ++l) {
+                            const float x = real ? qr[l] * p.scale : 0.0f;
+                            sQs[(((t * NC + ct) * 16 + l)) * 8 + m] = (short) sycl::bit_cast<uint16_t>(sycl::half(x));
+                        }
+                    }
+                } else {
+                    // Q -> s8, one scale per row and block. Lane l holds the 2 dims of K column elements 2 l, 2 l + 1:
+                    // q4_0 packs dims l and l + 16 into byte l, q8_0 stores dims in order
+                    for (int e = tid; e < RT * 8 * NB; e += FA_DPAS_WG) {
                     const int  r    = e / NB;
                     const int  b    = e % NB;
                     const int  c    = c0 + r / G;
@@ -275,6 +320,7 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                         sQs[((t * NB + b) * 16 + l) * 8 + m] = (short) ((lo & 0xFF) | ((hi & 0xFF) << 8));
                     }
                 }
+                } // else (Q8/Q4_0 Q staging)
                 // rows without a query keep P = 0
                 for (int e = tid; e < RMAX * PS; e += FA_DPAS_WG) {
                     sPs[e] = 0;
@@ -309,8 +355,9 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
 
                 // keys past k_end repeat key k_begin, their scores are -inf
                 auto stage = [&](const char * base, int64_t nb, int t0) {
+                    const int NS = ST == 3 ? TK / 2 : TK;
                     if constexpr (ST == 2) {
-                        for (int e = tid; e < TK * RW; e += FA_DPAS_WG) {
+                        for (int e = tid; e < NS * RW; e += FA_DPAS_WG) {
                             const int key = e / RW;
                             const int q   = e - key * RW;
                             const int j   = t0 + key < k_end ? t0 + key : k_begin;
@@ -318,8 +365,8 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                         }
                         return;
                     }
-                    constexpr int RV  = ST == 1 ? RW / 4 : 1;
-                    constexpr int NV  = TK * RV;
+                    constexpr int RV  = (ST == 1 || ST == 3) ? RW / 4 : 1;
+                    constexpr int NV  = (ST == 3 ? TK / 2 : TK) * RV;
                     constexpr int PER = (NV + FA_DPAS_WG - 1) / FA_DPAS_WG;
                     sycl::uint4 v[PER];
 #pragma unroll
@@ -365,10 +412,11 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                     }
                 };
 
-                // start loading the rows of keys t0 .. t0 + TK - 1 into L1 while the current phase computes
+                // start loading the rows of keys t0 .. t0 + NK - 1 into L1 while the current phase computes
                 auto prefetch_rows = [&](const char * base, int64_t nb, int t0) {
                     constexpr int NL = RW * 4 / 64 + 1; // cache lines per row
-                    for (int e = tid; e < TK * NL; e += FA_DPAS_WG) {
+                    constexpr int NK = ST == 3 ? TK / 2 : TK;
+                    for (int e = tid; e < NK * NL; e += FA_DPAS_WG) {
                         const int j = t0 + e / NL;
                         if (j < k_end) {
                             char * pa = const_cast<char *>(base) + (int64_t) j * nb + (e % NL) * 64;
@@ -377,7 +425,94 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                     }
                 };
 
+                const int nch = (RT + TC - 1) / TC;
                 for (int t0 = k_begin; t0 < k_end; t0 += TK) {
+                    if constexpr (ST == 3) {
+                        // half-staged: keys arrive in two KG/2 halves; QK^T covers 2x the
+                        // key-groups per SLM byte vs ST=1/2 (F16 rows are 2x the dword width)
+                        for (int half = 0; half < 2; ++half) {
+                            stage(Kh, p.nb11, t0 + half * (TK / 2));
+                            it.barrier(sycl::access::fence_space::local_space);
+                            prefetch_rows(Vh, p.nb21, t0 + half * (TK / 2));
+                            for (int job = w; job < (KG / 2) * nch; job += FA_DPAS_NSG) {
+                                const int kgl = job % (KG / 2);
+                                const int ch  = job / (KG / 2);
+                                const int kg  = half * (KG / 2) + kgl;
+                                const int j   = t0 + kg * 16 + lane;
+                                const bool jv = j < k_end;
+                                const char *     kb = Kh + (int64_t) (jv ? j : k_begin) * p.nb11;
+                                fa_dpas_float8 s[TC];
+#pragma unroll
+                                for (int tt = 0; tt < TC; ++tt) {
+                                    s[tt] = 0.0f;
+                                }
+                                if constexpr (F16) {
+#pragma unroll
+                                    for (int tt = 0; tt < TC; ++tt) {
+                                        const int t = ch * TC + tt;
+                                        if (t < RT) {
+#pragma unroll
+                                            for (int ct = 0; ct < NC; ++ct) {
+                                                const int w0 = (kgl * 16 + lane) * SW + ct * 8;
+                                                fa_dpas_int8 kv8 = fa_dpas_int8{ (int) sKV[w0 + 0], (int) sKV[w0 + 1],
+                                                                                 (int) sKV[w0 + 2], (int) sKV[w0 + 3],
+                                                                                 (int) sKV[w0 + 4], (int) sKV[w0 + 5],
+                                                                                 (int) sKV[w0 + 6], (int) sKV[w0 + 7] };
+                                                fa_dpas_f16(sQ8[(t * NC + ct) * 16 + lane], kv8, s[tt]);
+                                            }
+                                        }
+                                    }
+                                } else {
+#pragma unroll
+                                    for (int tt = 0; tt < TC; ++tt) {
+                                        const int t = ch * TC + tt;
+                                        if (t < RT) {
+                                            const int        kp = 0; // ST==3 rows are staged dword-aligned
+                                            const uint32_t * kr = (const uint32_t *) kb;
+                                            fa_dpas_int8 ia;
+#pragma unroll
+                                            for (int b = 0; b < NB; ++b) {
+                                                uint32_t wv[NQ + 1];
+                                                uint32_t sc;
+                                                uint32_t q[NQ];
+                                                load_block(kr, kp, kgl * 16 + lane, b, wv);
+                                                fa_dpas_split_block<NQ>(wv, (b + kp) % 2 != 0, sc, q);
+                                                const float dk = static_cast<float>(sycl::bit_cast<sycl::half>((uint16_t) sc));
+                                                if constexpr (Q8) {
+                                                    const fa_dpas_int8 bv = { (int) q[0], (int) q[1], (int) q[2], (int) q[3],
+                                                                              (int) q[4], (int) q[5], (int) q[6], (int) q[7] };
+                                                    fa_dpas_s8_s8(sQ8[(t * NB + b) * 16 + lane], bv, ia);
+                                                } else {
+                                                    const fa_dpas_int4 bv = { (int) (q[0] ^ 0x88888888u), (int) (q[1] ^ 0x88888888u),
+                                                                              (int) (q[2] ^ 0x88888888u), (int) (q[3] ^ 0x88888888u) };
+                                                    fa_dpas_s8_s4(sQ8[(t * NB + b) * 16 + lane], bv, ia);
+                                                }
+                                                const fa_dpas_float8 ds = sDQ[t * NB + b] * dk;
+                                                s[tt] += __builtin_convertvector(ia, fa_dpas_float8) * ds;
+                                            }
+                                        }
+                                    }
+                                }
+#pragma unroll
+                                for (int tt = 0; tt < TC; ++tt) {
+                                    const int t = ch * TC + tt;
+                                    if (t < RT) {
+#pragma unroll
+                                        for (int m = 0; m < 8; ++m) {
+                                            const int r = t * 8 + m;
+                                            const int c = c0 + r / G;
+                                            if (r < R) {
+                                                const bool  ok = jv && c < p.ne01;
+                                                const float mv = (ok && mrow) ? static_cast<float>(mrow[((int64_t) c * p.nb31) / (int64_t) sizeof(sycl::half) + j]) : 0.0f;
+                                                sS[r * TK + kg * 16 + lane] = ok ? s[tt][m] + mv : -INFINITY;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            it.barrier(sycl::access::fence_space::local_space);
+                        }
+                    } else {
                     if constexpr (ST) {
                         stage(Kh, p.nb11, t0);
                         it.barrier(sycl::access::fence_space::local_space);
@@ -385,7 +520,6 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                     prefetch_rows(Vh, p.nb21, t0);
 
                     // S = Q K^T, job = (key group, TC row tiles)
-                    const int nch = (RT + TC - 1) / TC;
                     for (int job = w; job < KG * nch; job += FA_DPAS_NSG) {
                         const int  kg = job % KG;
                         const int  ch = job / KG;
@@ -399,6 +533,35 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                         for (int tt = 0; tt < TC; ++tt) {
                             s[tt] = 0.0f;
                         }
+                        if constexpr (F16) {
+                            // S = Q K^T in 16-dim hf-hf dpas chunks: lane = key column (b operand = its 16 f16
+                            // dims), A operand lanes = the chunk's dims (one Q f16 per row per lane). The Q
+                            // scale is folded into the staged f16 Q, f32 accumulate inside dpas.
+#pragma unroll
+                            for (int tt = 0; tt < TC; ++tt) {
+                                const int t = ch * TC + tt;
+                                if (t < RT) {
+#pragma unroll
+                                    for (int ct = 0; ct < NC; ++ct) {
+                                        fa_dpas_int8 kv8;
+                                        if constexpr (ST) {
+                                            const int w0 = (kg * 16 + lane) * SW + ct * 8;
+                                            kv8 = fa_dpas_int8{ (int) sKV[w0 + 0], (int) sKV[w0 + 1], (int) sKV[w0 + 2],
+                                                                (int) sKV[w0 + 3], (int) sKV[w0 + 4], (int) sKV[w0 + 5],
+                                                                (int) sKV[w0 + 6], (int) sKV[w0 + 7] };
+                                        } else {
+                                            // direct reads: supported() guarantees 16-byte-aligned rows
+                                            const char * kq = kb + (int64_t) ct * 32;
+                                            const fa_dpas_int4 kv0 = *reinterpret_cast<const fa_dpas_int4 *>(kq);
+                                            const fa_dpas_int4 kv1 = *reinterpret_cast<const fa_dpas_int4 *>(kq + 16);
+                                            kv8 = fa_dpas_int8{ kv0[0], kv0[1], kv0[2], kv0[3],
+                                                                kv1[0], kv1[1], kv1[2], kv1[3] };
+                                        }
+                                        fa_dpas_f16(sQ8[(t * NC + ct) * 16 + lane], kv8, s[tt]);
+                                    }
+                                }
+                            }
+                        } else {
 #pragma unroll
                         for (int b = 0; b < NB; ++b) {
                             uint32_t wv[NQ + 1];
@@ -427,6 +590,7 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                                 }
                             }
                         }
+                        } // else (Q8/Q4_0 QK^T)
 #pragma unroll
                         for (int tt = 0; tt < TC; ++tt) {
                             const int t = ch * TC + tt;
@@ -444,6 +608,7 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                             }
                         }
                     }
+                    } // else (ST 1/2: full-tile staging)
                     it.barrier(sycl::access::fence_space::local_space);
                     if constexpr (ST) {
                         stage(Vh, p.nb21, t0); // the softmax does not use sKV
@@ -491,18 +656,49 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                     }
 #pragma unroll 1
                     for (int kg = 0; kg < ((ALLPV || w < NPV) ? KG : 0); ++kg) {
+                        if constexpr (ST == 3) {
+                            // restage V for the second key half; the barrier is uniform (ALLPV)
+                            if (kg == KG / 2) {
+                                it.barrier(sycl::access::fence_space::local_space);
+                                stage(Vh, p.nb21, t0 + TK / 2);
+                                it.barrier(sycl::access::fence_space::local_space);
+                            }
+                        }
                         const int  j  = t0 + kg * 16 + lane;
                         const bool jv = j < k_end;
                         const char *     vbp = Vh + (int64_t) (jv ? j : k_begin) * p.nb21;
                         const int        vp  = (ST || !ODD) ? 0 : (int) (((uintptr_t) vbp >> 1) & 1);
                         const uint32_t * vr  = (const uint32_t *) (vbp - 2 * vp);
+                        const int        kgl = ST == 3 ? kg % (KG / 2) : kg; // sKV row: staged half-local
                         uint32_t wv[NQ + 1];
                         uint32_t sc;
                         uint32_t q[NQ];
-                        load_block(vr, vp, kg * 16 + lane, vb, wv);
+                        load_block(vr, vp, kgl * 16 + lane, vb, wv);
                         fa_dpas_split_block<NQ>(wv, (vb + vp) % 2 != 0, sc, q);
                         const float dv = jv ? static_cast<float>(sycl::bit_cast<sycl::half>((uint16_t) sc)) : 0.0f;
                         fa_dpas_short8 va[XT];
+                        if constexpr (F16) {
+                            // plain f16 V: this sub-group owns dims w*DPS .. w*DPS+DPS (exclusive), 8 per x chunk;
+                            // dword i of a chunk holds dims (base + 2i, base + 2i + 1)
+#pragma unroll
+                            for (int x = 0; x < XT; ++x) {
+                                const int d0 = w * DPS + x * 8;
+                                if constexpr (ST) {
+                                    const int w0 = (kgl * 16 + lane) * SW + d0 / 2;
+                                    const uint32_t c0w = sKV[w0 + 0], c1w = sKV[w0 + 1], c2w = sKV[w0 + 2], c3w = sKV[w0 + 3];
+                                    va[x] = fa_dpas_short8{ (short) (c0w & 0xFFFFu), (short) (c0w >> 16),
+                                                            (short) (c1w & 0xFFFFu), (short) (c1w >> 16),
+                                                            (short) (c2w & 0xFFFFu), (short) (c2w >> 16),
+                                                            (short) (c3w & 0xFFFFu), (short) (c3w >> 16) };
+                                } else {
+                                    const fa_dpas_int4 vv = *reinterpret_cast<const fa_dpas_int4 *>(vbp + d0 * 2);
+                                    va[x] = fa_dpas_short8{ (short) (vv[0] & 0xFFFFu), (short) (vv[0] >> 16),
+                                                            (short) (vv[1] & 0xFFFFu), (short) (vv[1] >> 16),
+                                                            (short) (vv[2] & 0xFFFFu), (short) (vv[2] >> 16),
+                                                            (short) (vv[3] & 0xFFFFu), (short) (vv[3] >> 16) };
+                                }
+                            }
+                        } else {
 #pragma unroll
                         for (int x = 0; x < XT; ++x) {
 #pragma unroll
@@ -518,6 +714,7 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
                                 va[x][m] = (short) sycl::bit_cast<uint16_t>(sycl::half((float) v * dv));
                             }
                         }
+                        } // else (Q8/Q4_0 V decode)
 #pragma unroll
                         for (int t = 0; t < NR16; ++t) {
                             const fa_dpas_int8 pb = sP[((t * 16 + lane) * PS + kg * 16) / 16];
@@ -564,7 +761,7 @@ static void fattn_dpas_kernel(const fa_dpas_params p, const int nkvh, const int 
     });
 }
 
-template <int D, int NR16, int KG, int TC, int ST, bool Q8>
+template <int D, int NR16, int KG, int TC, int ST, bool Q8, bool F16 = false>
 static void fattn_dpas_case(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     constexpr int TK = 16 * KG;
 
@@ -627,9 +824,9 @@ static void fattn_dpas_case(ggml_backend_sycl_context & ctx, ggml_tensor * dst) 
     dpct::queue_ptr stream = ctx.stream();
     // the large register file pays off for 32-row launches from about 4K keys
     if (NR16 == 2 && ne11 >= 4096) {
-        fattn_dpas_kernel<D, NR16, KG, TC, ST, true, Q8>(p, nkvh, ne03, stream);
+        fattn_dpas_kernel<D, NR16, KG, TC, ST, true, Q8, F16>(p, nkvh, ne03, stream);
     } else {
-        fattn_dpas_kernel<D, NR16, KG, TC, ST, false, Q8>(p, nkvh, ne03, stream);
+        fattn_dpas_kernel<D, NR16, KG, TC, ST, false, Q8, F16>(p, nkvh, ne03, stream);
     }
 
     if (nsplit > 1) {
@@ -663,7 +860,15 @@ template <bool Q8> static void fattn_dpas_dispatch(ggml_backend_sycl_context & c
                     (uintptr_t) t->data % 16 == 0;
     }
 
-    // single token decode: staged K/V tiles are faster at long context
+    // single token decode: staged K/V tiles are faster at long context.
+    // GGML_SYCL_FA_DPAS_Q8_0_KG=4 re-tiles the Q8_0 arm: the staged tile halves to ~17.7 KB SLM (KG is
+    // the number of key groups per Q.K^T tile, 16 keys per group), doubling work-group co-residency --
+    // measured +9.8-10.5% tg128 at 128k context on 27B models. Any other value keeps the upstream tiling.
+    const int kgq = g_ggml_sycl_fa_dpas_q8_0_kg;
+    if (Q8 && D == 256 && ne01 == 1 && G <= 16 && kgq == 4 && aligned16) {
+        fattn_dpas_case<256, 1, 4, 1, 1, Q8>(ctx, dst);
+        return;
+    }
     if (D == 256 && ne01 == 1 && G <= 16 && aligned16) {
         fattn_dpas_case<256, 1, 8, 1, 1, Q8>(ctx, dst);
         return;
@@ -703,9 +908,44 @@ template <bool Q8> static void fattn_dpas_dispatch(ggml_backend_sycl_context & c
 #undef FATTN_DPAS_D
 }
 
+// experimental F16-KV arm (GGML_SYCL_FA_DPAS_FP16_KG): D=256 decode shapes only
+// (single token, or verify batches up to 32 rows). supported() gates the same shapes, the knob
+// and the 16-byte alignment of the K/V rows, so no per-arm alignment checks are needed here.
+static void fattn_dpas_dispatch_f16(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
+    const ggml_tensor * Q = dst->src[0];
+    const ggml_tensor * K = dst->src[1];
+
+    const int D    = K->ne[0];
+    const int G    = Q->ne[2] / K->ne[2];
+    const int ne01 = Q->ne[1];
+
+    // GGML_SYCL_FA_DPAS_FP16_KG selects the single-token arm (default 0 = off, checked in supported()):
+    //   4: staged 64-key tiles (KG=4, ST=1) -- measured best at deep KV
+    //   8: half-staged 128-key tiles (KG=8, ST=3) -- 2x the QK^T key-groups per SLM byte, but 2x the
+    //      stage passes and barriers, measured slower than KG=4 at deep KV
+    const int kgf = g_ggml_sycl_fa_dpas_fp16_kg;
+    if (D == 256 && ne01 == 1 && G <= 16 && kgf == 4) {
+        fattn_dpas_case<256, 1, 4, 1, 1, false, true>(ctx, dst);
+        return;
+    }
+    if (D == 256 && ne01 == 1 && G <= 16 && kgf == 8) {
+        fattn_dpas_case<256, 1, 8, 1, 3, false, true>(ctx, dst);
+        return;
+    }
+    // small verify batches (speculative decoding n_q = 2..5, or single token with more than 16 query
+    // heads per KV head): unstaged 32-row case
+    if (D == 256 && ne01 * G <= 32) {
+        fattn_dpas_case<256, 2, 8, 2, 0, false, true>(ctx, dst);
+        return;
+    }
+    GGML_ABORT("fattn-dpas f16: unsupported shape D=%d ne01=%d", (int) D, ne01);
+}
+
 void ggml_sycl_flash_attn_ext_dpas(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     if (dst->src[1]->type == GGML_TYPE_Q8_0) {
         fattn_dpas_dispatch<true>(ctx, dst);
+    } else if (dst->src[1]->type == GGML_TYPE_F16) {
+        fattn_dpas_dispatch_f16(ctx, dst);
     } else {
         fattn_dpas_dispatch<false>(ctx, dst);
     }
