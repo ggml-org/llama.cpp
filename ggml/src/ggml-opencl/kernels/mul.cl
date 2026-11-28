@@ -150,3 +150,30 @@ kernel void kernel_mul_row_f16(
     uint idx1 = gid - (gid/ne)*ne; // get_global_id(0) % ne
     dst[gid] = src0[gid] * src1[idx1];
 }
+
+kernel void kernel_mul_mat_scale(
+        global char * dst,
+        ulong offsetd,
+        global const char * scale,
+        ulong offsets,
+        ulong channel_stride,
+        ulong expert_stride,
+        global const char * ids,
+        ulong offseti,
+        ulong ids_nb0,
+        ulong ids_nb1,
+        long n_expert
+) {
+    const size_t channel = get_global_id(0);
+    const size_t slot = get_global_id(1);
+    const size_t batch = get_global_id(2);
+    int expert = 0;
+    if (ids) {
+        expert = *(global const int *)(ids + offseti + slot*ids_nb0 + batch*ids_nb1);
+        if (expert < 0 || expert >= n_expert) {
+            return;
+        }
+    }
+    const size_t i = channel + get_global_size(0)*(slot + get_global_size(1)*batch);
+    ((global float *)(dst + offsetd))[i] *= *(global const float *)(scale + offsets + channel*channel_stride + expert*expert_stride);
+}
