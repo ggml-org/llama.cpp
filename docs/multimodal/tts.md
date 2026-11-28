@@ -17,6 +17,7 @@ Supported models:
 - [MiniMax Music 3](#minimax-music-3) (songs)
 - [Hibiki](#hibiki) (speech translation, `llama-server` realtime endpoint only)
 - [Kokoro](#kokoro)
+- [Inflect Mini v3](#inflect-mini-v3)
 - [tiny-voca](#tiny-voca)
 - [VoxCPM2](#voxcpm2)
 
@@ -442,6 +443,39 @@ python -m nltk.downloader averaged_perceptron_tagger_eng
 ```
 
 Without them the converter writes no `tts` template, and the prompt must be a phoneme string (as produced by misaki).
+
+## Inflect Mini v3
+
+A smaller model with the layout of [Kokoro](#kokoro), English only.
+
+Available params:
+- `--tts-voice` can be `hope` (default), `sophia`, `cassidy`, `james`, `jasper`, `mark`
+- Note: `--tts-speaker-file` is not supported, the model has no voice cloning
+- Note: sampling params are not used, the model is not autoregressive. `--seed` only changes the noise of the vocoder source
+- `speed` (`llama-server` only) changes the speaking rate, e.g. `1.5`; `loudness` is not supported
+
+Example usage:
+
+```sh
+llama-tts -m inflect-mini.gguf \
+    -mm mmproj-inflect-mini.gguf \
+    -p "Hello world" \
+    --tts-voice cassidy \
+    --output out.wav
+```
+
+The text to phonemes step is the one of Kokoro, see the notes there. The 48 kHz enhancer, the event tags (`[laugh]`, ...), the pitch component of `cassidy` and the Voice Tuner of the reference are not supported.
+
+**Note for GGUF conversion:**
+
+Download `config.json` and `core/baseline/models/mini/weights.pt` from [Inflect-Mini-v3](https://huggingface.co/owensong/Inflect-Mini-v3), keep the directory layout:
+
+```sh
+python convert_hf_to_gguf.py path/to/Inflect-Mini-v3 --outfile inflect-mini.gguf
+python convert_hf_to_gguf.py path/to/Inflect-Mini-v3 --mmproj --outfile mmproj-inflect-mini.gguf
+```
+
+The `tts` template needs the same python packages as Kokoro (`misaki`, `nltk`).
 
 ## tiny-voca
 
