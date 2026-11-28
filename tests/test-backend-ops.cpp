@@ -2280,6 +2280,20 @@ struct test_unary_softplus_neg : public test_unary {
     }
 };
 
+struct test_unary_elu_small : public test_unary {
+    test_unary_elu_small() : test_unary(GGML_UNARY_OP_ELU) {}
+
+    std::string vars() override {
+        return test_unary::vars() + ",small";
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+            init_tensor_uniform(t, -1e-5f, 0.0f);
+        }
+    }
+};
+
 // GGML_OP_GLU
 struct test_glu : public test_case {
     const ggml_glu_op op;
@@ -12007,6 +12021,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
 
     // unary ops
     test_cases.emplace_back(new test_unary_softplus_neg());
+    test_cases.emplace_back(new test_unary_elu_small());
     for (ggml_type type : {GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_BF16}) {
         for (int v : {0, 1}) {
             for (int op = 0; op < GGML_UNARY_OP_COUNT; op++) {
