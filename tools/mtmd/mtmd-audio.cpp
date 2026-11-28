@@ -1544,6 +1544,10 @@ bool mtmd_audio_preprocessor_lfm3a::process(const float *                 sample
 }
 
 //
+// mtmd_audio_preprocessor_wemm_audio
+// WeMM uses the standard HF WhisperFeatureExtractor: reuse mtmd_audio_preprocessor_whisper
+// (see mtmd-audio.h). No custom mel needed.
+
 // mtmd_audio_preprocessor_granite_speech
 //
 

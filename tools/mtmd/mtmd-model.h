@@ -1552,6 +1552,14 @@ struct mtmd_model {
     ggml_tensor * audio_out_proj_w = nullptr;
     ggml_tensor * audio_out_proj_b = nullptr;
 
+    // WeMM-Video audio encoder (whisper + BLIP-style qformer, arch=wemm_audio)
+    ggml_tensor * wemm_q_tokens      = nullptr; // [1, 4104] learnable query
+    ggml_tensor * wemm_qf_ln_w       = nullptr; // qformer embeddings LayerNorm (present but unused in graph)
+    ggml_tensor * wemm_qf_ln_b       = nullptr;
+    ggml_tensor * wemm_audio_proj_w  = nullptr; // [2048, 4104]
+    ggml_tensor * wemm_audio_proj_b  = nullptr;
+    std::vector<mtmd_layer> wemm_qf_layers;     // 2 BERT layers (self-attn / cross-attn / ffn)
+
     // granite_speech encoder
     ggml_tensor * inp_proj_w    = nullptr;
     ggml_tensor * inp_proj_b    = nullptr;

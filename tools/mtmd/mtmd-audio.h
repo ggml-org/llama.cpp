@@ -179,6 +179,14 @@ struct mtmd_audio_preprocessor_lfm3a : mtmd_audio_preprocessor {
     mtmd_audio_cache cache;
 };
 
+struct mtmd_audio_preprocessor_wemm_audio : mtmd_audio_preprocessor_whisper {
+    // WeMM-Video uses the standard HF WhisperFeatureExtractor (processing_wemm.py): Slaney mel,
+    // power spectrum, log10 + whisper clamp/scale, 30s (3000-frame) chunks -- exactly what
+    // mtmd_audio_preprocessor_whisper implements. The earlier custom variant (HTK scale,
+    // magnitude, natural log) degraded badly on dense cartoon soundtracks.
+    mtmd_audio_preprocessor_wemm_audio(const mtmd_model * model) : mtmd_audio_preprocessor_whisper(model) {}
+};
+
 struct mtmd_audio_preprocessor_granite_speech : mtmd_audio_preprocessor {
     mtmd_audio_preprocessor_granite_speech(const mtmd_model * model) : mtmd_audio_preprocessor(model) {}
     void initialize() override;

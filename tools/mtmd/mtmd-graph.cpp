@@ -948,6 +948,10 @@ std::unique_ptr<mtmd_graph> mtmd_get_graph_builder(mtmd_subcontext * ctx, const 
             {
                 builder = std::make_unique<mtmd_graph_gemma4ua>(ctx, img);
             } break;
+        case PROJECTOR_TYPE_WEMM_AUDIO:
+            {
+                builder = std::make_unique<mtmd_graph_wemm_audio>(ctx, img);
+            } break;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             {
                 builder = std::make_unique<mtmd_graph_granite_speech>(ctx, img);

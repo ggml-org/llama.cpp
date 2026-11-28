@@ -151,6 +151,17 @@ struct mtmd_model_loader {
             model.proj_type = projector_type_from_string(proj_type);
 
             if (model.proj_type == PROJECTOR_TYPE_UNKNOWN) {
+                // fallback: try general.architecture as the projector name.
+                // WeMM-Video audio.gguf ships only general.architecture = "wemm_audio"
+                // without a clip.audio.projector_type KV, so this path resolves it.
+                get_string("general.architecture", proj_type, false);
+                model.proj_type = projector_type_from_string(proj_type);
+                if (model.proj_type != PROJECTOR_TYPE_UNKNOWN) {
+                    LOG_INF("%s: projector type resolved from general.architecture: %s\n", __func__, proj_type.c_str());
+                }
+            }
+
+            if (model.proj_type == PROJECTOR_TYPE_UNKNOWN) {
                 throw std::runtime_error(mtmd_format("%s: unknown projector type: %s\n", __func__, proj_type.c_str()));
             }
 
@@ -1340,6 +1351,22 @@ struct mtmd_model_loader {
                         hparams.eps               = 1e-6f;
                         hparams.n_mel_bins        = 640;
                     } break;
+                case PROJECTOR_TYPE_WEMM_AUDIO:
+                    {
+                        // WeMM-Video: whisper-style mel, 30s chunks, 128 mel bins
+                        hparams.audio_chunk_len        = 30;
+                        hparams.audio_sample_rate      = 16000;
+                        hparams.audio_n_fft            = 400;
+                        hparams.audio_window_len       = 400;
+                        hparams.audio_hop_len          = 160;
+                        hparams.n_mel_bins             = 128;
+                        // whisper encoder dims (TODO: parse from wemm.audio.config JSON)
+                        hparams.n_layer                = 32;
+                        hparams.n_embd                 = 1280;
+                        hparams.n_head                 = 20;
+                        hparams.n_ff                   = 5120;
+                        hparams.ffn_op                 = FFN_GELU_ERF;
+                    } break;
                 case PROJECTOR_TYPE_GRANITE_SPEECH:
                     {
                         hparams.audio_chunk_len        = 0;
@@ -1652,6 +1679,7 @@ struct mtmd_model_loader {
         model.lfm3vl_embedding_norm_w = get_tensor(mtmd_format(TN_LFM3VL_EMBEDDING_NORM, prefix, "weight"), false);
 
         const bool has_standard_layers = (
+            model.proj_type != PROJECTOR_TYPE_WEMM_AUDIO &&
             model.proj_type != PROJECTOR_TYPE_GEMMA3NV &&
             model.proj_type != PROJECTOR_TYPE_QWEN3TTS_SPKENC &&
             model.proj_type != PROJECTOR_TYPE_ZONOS3_SPKENC &&
@@ -2533,6 +2561,75 @@ struct mtmd_model_loader {
                     model.mm_1_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 1, "bias"));
                     model.mm_2_w = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "weight"));
                     model.mm_2_b = get_tensor(mtmd_format(TN_MM_AUDIO_MLP, 3, "bias"));
+                } break;
+            case PROJECTOR_TYPE_WEMM_AUDIO:
+                {
+                    // WeMM audio: tensors keep their original a.* names from the official export
+                    model.conv1d_1_w = get_tensor("a.conv1.weight");
+                    model.conv1d_1_b = get_tensor("a.conv1.bias");
+                    model.conv1d_2_w = get_tensor("a.conv2.weight");
+                    model.conv1d_2_b = get_tensor("a.conv2.bias");
+                    model.position_embeddings = get_tensor("a.embed_positions.weight");
+                    model.norm_embd_w = get_tensor("a.layer_norm.weight");
+                    model.norm_embd_b = get_tensor("a.layer_norm.bias");
+                    model.wemm_q_tokens     = get_tensor("a.q_tokens");
+                    model.wemm_qf_ln_w      = get_tensor("a.qf.embeddings.LayerNorm.weight");
+                    model.wemm_qf_ln_b      = get_tensor("a.qf.embeddings.LayerNorm.bias");
+                    model.wemm_audio_proj_w = get_tensor("a.audio_proj.weight");
+                    model.wemm_audio_proj_b = get_tensor("a.audio_proj.bias");
+                    // whisper encoder layers -> generic vit layer fields
+                    // official export uses HF names: q_proj/k_proj/v_proj; k/v projections
+                    // carry no bias for k (v_proj.bias exists), so key.bias stays optional
+                    model.layers.resize(hparams.n_layer);
+                    for (int il = 0; il < hparams.n_layer; ++il) {
+                        auto & L = model.layers[il];
+                        L.q_w = get_tensor(mtmd_format("a.layers.%d.self_attn.q_proj.weight", il));
+                        L.q_b = get_tensor(mtmd_format("a.layers.%d.self_attn.q_proj.bias", il));
+                        L.k_w = get_tensor(mtmd_format("a.layers.%d.self_attn.k_proj.weight", il));
+                        L.k_b = get_tensor(mtmd_format("a.layers.%d.self_attn.k_proj.bias", il), false);
+                        L.v_w = get_tensor(mtmd_format("a.layers.%d.self_attn.v_proj.weight", il));
+                        L.v_b = get_tensor(mtmd_format("a.layers.%d.self_attn.v_proj.bias", il), false);
+                        L.o_w = get_tensor(mtmd_format("a.layers.%d.self_attn.out_proj.weight", il));
+                        L.o_b = get_tensor(mtmd_format("a.layers.%d.self_attn.out_proj.bias", il));
+                        L.ln_1_w   = get_tensor(mtmd_format("a.layers.%d.self_attn_layer_norm.weight", il));
+                        L.ln_1_b   = get_tensor(mtmd_format("a.layers.%d.self_attn_layer_norm.bias", il));
+                        L.ff_up_w  = get_tensor(mtmd_format("a.layers.%d.fc1.weight", il));
+                        L.ff_up_b  = get_tensor(mtmd_format("a.layers.%d.fc1.bias", il));
+                        L.ff_down_w = get_tensor(mtmd_format("a.layers.%d.fc2.weight", il));
+                        L.ff_down_b = get_tensor(mtmd_format("a.layers.%d.fc2.bias", il));
+                        L.ln_2_w   = get_tensor(mtmd_format("a.layers.%d.final_layer_norm.weight", il));
+                        L.ln_2_b   = get_tensor(mtmd_format("a.layers.%d.final_layer_norm.bias", il));
+                    }
+                    model.wemm_qf_layers.resize(2);
+                    for (int il = 0; il < 2; ++il) {
+                        auto & L = model.wemm_qf_layers[il];
+                        L.q_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.self.query.weight", il));
+                        L.q_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.self.query.bias", il));
+                        L.k_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.self.key.weight", il));
+                        L.k_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.self.key.bias", il));
+                        L.v_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.self.value.weight", il));
+                        L.v_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.self.value.bias", il));
+                        L.o_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.output.dense.weight", il));
+                        L.o_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.output.dense.bias", il));
+                        L.ln_1_w   = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.output.LayerNorm.weight", il));
+                        L.ln_1_b   = get_tensor(mtmd_format("a.qf.encoder.layer.%d.attention.output.LayerNorm.bias", il));
+                        L.cross_attn_q_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.query.weight", il));
+                        L.cross_attn_q_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.query.bias", il));
+                        L.cross_attn_k_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.key.weight", il));
+                        L.cross_attn_k_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.key.bias", il));
+                        L.cross_attn_v_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.value.weight", il));
+                        L.cross_attn_v_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.self.value.bias", il));
+                        L.cross_attn_o_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.output.dense.weight", il));
+                        L.cross_attn_o_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.output.dense.bias", il));
+                        L.cross_attn_norm_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.output.LayerNorm.weight", il));
+                        L.cross_attn_norm_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.crossattention.output.LayerNorm.bias", il));
+                        L.ff_up_w   = get_tensor(mtmd_format("a.qf.encoder.layer.%d.intermediate_query.dense.weight", il));
+                        L.ff_up_b   = get_tensor(mtmd_format("a.qf.encoder.layer.%d.intermediate_query.dense.bias", il));
+                        L.ff_down_w = get_tensor(mtmd_format("a.qf.encoder.layer.%d.output_query.dense.weight", il));
+                        L.ff_down_b = get_tensor(mtmd_format("a.qf.encoder.layer.%d.output_query.dense.bias", il));
+                        L.ln_2_w    = get_tensor(mtmd_format("a.qf.encoder.layer.%d.output_query.LayerNorm.weight", il));
+                        L.ln_2_b    = get_tensor(mtmd_format("a.qf.encoder.layer.%d.output_query.LayerNorm.bias", il));
+                    }
                 } break;
             case PROJECTOR_TYPE_ULTRAVOX:
                 {
@@ -5082,6 +5179,12 @@ int mtmd_model::n_output_tokens(const mtmd_image_f32 * img) const {
                 const int group_size = params.audio_local_group_size;
                 n_patches = (n + group_size - 1) / group_size;
             } break;
+        case PROJECTOR_TYPE_WEMM_AUDIO:
+            {
+                // mel frames -> conv stride 2 -> whisper frames -> 5-frame qformer windows
+                const int n_whisper = (img->nx() + 1) / 2;
+                n_patches = (n_whisper + 4) / 5;
+            } break;
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             {
                 const int ws = hparams.audio_proj_window_size;
@@ -5298,6 +5401,8 @@ int mtmd_model::n_mmproj_embd() const {
         case PROJECTOR_TYPE_D1OMNI_A:
         case PROJECTOR_TYPE_LFM3A:
             return mm_3_w->ne[1];
+        case PROJECTOR_TYPE_WEMM_AUDIO:
+            return wemm_audio_proj_w->ne[1];
         case PROJECTOR_TYPE_GRANITE_SPEECH:
             return qf_proj_blocks[0].qf_proj_linear_w->ne[1];
         case PROJECTOR_TYPE_GRANITE4_VISION:

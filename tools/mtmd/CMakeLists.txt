@@ -104,6 +104,7 @@ add_library(mtmd
             models/step3vl.cpp
             models/siglip.cpp
             models/whisper-enc.cpp
+            models/wemm-audio.cpp
             models/voxtral-rt.cpp
             models/deepseekocr.cpp
             models/deepseekocr2.cpp

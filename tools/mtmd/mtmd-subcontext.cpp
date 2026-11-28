@@ -1873,8 +1873,10 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_ZONOS3_SPKENC:
         case PROJECTOR_TYPE_FISH_S2_SPKENC:
         case PROJECTOR_TYPE_VOXCPM2_SPKENC:
+        case PROJECTOR_TYPE_WEMM_AUDIO:
             {
-                // do nothing
+                // do nothing: WeMM audio embeddings are 1D sequential (one token per 0.1s chunk),
+                // no layout/rope/positions input is needed
             } break;
         case PROJECTOR_TYPE_CHATTERBOX_SPKENC:
             {
