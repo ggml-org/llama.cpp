@@ -1654,7 +1654,11 @@ class ModelBase:
                 data_qtype: gguf.GGMLQuantizationType | bool = self.tensor_force_quant(name, new_name, bid, n_dims)
 
                 # Most of the codebase that takes in 1D tensors or norms only handles F32 tensors
-                if n_dims <= 1 or new_name.endswith("_norm.weight"):
+                # These scale roles are cast to F32 by the graph before arithmetic.
+                if n_dims <= 1 and not (
+                    data_qtype in (gguf.GGMLQuantizationType.F16, gguf.GGMLQuantizationType.BF16)
+                    and any(self.match_model_tensor_name(new_name, key, bid) for key in gguf.DORY_SCALE_TENSORS)
+                ) or new_name.endswith("_norm.weight"):
                     data_qtype = gguf.GGMLQuantizationType.F32
 
                 if data_qtype is False and self._tensor_requires_f32(new_name, bid, n_dims):

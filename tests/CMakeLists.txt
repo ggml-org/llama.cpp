@@ -230,6 +230,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 endif()
 
 llama_build(test-llama-archs.cpp)
+llama_test(test-llama-archs NAME test-llama-archs-dory LABEL "main behavior backend" ARGS -a dory -b CPU -s 1)
+set_tests_properties(test-llama-archs-dory PROPERTIES ENVIRONMENT "GGML_SCHED_DEBUG_REALLOC=1")
 if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
     llama_build(test-fp8.cpp)
     set(FP8_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models-fp8")
@@ -449,3 +451,10 @@ if (TARGET gguf-model-data)
     target_link_libraries(test-export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(test-export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+
+llama_test_cmd(python3
+    NAME test-conversion-dory
+    LABEL "python behavior"
+    WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    ARGS -m unittest discover -s tests -p test_conversion_dory.py -v
+)
