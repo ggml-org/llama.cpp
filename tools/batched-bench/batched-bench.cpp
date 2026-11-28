@@ -65,6 +65,9 @@ int llama_batched_bench(int argc, char ** argv) {
         return 1;
     }
 
+    common_threadpools threadpools;
+    threadpools.init(ctx, params);
+
     const llama_vocab * vocab   = llama_model_get_vocab(model);
     const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
 
