@@ -1152,6 +1152,7 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
             } break;
         case PROJECTOR_TYPE_QWEN2VL:
         case PROJECTOR_TYPE_QWEN3VL:
+        case PROJECTOR_TYPE_QWEN3VL_MLP:
         case PROJECTOR_TYPE_LING3VL:
         case PROJECTOR_TYPE_GLM4V:
         case PROJECTOR_TYPE_GLM5V:

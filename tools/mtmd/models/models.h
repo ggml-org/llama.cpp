@@ -64,6 +64,14 @@ struct mtmd_graph_qwen2vl : mtmd_graph {
 struct mtmd_graph_qwen3vl : mtmd_graph_qwen2vl {
     mtmd_graph_qwen3vl(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph_qwen2vl(ctx, img) {}
     ggml_cgraph * build() override;
+    // extra projector applied on the merger output (default: identity)
+    virtual ggml_tensor * build_mmproj_extra(ggml_tensor * embeddings) { return embeddings; }
+};
+
+// qwen3vl ViT + merger + custom MLP projector: RMSNorm -> Linear -> GELU(erf) -> Linear
+struct mtmd_graph_qwen3vl_mlp : mtmd_graph_qwen3vl {
+    mtmd_graph_qwen3vl_mlp(mtmd_subcontext * ctx, const mtmd_image_f32 & img) : mtmd_graph_qwen3vl(ctx, img) {}
+    ggml_tensor * build_mmproj_extra(ggml_tensor * embeddings) override;
 };
 
 struct mtmd_graph_magevl : mtmd_graph {
