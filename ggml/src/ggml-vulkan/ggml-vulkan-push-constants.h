@@ -541,6 +541,7 @@ struct vk_op_topk_moe_push_constants {
 struct vk_op_add_id_push_constants {
     uint32_t ne0;
     uint32_t ne1;
+    uint32_t ne2;
     uint32_t s01;
     uint32_t s02;
     uint32_t s11;
