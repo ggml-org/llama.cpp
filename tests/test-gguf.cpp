@@ -53,6 +53,7 @@ enum handcrafted_file_type {
     HANDCRAFTED_DATA_BAD_ALIGN             =  15 + offset_has_data,
     HANDCRAFTED_DATA_INCONSISTENT_ALIGN    =  20 + offset_has_data,
     HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW     =  30 + offset_has_data,
+    HANDCRAFTED_DATA_ZERO_DIM_THEN_BIG     =  40 + offset_has_data,
     HANDCRAFTED_DATA_SUCCESS               = 800 + offset_has_data,
     HANDCRAFTED_DATA_CUSTOM_ALIGN          = 810 + offset_has_data,
 };
@@ -94,6 +95,7 @@ static std::string handcrafted_file_type_name(const enum handcrafted_file_type h
         case HANDCRAFTED_DATA_BAD_ALIGN:             return "DATA_BAD_ALIGN";
         case HANDCRAFTED_DATA_INCONSISTENT_ALIGN:    return "DATA_INCONSISTENT_ALIGN";
         case HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW:     return "DATA_MEM_SIZE_OVERFLOW";
+        case HANDCRAFTED_DATA_ZERO_DIM_THEN_BIG:     return "DATA_ZERO_DIM_THEN_BIG";
         case HANDCRAFTED_DATA_SUCCESS:               return "DATA_SUCCESS";
         case HANDCRAFTED_DATA_CUSTOM_ALIGN:          return "DATA_CUSTOM_ALIGN";
     }
@@ -424,6 +426,9 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
             n_dims = 2;
         }
+        if (hft == HANDCRAFTED_DATA_ZERO_DIM_THEN_BIG) {
+            n_dims = GGML_MAX_DIMS;
+        }
         if (hft == HANDCRAFTED_TENSORS_BAD_N_DIMS) {
             const uint32_t n_dims_bad = GGML_MAX_DIMS + 1;
             helper_write(file, n_dims_bad);
@@ -439,6 +444,13 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         } else if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
             const int64_t zero_shape[2] = { shape[0], 0 };
             helper_write(file, zero_shape, 2*sizeof(int64_t));
+        } else if (hft == HANDCRAFTED_DATA_ZERO_DIM_THEN_BIG) {
+            // A zero dimension followed by dimensions whose product overflows int64_t.
+            // The tensor really has 0 elements, but the running product must not be
+            // collapsed to 0 by the zero dimension, or the remaining dimensions go
+            // unchecked and ggml_new_tensor() aborts on them instead.
+            const int64_t zero_then_big[GGML_MAX_DIMS] = { 281474976579584, 0, 63744, 919123001344 };
+            helper_write(file, zero_then_big, GGML_MAX_DIMS*sizeof(int64_t));
         } else if (hft == HANDCRAFTED_TENSORS_NE_TOO_BIG){
             const int64_t big_dim = 4*int64_t(INT32_MAX);
             for (uint32_t j = 0; j < n_dims; ++j) {
@@ -470,7 +482,7 @@ static FILE * get_handcrafted_file(const unsigned int seed, const enum handcraft
         for (uint32_t i = 1; i < n_dims; ++i) {
             ne *= shape[i];
         }
-        if (hft == HANDCRAFTED_TENSORS_ZERO_DIM) {
+        if (hft == HANDCRAFTED_TENSORS_ZERO_DIM || hft == HANDCRAFTED_DATA_ZERO_DIM_THEN_BIG) {
             ne = 0;
         }
 
@@ -796,6 +808,7 @@ static std::pair<int, int> test_handcrafted_file(const unsigned int seed) {
         HANDCRAFTED_DATA_BAD_ALIGN,
         HANDCRAFTED_DATA_INCONSISTENT_ALIGN,
         HANDCRAFTED_DATA_MEM_SIZE_OVERFLOW,
+        HANDCRAFTED_DATA_ZERO_DIM_THEN_BIG,
         HANDCRAFTED_DATA_SUCCESS,
         HANDCRAFTED_DATA_CUSTOM_ALIGN,
     };
