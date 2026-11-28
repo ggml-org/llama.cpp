@@ -112,17 +112,20 @@ void ggml_gemv_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
             const int8_t * y_lo = a_ptr[l].qs;
             const int8_t * y_hi = y_lo + qk / 2;
 
-            int16x8_t v_sumi = vec_splats((int16_t)0);
+            const int16x8_t v_zero = vec_splats((int16_t)0);
 
-            v_sumi = ggml_vec_dot_s16(v_sumi, v_x0l, ggml_vec_xl_s8x4_splat(y_lo +  0));
-            v_sumi = ggml_vec_dot_s16(v_sumi, v_x1l, ggml_vec_xl_s8x4_splat(y_lo +  4));
-            v_sumi = ggml_vec_dot_s16(v_sumi, v_x2l, ggml_vec_xl_s8x4_splat(y_lo +  8));
-            v_sumi = ggml_vec_dot_s16(v_sumi, v_x3l, ggml_vec_xl_s8x4_splat(y_lo + 12));
+            // separate sums, a long multiply-add chain is slow
+            int16x8_t v_sumi0 = ggml_vec_dot_s16(v_zero, v_x0l, ggml_vec_xl_s8x4_splat(y_lo +  0));
+            int16x8_t v_sumi1 = ggml_vec_dot_s16(v_zero, v_x1l, ggml_vec_xl_s8x4_splat(y_lo +  4));
+            int16x8_t v_sumi2 = ggml_vec_dot_s16(v_zero, v_x2l, ggml_vec_xl_s8x4_splat(y_lo +  8));
+            int16x8_t v_sumi3 = ggml_vec_dot_s16(v_zero, v_x3l, ggml_vec_xl_s8x4_splat(y_lo + 12));
 
-            v_sumi = ggml_vec_dot_s16(v_sumi, v_x0h, ggml_vec_xl_s8x4_splat(y_hi +  0));
-            v_sumi = ggml_vec_dot_s16(v_sumi, v_x1h, ggml_vec_xl_s8x4_splat(y_hi +  4));
-            v_sumi = ggml_vec_dot_s16(v_sumi, v_x2h, ggml_vec_xl_s8x4_splat(y_hi +  8));
-            v_sumi = ggml_vec_dot_s16(v_sumi, v_x3h, ggml_vec_xl_s8x4_splat(y_hi + 12));
+            v_sumi0 = ggml_vec_dot_s16(v_sumi0, v_x0h, ggml_vec_xl_s8x4_splat(y_hi +  0));
+            v_sumi1 = ggml_vec_dot_s16(v_sumi1, v_x1h, ggml_vec_xl_s8x4_splat(y_hi +  4));
+            v_sumi2 = ggml_vec_dot_s16(v_sumi2, v_x2h, ggml_vec_xl_s8x4_splat(y_hi +  8));
+            v_sumi3 = ggml_vec_dot_s16(v_sumi3, v_x3h, ggml_vec_xl_s8x4_splat(y_hi + 12));
+
+            const int16x8_t v_sumi = vec_add(vec_add(v_sumi0, v_sumi1), vec_add(v_sumi2, v_sumi3));
 
             const float32x4_t v_yd = vec_splats(GGML_CPU_FP16_TO_FP32(a_ptr[l].d));
             const float32x4_t v_xd = ggml_vec_xl_f16x4_finite(b_ptr[l].d);
@@ -162,6 +165,8 @@ void ggml_gemm_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
             }
 
             for (int l = 0; l < nb; l++) {
+                const int16x8_t v_zero = vec_splats((int16_t)0);
+
                 int16x8_t v_sumi0 = vec_splats((int16_t)0);
                 int16x8_t v_sumi1 = vec_splats((int16_t)0);
                 int16x8_t v_sumi2 = vec_splats((int16_t)0);
@@ -175,15 +180,16 @@ void ggml_gemm_q4_0_4x4_q8_0(int n, float * GGML_RESTRICT s, size_t bs, const vo
                     const int8_t * y_lo = a_ptr[l].qs + 16 * k;
                     const int8_t * y_hi = y_lo + qk / 2 * 4;
 
-                    v_sumi0 = ggml_vec_dot_s16(v_sumi0, v_xl, ggml_vec_xl_s8x4_splat(y_lo +  0));
-                    v_sumi1 = ggml_vec_dot_s16(v_sumi1, v_xl, ggml_vec_xl_s8x4_splat(y_lo +  4));
-                    v_sumi2 = ggml_vec_dot_s16(v_sumi2, v_xl, ggml_vec_xl_s8x4_splat(y_lo +  8));
-                    v_sumi3 = ggml_vec_dot_s16(v_sumi3, v_xl, ggml_vec_xl_s8x4_splat(y_lo + 12));
+                    // add each product pair with vec_add, a long multiply-add chain is slow
+                    const int16x8_t v_xyl0 = ggml_vec_dot_s16(v_zero, v_xl, ggml_vec_xl_s8x4_splat(y_lo +  0));
+                    const int16x8_t v_xyl1 = ggml_vec_dot_s16(v_zero, v_xl, ggml_vec_xl_s8x4_splat(y_lo +  4));
+                    const int16x8_t v_xyl2 = ggml_vec_dot_s16(v_zero, v_xl, ggml_vec_xl_s8x4_splat(y_lo +  8));
+                    const int16x8_t v_xyl3 = ggml_vec_dot_s16(v_zero, v_xl, ggml_vec_xl_s8x4_splat(y_lo + 12));
 
-                    v_sumi0 = ggml_vec_dot_s16(v_sumi0, v_xh, ggml_vec_xl_s8x4_splat(y_hi +  0));
-                    v_sumi1 = ggml_vec_dot_s16(v_sumi1, v_xh, ggml_vec_xl_s8x4_splat(y_hi +  4));
-                    v_sumi2 = ggml_vec_dot_s16(v_sumi2, v_xh, ggml_vec_xl_s8x4_splat(y_hi +  8));
-                    v_sumi3 = ggml_vec_dot_s16(v_sumi3, v_xh, ggml_vec_xl_s8x4_splat(y_hi + 12));
+                    v_sumi0 = vec_add(v_sumi0, ggml_vec_dot_s16(v_xyl0, v_xh, ggml_vec_xl_s8x4_splat(y_hi +  0)));
+                    v_sumi1 = vec_add(v_sumi1, ggml_vec_dot_s16(v_xyl1, v_xh, ggml_vec_xl_s8x4_splat(y_hi +  4)));
+                    v_sumi2 = vec_add(v_sumi2, ggml_vec_dot_s16(v_xyl2, v_xh, ggml_vec_xl_s8x4_splat(y_hi +  8)));
+                    v_sumi3 = vec_add(v_sumi3, ggml_vec_dot_s16(v_xyl3, v_xh, ggml_vec_xl_s8x4_splat(y_hi + 12)));
                 }
 
                 const float32x4_t v_yd = __lzs_f16cx4_load(a_ptr[l].d);
