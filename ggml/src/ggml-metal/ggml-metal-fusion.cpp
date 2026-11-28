@@ -73,14 +73,22 @@ ggml_metal_fusion_id ggml_metal_fusion_get_id(const ggml_metal_fusion * fusion) 
 
 // ---- helpers -------------------------------------------------------------
 
-// true if two tensors live in the same Metal buffer
-static bool ggml_metal_fusion_same_buffer(const ggml_tensor * a, const ggml_tensor * b) {
+// true if two tensors live in the same Metal buffer (in STRUCTURAL mode, only checks the backend buffer)
+static bool ggml_metal_fusion_same_buffer(const ggml_tensor * a, const ggml_tensor * b, ggml_metal_fusion_mode mode) {
     if (!a || !b) {
         return false;
     }
 
     ggml_backend_buffer_t ba = a->view_src ? a->view_src->buffer : a->buffer;
     ggml_backend_buffer_t bb = b->view_src ? b->view_src->buffer : b->buffer;
+
+    if (ba != bb) {
+        return false;
+    }
+
+    if (mode == GGML_METAL_FUSION_STRUCTURAL) {
+        return true;
+    }
 
     ggml_metal_buffer_t ca = (ggml_metal_buffer_t) ba->context;
     ggml_metal_buffer_t cb = (ggml_metal_buffer_t) bb->context;
@@ -188,8 +196,7 @@ static bool ggml_metal_fusion_check_ssm_conv_silu(
     return true;
 }
 
-// ADD x N: each ADD reads the previous ADD as src0, and all addends must share layout
-// (and, in FULL mode, live in the same Metal buffer)
+// ADD x N: each ADD reads the previous ADD as src0, and all addends must share layout and buffer
 static bool ggml_metal_fusion_check_add_chain(
         const ggml_metal_fusion       * fusion,
         const ggml_tensor * const     * nodes,
@@ -211,10 +218,8 @@ static bool ggml_metal_fusion_check_add_chain(
             return false;
         }
 
-        if (mode == GGML_METAL_FUSION_FULL) {
-            if (!ggml_metal_fusion_same_buffer(nodes[j]->src[1], nodes[0]->src[1])) {
-                return false;
-            }
+        if (!ggml_metal_fusion_same_buffer(nodes[j]->src[1], nodes[0]->src[1], mode)) {
+            return false;
         }
     }
 
