@@ -66,6 +66,9 @@ jobs:
         id: depends
         run: |
           sudo apt-get update
+          sudo apt-get -y install software-properties-common
+          sudo add-apt-repository -y ppa:apptainer/ppa
+          sudo apt-get update
           sudo apt-get -y install \
             build-essential \
             xxd \
@@ -74,7 +77,8 @@ jobs:
             curl \
             wget \
             language-pack-en \
-            libssl-dev
+            libssl-dev \
+            apptainer
 
       - name: Clone
         id: checkout
