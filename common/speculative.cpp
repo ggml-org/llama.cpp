@@ -930,6 +930,14 @@ struct common_speculative_impl_draft_eagle3 : public common_speculative_impl {
         }
 
         const int32_t i_g = std::min<int32_t>(n_accepted, n_rows - 1);
+
+        // Roll back draft KV cache: remove entries for rejected positions.
+        // The process() method injected KV at positions verify_pos_first..verify_pos_first+n_rows-1.
+        // Only positions verify_pos_first..verify_pos_first+i_g are accepted.
+        // Remove the rest to prevent KV contamination.
+        const llama_pos first_rejected = verify_pos_first[seq_id] + i_g + 1;
+        llama_memory_seq_rm(llama_get_memory(params.ctx_dft), seq_id, first_rejected, -1);
+
         pending_pos_last[seq_id] = verify_pos_first[seq_id] + i_g;
         std::memcpy(pending_g_last[seq_id].data(),
                     verify_g[seq_id].data() + (size_t) i_g * n_embd_dec,
