@@ -77,10 +77,11 @@ void ggml_zdnn_load_tensor_q(ggml_backend_zdnn_buffer * buffer, const ggml_tenso
     // zDNN takes one scale per zTensor, so requantize each group of each row to int8 with its own scale
     // a group is the whole row, unless the weights are stacked into groups along ne0
     // rows are written transposed as zDNN computes inputs (ne11, ne0) x weights (ne0, ne1)
-    const bool    stacked  = buffer->pre_tfm_desc.layout == ZDNN_3DS;
-    const int64_t n_stacks = stacked ? buffer->pre_tfm_desc.dim3 : 1;
-    const int64_t n_groups = n_stacks / ne2;
-    const int64_t gs       = stacked ? buffer->pre_tfm_desc.dim2 : ne0;
+    const ggml_zdnn_q_layout layout = ggml_zdnn_q_weights_layout(buffer, tensor);
+
+    const int64_t n_stacks = layout.n_stacks;
+    const int64_t n_groups = layout.n_groups;
+    const int64_t gs       = layout.gs;
 
     // benchmarked: 256 rows fill a 256-byte cache line per write, padding each row by a line avoids cache set conflicts
     constexpr int64_t n_tile   = 256;
@@ -163,6 +164,13 @@ void ggml_zdnn_load_tensor_q(ggml_backend_zdnn_buffer * buffer, const ggml_tenso
     }
 
     buffer->ztensor.is_transformed = true;
+}
+
+ggml_zdnn_q_layout ggml_zdnn_q_weights_layout(const ggml_backend_zdnn_buffer * buffer, const ggml_tensor * tensor) {
+    const bool    stacked  = buffer->pre_tfm_desc.layout == ZDNN_3DS;
+    const int64_t n_stacks = stacked ? buffer->pre_tfm_desc.dim3 : 1;
+
+    return { n_stacks, n_stacks / tensor->ne[2], stacked ? (int64_t)buffer->pre_tfm_desc.dim2 : tensor->ne[0] };
 }
 
 void ggml_zdnn_q_weights_desc(zdnn_tensor_desc * pre_tfm_desc,
@@ -258,7 +266,7 @@ void ggml_zdnn_init_tensor(ggml_backend_zdnn_buffer * buffer, const ggml_tensor 
     ggml_zdnn_init_tensor_desc(buffer->pre_tfm_desc, buffer->tfm_desc, tensor);
 
     if (ggml_is_quantized(tensor->type)) {
-        const int64_t n_stacks = buffer->pre_tfm_desc.layout == ZDNN_3DS ? buffer->pre_tfm_desc.dim3 : 1;
+        const int64_t n_stacks = ggml_zdnn_q_weights_layout(buffer, tensor).n_stacks;
 
         buffer->scales.resize(n_stacks * tensor->ne[1]);
         buffer->channel_scales.resize(tensor->ne[2] * tensor->ne[0]);

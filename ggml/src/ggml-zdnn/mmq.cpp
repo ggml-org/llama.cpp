@@ -38,7 +38,7 @@ static void ggml_zdnn_mul_mat_q_grouped(ggml_backend_zdnn_context * ctx,
 
     zdnn_init_pre_transformed_desc(ZDNN_3DS, INT8, &inputs_pre_tfm_desc, 2 * n_groups, ne11, gs);
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&inputs_pre_tfm_desc, QUANTIZED_INT8, &inputs_tfm_desc));
-    ggml_zdnn_init_scratch_ztensor(ctx, &inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, inputs_ztensor_alloc);
+    ggml_zdnn_init_scratch_ztensor(&inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, inputs_ztensor_alloc.alloc(ctx->pool, zdnn_getsize_ztensor(&inputs_tfm_desc)));
     ZDNN_CHECK(zdnn_transform_quantized_ztensor(&inputs_ztensor, false, -127, 127, inputs_q));
 
     // each group of the partial results is read back as its own 2D ztensor
@@ -71,7 +71,7 @@ static void ggml_zdnn_mul_mat_q_grouped(ggml_backend_zdnn_context * ctx,
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&partial_pre_tfm_desc, QUANTIZED_DLFLOAT16, &partial_tfm_desc));
     GGML_ASSERT(zdnn_getsize_ztensor(&partial_tfm_desc) == (uint64_t)(2 * n_chunk) * group_bytes);
     for (int32_t i = 0; i < 2; i++) {
-        ggml_zdnn_init_scratch_ztensor(ctx, &partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor[i], partial_ztensor_alloc[i]);
+        ggml_zdnn_init_scratch_ztensor(&partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor[i], partial_ztensor_alloc[i].alloc(ctx->pool, zdnn_getsize_ztensor(&partial_tfm_desc)));
     }
 
     const float * weights_scales = weights_extra->scales.data();
@@ -95,20 +95,8 @@ static void ggml_zdnn_mul_mat_q_grouped(ggml_backend_zdnn_context * ctx,
 
             const float * sw = weights_scales + g*ne0;
             for (int64_t i1 = 0; i1 < ne11; i1++) {
-                const float   sa = inputs_scales[g*ne11 + i1];
-                const float * p  = partial     + i1*ne0;
-                const float * pr = partial_res + i1*ne0;
-                float       * y  = (float *)output->data + i1*ne0;
-
-                if (g == 0) {
-                    for (int64_t i0 = 0; i0 < ne0; i0++) {
-                        y[i0] = sa * sw[i0] * (p[i0] + pr[i0] * (1.0f/254.0f));
-                    }
-                } else {
-                    for (int64_t i0 = 0; i0 < ne0; i0++) {
-                        y[i0] += sa * sw[i0] * (p[i0] + pr[i0] * (1.0f/254.0f));
-                    }
-                }
+                ggml_zdnn_dequantize_row((float *)output->data + i1*ne0, partial + i1*ne0, partial_res + i1*ne0,
+                                         sw, inputs_scales[g*ne11 + i1], ne0, g > 0);
             }
         }
     };
@@ -223,7 +211,7 @@ void ggml_zdnn_mul_mat_q(
 
     zdnn_init_pre_transformed_desc(ZDNN_3DS, INT8, &inputs_pre_tfm_desc, 2, ne11, ne10);
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&inputs_pre_tfm_desc, QUANTIZED_INT8, &inputs_tfm_desc));
-    ggml_zdnn_init_scratch_ztensor(ctx, &inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, inputs_ztensor_alloc);
+    ggml_zdnn_init_scratch_ztensor(&inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, inputs_ztensor_alloc.alloc(ctx->pool, zdnn_getsize_ztensor(&inputs_tfm_desc)));
     ZDNN_CHECK(zdnn_transform_quantized_ztensor(&inputs_ztensor, false, -127, 127, inputs_q));
 
     zdnn_tensor_desc              partial_pre_tfm_desc;
@@ -233,7 +221,7 @@ void ggml_zdnn_mul_mat_q(
 
     zdnn_init_pre_transformed_desc(ZDNN_3DS, FP32, &partial_pre_tfm_desc, 2, ne11, ne0);
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&partial_pre_tfm_desc, QUANTIZED_DLFLOAT16, &partial_tfm_desc));
-    ggml_zdnn_init_scratch_ztensor(ctx, &partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor, partial_ztensor_alloc);
+    ggml_zdnn_init_scratch_ztensor(&partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor, partial_ztensor_alloc.alloc(ctx->pool, zdnn_getsize_ztensor(&partial_tfm_desc)));
 
     // both stacks are multiplied by the same unstacked weights in one broadcast call
     // the bias is all zeros, so it is already the pre-computed bias
@@ -269,12 +257,8 @@ void ggml_zdnn_mul_mat_q(
     const float * weights_scales = weights_extra->scales.data();
     ggml_zdnn_parallel_for(n_threads, ne1, [&](int64_t i1_start, int64_t i1_end) {
         for (int64_t i1 = i1_start; i1 < i1_end; i1++) {
-            const float   sa = inputs_scales[i1];
-            const float * pr = partial[1] + i1*ne0;
-            float       * y  = partial[0] + i1*ne0;
-            for (int64_t i0 = 0; i0 < ne0; i0++) {
-                y[i0] = sa * weights_scales[i0] * (y[i0] + pr[i0] * (1.0f/254.0f));
-            }
+            float * y = partial[0] + i1*ne0;
+            ggml_zdnn_dequantize_row(y, y, partial[1] + i1*ne0, weights_scales, inputs_scales[i1], ne0, false);
         }
     });
 }

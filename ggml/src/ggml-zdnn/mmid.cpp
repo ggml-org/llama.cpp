@@ -29,33 +29,22 @@ struct ggml_zdnn_mmid_scratch {
     uint8_t * partial_buffer;
 };
 
-static inline void ggml_zdnn_mmid_init_ztensor(zdnn_tensor_desc * pre_tfm_desc,
-                                               zdnn_tensor_desc * tfm_desc,
-                                               zdnn_ztensor     * ztensor,
-                                               uint8_t          * buffer) {
-    zdnn_init_quantized_ztensor(pre_tfm_desc, tfm_desc, 1.0f, 0.0f, ztensor);
-    ztensor->buffer      = buffer;
-    ztensor->buffer_size = zdnn_getsize_ztensor(tfm_desc);
-}
-
 // the inputs of each group are followed by their rounding errors as extra rows, so one call reads the weights once
 static void ggml_zdnn_mul_mat_id_task(const ggml_tensor              * inputs,
                                       const ggml_backend_zdnn_buffer * weights_extra,
+                                      const ggml_zdnn_q_layout       & layout,
                                       const zdnn_ztensor             & bias_ztensor,
                                       const ggml_zdnn_mmid_task      & task,
                                       const ggml_zdnn_mmid_scratch   & scratch,
                                             ggml_tensor              * dst) {
-    const ggml_tensor * weights = dst->src[0];
-
     const int64_t ne0  = dst->ne[0];
     const int64_t ne10 = inputs->ne[0];
     const int64_t ne11 = inputs->ne[1];
     const int64_t n_r  = task.n_rows;
 
-    const bool    stacked  = weights_extra->pre_tfm_desc.layout == ZDNN_3DS;
-    const int64_t n_stacks = stacked ? weights_extra->pre_tfm_desc.dim3 : 1;
-    const int64_t n_groups = n_stacks / weights->ne[2];
-    const int64_t gs       = stacked ? weights_extra->pre_tfm_desc.dim2 : ne10;
+    const int64_t n_stacks = layout.n_stacks;
+    const int64_t n_groups = layout.n_groups;
+    const int64_t gs       = layout.gs;
 
     const float * channel_scales = weights_extra->channel_scales.data() + task.expert*ne10;
     const float * weights_scales = weights_extra->scales.data() + task.expert*n_groups*ne0;
@@ -75,7 +64,7 @@ static void ggml_zdnn_mul_mat_id_task(const ggml_tensor              * inputs,
 
     zdnn_init_pre_transformed_desc(ZDNN_3DS, INT8, &inputs_pre_tfm_desc, n_groups, 2 * n_r, gs);
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&inputs_pre_tfm_desc, QUANTIZED_INT8, &inputs_tfm_desc));
-    ggml_zdnn_mmid_init_ztensor(&inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, scratch.inputs_buffer);
+    ggml_zdnn_init_scratch_ztensor(&inputs_pre_tfm_desc, &inputs_tfm_desc, &inputs_ztensor, scratch.inputs_buffer);
     ZDNN_CHECK(zdnn_transform_quantized_ztensor(&inputs_ztensor, false, -127, 127, scratch.inputs_q));
 
     zdnn_tensor_desc partial_pre_tfm_desc;
@@ -84,7 +73,7 @@ static void ggml_zdnn_mul_mat_id_task(const ggml_tensor              * inputs,
 
     zdnn_init_pre_transformed_desc(ZDNN_3DS, FP32, &partial_pre_tfm_desc, n_groups, 2 * n_r, ne0);
     ZDNN_CHECK(zdnn_generate_quantized_transformed_desc(&partial_pre_tfm_desc, QUANTIZED_DLFLOAT16, &partial_tfm_desc));
-    ggml_zdnn_mmid_init_ztensor(&partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor, scratch.partial_buffer);
+    ggml_zdnn_init_scratch_ztensor(&partial_pre_tfm_desc, &partial_tfm_desc, &partial_ztensor, scratch.partial_buffer);
 
     zdnn_tensor_desc view_pre_tfm_desc;
     zdnn_tensor_desc view_tfm_desc;
@@ -118,21 +107,10 @@ static void ggml_zdnn_mul_mat_id_task(const ggml_tensor              * inputs,
         const float * sw = weights_scales + g*ne0;
         for (int64_t r = 0; r < n_r; r++) {
             const ggml_zdnn_mmid_row & row = task.rows[r];
+            float * y = (float *)((char *)dst->data + row.slot*dst->nb[1] + row.token*dst->nb[2]);
 
-            const float   sa = scratch.inputs_scales[g*n_r + r];
-            const float * p  = scratch.partial + r*ne0;
-            const float * pr = scratch.partial + (n_r + r)*ne0;
-            float       * y  = (float *)((char *)dst->data + row.slot*dst->nb[1] + row.token*dst->nb[2]);
-
-            if (g == 0) {
-                for (int64_t i0 = 0; i0 < ne0; i0++) {
-                    y[i0] = sa * sw[i0] * (p[i0] + pr[i0] * (1.0f/254.0f));
-                }
-            } else {
-                for (int64_t i0 = 0; i0 < ne0; i0++) {
-                    y[i0] += sa * sw[i0] * (p[i0] + pr[i0] * (1.0f/254.0f));
-                }
-            }
+            ggml_zdnn_dequantize_row(y, scratch.partial + r*ne0, scratch.partial + (n_r + r)*ne0,
+                                     sw, scratch.inputs_scales[g*n_r + r], ne0, g > 0);
         }
     }
 }
@@ -240,10 +218,10 @@ void ggml_zdnn_mul_mat_id(ggml_backend_zdnn_context * ctx, ggml_tensor * dst) {
         }
     }
 
-    const bool    stacked  = weights_extra->pre_tfm_desc.layout == ZDNN_3DS;
-    const int64_t n_stacks = stacked ? weights_extra->pre_tfm_desc.dim3 : 1;
-    const int64_t n_groups = n_stacks / n_expert;
-    const int64_t gs       = stacked ? weights_extra->pre_tfm_desc.dim2 : ne10;
+    const ggml_zdnn_q_layout layout = ggml_zdnn_q_weights_layout(weights_extra, weights);
+
+    const int64_t n_groups = layout.n_groups;
+    const int64_t gs       = layout.gs;
 
     // the bias cache and the pool are not thread safe, so use them before the workers start
     const zdnn_ztensor & bias_ztensor = ggml_zdnn_zero_bias(ctx, n_groups, ne0);
@@ -283,7 +261,7 @@ void ggml_zdnn_mul_mat_id(ggml_backend_zdnn_context * ctx, ggml_tensor * dst) {
         };
 
         for (int64_t t = next_task.fetch_add(1, std::memory_order_relaxed); t < (int64_t)tasks.size(); t = next_task.fetch_add(1, std::memory_order_relaxed)) {
-            ggml_zdnn_mul_mat_id_task(inputs, weights_extra, bias_ztensor, tasks[t], scratch, dst);
+            ggml_zdnn_mul_mat_id_task(inputs, weights_extra, layout, bias_ztensor, tasks[t], scratch, dst);
         }
     });
 }

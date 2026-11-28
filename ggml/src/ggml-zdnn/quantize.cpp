@@ -5,6 +5,9 @@
 #include <cmath>
 #include <cstring>
 
+// the rounding error is at most half a step, so scaling it by twice 127 fills the int8 range
+static constexpr float residual_scale = 254.0f;
+
 // quantize each group of group_size values of a row to int8, plus the rounding error into residuals for ~15 bits
 void ggml_zdnn_quantize_row(const float  * row,
                                   int64_t  ne0,
@@ -36,10 +39,9 @@ void ggml_zdnn_quantize_row(const float  * row,
         float amax;
         memcpy(&amax, &amax_bits, sizeof(amax));
 
-        // the rounding error is at most d/2
         const float d      = amax / 127.0f;
         const float id     = d ? 1.0f/d : 0.0f;
-        const float id_res = 254.0f * id;
+        const float id_res = residual_scale * id;
         scales[g*scales_stride] = d;
 
         int8_t * qg = quants    + g*quants_stride;
@@ -56,6 +58,26 @@ void ggml_zdnn_quantize_row(const float  * row,
         for (int64_t i0 = n; i0 < group_size; i0++) {
             qg[i0] = 0;
             rg[i0] = 0;
+        }
+    }
+}
+
+// scale one row of partial results back, partial from the quantized inputs and partial_res from their rounding errors, output may be partial
+void ggml_zdnn_dequantize_row(float  * output,
+                        const float  * partial,
+                        const float  * partial_res,
+                        const float  * weights_scales,
+                             float     inputs_scale,
+                             int64_t   ne0,
+                             bool      accumulate) {
+
+    if (accumulate) {
+        for (int64_t i0 = 0; i0 < ne0; i0++) {
+            output[i0] += inputs_scale * weights_scales[i0] * (partial[i0] + partial_res[i0] * (1.0f/residual_scale));
+        }
+    } else {
+        for (int64_t i0 = 0; i0 < ne0; i0++) {
+            output[i0] = inputs_scale * weights_scales[i0] * (partial[i0] + partial_res[i0] * (1.0f/residual_scale));
         }
     }
 }
