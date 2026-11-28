@@ -12347,7 +12347,8 @@ void ggml_vk_soft_max(ggml_backend_vk_context * ctx, vk_context& subctx, const g
         m0, m1,
         n_head_log2,
         nrows_x,
-        src2 != nullptr
+        src2 != nullptr,
+        0, 0, 0, 0,
     };
 
     if (ncols <= 16384) {
