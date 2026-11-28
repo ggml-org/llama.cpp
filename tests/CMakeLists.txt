@@ -356,6 +356,7 @@ llama_build_and_test(test-thread-safety.cpp  LABEL "main backend"  ARGS -m "${MO
 set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 llama_build_and_test(test-arg-parser.cpp  LABEL behavior)
+llama_build_and_test(test-configuration.cpp  LABEL behavior)
 llama_build_and_test(test-quantize-target.cpp  LABEL "main behavior backend"  LINK llama)
 llama_build_and_test(test-presets-parser.cpp  LABEL behavior)
 llama_build_and_test(test-model-resolution.cpp  LABEL behavior)

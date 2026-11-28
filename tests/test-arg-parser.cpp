@@ -3,7 +3,6 @@
 #include "download.h"
 #include "llama.h"
 #include "speculative.h"
-#include "configuration-options.h"
 
 #include <cmath>
 #include <limits>
@@ -182,20 +181,6 @@ static void test(void) {
     };
 
     std::vector<std::string> argv;
-
-    printf("test-arg-parser: test configuration options\n\n");
-    for (const auto & test_case : configuration_options) {
-        common_params output;
-        output.model.path = "model_file.gguf";
-        argv = test_case.args;
-        argv.insert(argv.begin(), "binary_name");
-        printf("test-arg-parser: %s\n", test_case.ini.c_str());
-        const bool valid = common_params_parse(argv.size(), list_str_to_char(argv).data(), output, test_case.example);
-        assert(valid == test_case.valid);
-        if (valid) {
-            test_case.check(output);
-        }
-    }
 
     {
         common_params penalty_params;

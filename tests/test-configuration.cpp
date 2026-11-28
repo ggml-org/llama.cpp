@@ -1,8 +1,13 @@
-#pragma once
-
 #include "arg.h"
+#include "preset.h"
 
+#include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <limits>
+#include <random>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -42,7 +47,7 @@ static const std::vector<configuration_option_test> configuration_options = {
     {{"-t", "1234"}, "threads = 1234", LLAMA_EXAMPLE_COMMON, true,
         [](const common_params & p) { assert(p.cpuparams.n_threads == 1234); }},
     {{"--verbose"}, "verbose = true", LLAMA_EXAMPLE_COMMON, true,
-        [](const common_params & p) { assert(p.verbosity > 1); }},
+        [](const common_params & p) { assert(p.verbosity == std::numeric_limits<int>::max()); }},
     {{"-m", "abc.gguf", "--predict", "6789", "--batch-size", "9090"}, "model = abc.gguf\npredict = 6789\nbatch-size = 9090", LLAMA_EXAMPLE_COMMON, true,
         [](const common_params & p) {
             assert(p.model.path == "abc.gguf");
@@ -80,3 +85,88 @@ static const std::vector<configuration_option_test> configuration_options = {
     {{"--samplers", "top_k;top_p;temperature"}, "samplers = top_k;top_p;temperature", LLAMA_EXAMPLE_COMMON, true,
         [](const common_params & p) { assert(p.sampling.samplers == std::vector<common_sampler_type>({COMMON_SAMPLER_TYPE_TOP_K, COMMON_SAMPLER_TYPE_TOP_P, COMMON_SAMPLER_TYPE_TEMPERATURE})); }},
 };
+
+static bool parse_args(std::vector<std::string> args, common_params & params, llama_example example) {
+    args.insert(args.begin(), "binary_name");
+    std::vector<char *> argv;
+    for (auto & arg : args) {
+        argv.push_back(arg.data());
+    }
+    return common_params_parse(argv.size(), argv.data(), params, example);
+}
+
+static void test_configuration(const std::filesystem::path & path) {
+    for (const auto & test_case : configuration_options) {
+        std::printf("test-configuration: %s\n", test_case.ini.c_str());
+        common_params cli_params;
+        cli_params.model.path = "default_model.gguf";
+        const bool cli_valid = parse_args(test_case.args, cli_params, test_case.example);
+        assert(cli_valid == test_case.valid);
+        if (cli_valid) {
+            test_case.check(cli_params);
+        }
+
+        for (const std::string newline : {"\n", "\r\n", "\r"}) {
+            for (bool final_newline : {false, true}) {
+                {
+                    std::ofstream file(path, std::ios::binary);
+                    file << "version = 1" << newline
+                         << "; comment" << newline
+                         << " \t; indented comment" << newline
+                         << newline
+                         << "[model]" << newline;
+                    for (char c : test_case.ini) {
+                        if (c == '\n') {
+                            file << newline;
+                        } else {
+                            file << c;
+                        }
+                    }
+                    file << " \t";
+                    if (final_newline) {
+                        file << newline << "; final comment" << newline;
+                    }
+                }
+
+                common_preset_context ctx(test_case.example);
+                common_preset global;
+                common_presets presets;
+                common_params ini_params;
+                ini_params.model.path = "default_model.gguf";
+                bool valid = true;
+                try {
+                    presets = ctx.load_from_ini(path, global);
+                    valid = parse_args(presets.at("model").to_args(), ini_params, test_case.example);
+                } catch (const std::exception & e) {
+                    std::printf("test-configuration: %s\n", e.what());
+                    valid = false;
+                }
+                assert(valid == test_case.valid);
+                if (!valid) {
+                    continue;
+                }
+                test_case.check(ini_params);
+
+                {
+                    std::ofstream file(path, std::ios::binary);
+                    file << "version = 1\n" << presets.at("model").to_ini();
+                }
+                const auto reloaded = ctx.load_from_ini(path, global);
+                assert(reloaded.at("model").to_args() == presets.at("model").to_args());
+            }
+        }
+    }
+}
+
+int main() {
+    const auto path = std::filesystem::temp_directory_path() / ("llama-test-configuration-" + std::to_string(std::random_device{}()) + ".ini");
+    int result = 0;
+    try {
+        test_configuration(path);
+    } catch (const std::exception & e) {
+        std::fprintf(stderr, "test-configuration: %s\n", e.what());
+        result = 1;
+    }
+    std::filesystem::remove(path);
+    return result;
+}

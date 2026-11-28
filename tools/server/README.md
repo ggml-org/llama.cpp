@@ -2143,6 +2143,34 @@ Each section in the file defines a new preset. Keys within a section correspond 
 
 Short argument forms (e.g., `c`, `ngl`) and environment variable names (e.g., `LLAMA_ARG_N_GPU_LAYERS`) are also supported as keys.
 
+#### INI dialect v1
+
+The default legacy parser treats `;` and `#` in values as inline comments without an escaping mechanism. This prevents literal `;` and `#` in values needed by options such as `samplers` and `dry-sequence-breaker`.
+
+To opt into INI version 1, place one unindented `version = 1` declaration before the first section. Section-level `version` keys do not select a parser. The global version declaration accepts legacy inline comments for compatibility.
+
+In v1:
+
+- Whole-line comments start with `#` or `;`, with optional leading spaces or tabs. Elsewhere in option values, these characters are literal.
+- Multiline values are supported when continuation lines are indented deeper than the key's line. The key's indentation plus one space is removed from each continuation line; additional leading spaces are preserved. Lines are joined with newline characters.
+
+```ini
+version = 1
+[example]
+samplers = temperature;dry;xtc
+chat-template-kwargs = {
+   "custom_instructions": "Keep ; and # in values."
+ }
+```
+
+The `samplers` value remains `temperature;dry;xtc`. The parsed `chat-template-kwargs` value is:
+
+```json
+{
+  "custom_instructions": "Keep ; and # in values."
+}
+```
+
 Example:
 
 ```ini

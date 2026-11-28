@@ -3,8 +3,8 @@
 #include "peg-parser.h"
 #include "log.h"
 #include "download.h"
+#include "ini.h"
 
-#include <fstream>
 #include <sstream>
 #include <filesystem>
 #include <regex>
@@ -167,19 +167,10 @@ void common_preset::apply_to_params(common_params & params, const std::set<std::
     }
 }
 
-static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_file(const std::filesystem::path & path) {
+static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_file_legacy(const std::filesystem::path & path) {
     std::map<std::string, std::map<std::string, std::string>> parsed;
 
-    if (!std::filesystem::exists(path)) {
-        throw std::runtime_error("preset file does not exist: " + path.string());
-    }
-
-    std::ifstream file(path);
-    if (!file.good()) {
-        throw std::runtime_error("failed to open server preset file: " + path.string());
-    }
-
-    std::string contents((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    const std::string contents = read_ini_file(path);
 
     static const auto parser = build_peg_parser([](auto & p) {
         // newline ::= "\r\n" / "\n" / "\r"
@@ -191,14 +182,15 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
         // comment ::= [;#] (!newline .)*
         auto comment = p.rule("comment", p.chars("[;#]", 1, 1) + p.zero_or_more(p.negate(newline) + p.any()));
 
-        // eol ::= ws (newline / EOF)
-        auto eol = p.rule("eol", ws + (newline | p.end()));
+        // eol ::= ws comment? (newline / EOF)
+        auto eol = p.rule("eol", ws + p.optional(comment) + (newline | p.end()));
 
         // ident ::= [a-zA-Z_] [a-zA-Z0-9_.-]*
         auto ident = p.rule("ident", p.chars("[a-zA-Z_]", 1, 1) + p.chars("[a-zA-Z0-9_.-]", 0, -1));
 
-        // value ::= (!eol .)*
-        auto value = p.rule("value", p.zero_or_more(p.negate(eol) + p.any()));
+        // value ::= (!eol-start .)*
+        auto eol_start = p.rule("eol-start", ws + (p.chars("[;#]", 1, 1) | newline | p.end()));
+        auto value = p.rule("value", p.zero_or_more(p.negate(eol_start) + p.any()));
 
         // header-line ::= "[" ws ident ws "]" eol
         auto header_line = p.rule("header-line", "[" + ws + p.tag("section-name", p.chars("[^]]")) + ws + "]" + eol);
@@ -226,6 +218,8 @@ static std::map<std::string, std::map<std::string, std::string>> parse_ini_from_
     if (!result.success()) {
         throw std::runtime_error("failed to parse server config file: " + path.string());
     }
+
+    warn_legacy_ini(contents, path);
 
     std::string current_section = COMMON_PRESET_DEFAULT_NAME;
     std::string current_key;
@@ -283,7 +277,7 @@ common_preset_context::common_preset_context(llama_example ex)
 
 common_presets common_preset_context::load_from_ini(const std::filesystem::path & path, common_preset & global) const {
     common_presets out;
-    auto ini_data = parse_ini_from_file(path);
+    auto ini_data = ini_version_from_file(path) == "legacy" ? parse_ini_from_file_legacy(path) : parse_ini_from_file_v1(path);
 
     for (auto section : ini_data) {
         common_preset preset;
