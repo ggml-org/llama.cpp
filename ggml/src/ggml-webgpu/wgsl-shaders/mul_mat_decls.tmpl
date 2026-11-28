@@ -703,12 +703,12 @@ fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
 #endif
 
 #if defined(INIT_SRC0_SHMEM_IQ2_S)
-fn create_iq_gw4(ig: u32, grid_phase: u32) -> vec4<f32> {
+fn create_iq_gw4(gw: u32) -> vec4<f32> {
     return vec4<f32>(
-            f32(get_byte(iq2s_grid[(ig + grid_phase + 0u) / 4u], (ig + grid_phase + 0u) % 4u)),
-            f32(get_byte(iq2s_grid[(ig + grid_phase + 1u) / 4u], (ig + grid_phase + 1u) % 4u)),
-            f32(get_byte(iq2s_grid[(ig + grid_phase + 2u) / 4u], (ig + grid_phase + 2u) % 4u)),
-            f32(get_byte(iq2s_grid[(ig + grid_phase + 3u) / 4u], (ig + grid_phase + 3u) % 4u)),
+            f32(get_byte(gw, 0u)),
+            f32(get_byte(gw, 1u)),
+            f32(get_byte(gw, 2u)),
+            f32(get_byte(gw, 3u))
         );
 }
 #endif
@@ -970,8 +970,8 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let signs_u16 = load_u32_at_src0(qs_byte_base + 32u + 4u * sub_block + 2u * phase) & 0xFFFFu;
         let qh_u4     = (load_byte_at_src0_aligned(qh_byte_base + 1u * sub_block) >> (4u * phase)) & 0xFu;
 
-        let gp0_ig = ((qs_u16 & 0xFFu) | ((qh_u4 & 0x3u) << 8u)) * 8u;
-        let gp1_ig = (((qs_u16 >> 8u) & 0xFFu) | ((qh_u4 & 0xCu) << 6u)) * 8u;
+        let gp0_gw = iq2s_grid[(qs_u16 & 0xFFu) | ((qh_u4 & 0x3u) << 8u)];
+        let gp1_gw = iq2s_grid[((qs_u16 >> 8u) & 0xFFu) | ((qh_u4 & 0xCu) << 6u)];
 
         let gp0_signs = get_byte(signs_u16, 0);
         let gp1_signs = get_byte(signs_u16, 1);
@@ -981,10 +981,10 @@ fn init_shmem_src0(thread_id: u32, batch_offset: u32, offset_m: u32, k_outer: u3
         let m_8_11_val4  = create_iq2_m4(gp1_signs, 0);
         let m_12_15_val4 = create_iq2_m4(gp1_signs, 1);
 
-        let gw_0_3_val4   = create_iq_gw4(gp0_ig, 0);
-        let gw_4_7_val4   = create_iq_gw4(gp0_ig, 4);
-        let gw_8_11_val4  = create_iq_gw4(gp1_ig, 0);
-        let gw_12_15_val4 = create_iq_gw4(gp1_ig, 4);
+        let gw_0_3_val4   = create_iq_gw4(gp0_gw.x);
+        let gw_4_7_val4   = create_iq_gw4(gp0_gw.y);
+        let gw_8_11_val4  = create_iq_gw4(gp1_gw.x);
+        let gw_12_15_val4 = create_iq_gw4(gp1_gw.y);
 
         store_shmem_iquants(vec4<f16>(db * m_0_3_val4 * gw_0_3_val4),     elem_idx +  0u);
         store_shmem_iquants(vec4<f16>(db * m_4_7_val4 * gw_4_7_val4),     elem_idx +  4u);
