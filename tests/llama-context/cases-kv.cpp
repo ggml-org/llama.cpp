@@ -8,6 +8,7 @@
 #include "common.h"
 
 #include "../../src/llama-ext.h" // llama_model_set_attn_rot, llama_arch_from_string
+#include "../../src/llama-model.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -786,6 +787,87 @@ struct case_noalloc : ctx_test {
     }
 };
 
+// - load the model with no_alloc, then bind a real buffer to a weight tensor
+// - create a context from it and verify that context memory is really allocated
+struct case_noalloc_bound : ctx_test {
+    const char * name() const override { return "noalloc_bound"; }
+
+    const char * description() const override {
+        return "binding a real weight buffer to a no_alloc model allocates real context memory";
+    }
+
+    case_result run(model_run & mr) const override {
+        const std::string & path = mr.params.model.path;
+        CTX_REQUIRE(!path.empty(), "the model path is not known");
+
+        llama_model_params mparams = llama_model_default_params();
+        mparams.no_alloc  = true;
+        mparams.load_mode = LLAMA_LOAD_MODE_NONE;
+
+        llama_model_ptr model(llama_model_load_from_file(path.c_str(), mparams));
+        CTX_REQUIRE(model, "failed to load the model with no_alloc");
+
+        size_t max_bytes = 0;
+        for (const auto & [_, t] : model->tensors_by_name) {
+            if (t != nullptr) {
+                max_bytes = std::max(max_bytes, ggml_nbytes(t));
+            }
+        }
+        CTX_REQUIRE(max_bytes > 0, "no non-empty weight tensor found");
+
+        ggml_backend_buffer_t real_buf = ggml_backend_buft_alloc_buffer(ggml_backend_cpu_buffer_type(), max_bytes);
+        CTX_REQUIRE(real_buf != nullptr, "failed to allocate real weight buffer");
+        ggml_backend_buffer_clear(real_buf, 0);
+
+        struct saved_tensor {
+            ggml_tensor *         tensor;
+            ggml_backend_buffer_t orig_buf;
+            void *                orig_data;
+        };
+        std::vector<saved_tensor> saved;
+        saved.reserve(model->tensors_by_name.size());
+        void * real_base = ggml_backend_buffer_get_base(real_buf);
+        for (const auto & [_, t] : model->tensors_by_name) {
+            if (t != nullptr && ggml_nbytes(t) > 0) {
+                saved.push_back({ t, t->buffer, t->data });
+                t->buffer = real_buf;
+                t->data   = real_base;
+            }
+        }
+
+        struct weight_restore_guard {
+            std::vector<saved_tensor> & saved;
+            ggml_backend_buffer_t       real_buf;
+            ~weight_restore_guard() {
+                for (const auto & s : saved) {
+                    s.tensor->buffer = s.orig_buf;
+                    s.tensor->data   = s.orig_data;
+                }
+                ggml_backend_buffer_free(real_buf);
+            }
+        } guard { saved, real_buf };
+
+        auto ctx = init_ctx(model.get(), common_context_params_to_llama(mr.params), 0);
+        CTX_REQUIRE(ctx, "failed to create the context with bound weight buffer");
+
+        if (llama_get_memory(ctx.get()) != nullptr) {
+            CTX_REQUIRE(decode_one(ctx.get(), 0, 0, 0), "failed to decode with bound weight buffer");
+
+            const auto bufs = llama_memory_get_buffers(llama_get_memory(ctx.get()));
+            CTX_REQUIRE(!bufs.empty(), "expected at least one memory buffer");
+            for (ggml_backend_buffer_t buf : bufs) {
+                CTX_REQUIRE(ggml_backend_buffer_get_base(buf) != nullptr, "memory buffer was not really allocated");
+                CTX_REQUIRE(ggml_backend_buffer_get_size(buf) > 0, "memory buffer has zero size");
+            }
+        }
+
+        // free ctx before guard restores the dummy buffer and frees real_buf
+        ctx.reset();
+
+        return case_result::pass();
+    }
+};
+
 struct case_comp_padding : ctx_test {
     const char * name() const override { return "comp_padding"; }
 
@@ -860,6 +942,7 @@ std::vector<ctx_test_ptr> make_kv_cases() {
     cases.push_back(std::make_unique<case_state_rotation>());
     cases.push_back(std::make_unique<case_state_restore_fragmented>());
     cases.push_back(std::make_unique<case_noalloc>());
+    cases.push_back(std::make_unique<case_noalloc_bound>());
     cases.push_back(std::make_unique<case_comp_padding>());
 
     return cases;
