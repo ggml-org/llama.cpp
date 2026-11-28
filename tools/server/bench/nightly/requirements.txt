@@ -1,0 +1,6 @@
+aiperf==0.13.0
+datasets==5.1.0
+huggingface_hub==1.33.0
+pyyaml==6.0.3
+requests==2.34.2
+tqdm==4.70.1

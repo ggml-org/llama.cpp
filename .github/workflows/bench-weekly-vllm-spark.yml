@@ -1,0 +1,177 @@
+name: Bench weekly vLLM (DGX Spark)
+
+on:
+  schedule:
+    # Saturday; it queues behind that night's nightly (same concurrency group) and is compared with it
+    - cron: '0 2 * * 6'
+  workflow_dispatch:
+    inputs:
+      columns:
+        description: 'Comma-separated vLLM columns from weekly.yaml, e.g. M3-vllm-nvfp4,M2-vllm-fp4local (default: all)'
+        required: false
+        type: string
+      suites:
+        description: 'Comma-separated suites: serving,agentic (default: both)'
+        required: false
+        type: string
+      configs:
+        description: 'Comma-separated shell patterns on config names, e.g. mooncake_T02*,depth32768*_c8 (default: all)'
+        required: false
+        type: string
+      vllm_image:
+        description: 'Comma-separated COLUMN=IMAGE overrides of the recipe images (default: what NVIDIA recipes name today)'
+        required: false
+        type: string
+      resume:
+        description: 'Finish an interrupted run into its report, e.g. 2026-11-11_vllm: its ok runs are kept, the rest run with its images'
+        required: false
+        type: string
+
+# never on pull requests: the runner is a shared, persistent box
+cache-mode: none
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  # shared with the nightly: one job on the Spark at a time
+  group: bench-nightly-spark
+  cancel-in-progress: false
+
+jobs:
+  prefetch:
+    runs-on: [self-hosted, Linux, gb10, perf]
+    # no GPU needed: picks the images, downloads the checkpoints and builds the venv the column jobs use
+    container: "nvidia/cuda:13.5.0-devel-ubuntu24.04"
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      BENCH_DIR: tools/server/bench/nightly
+
+    outputs:
+      jobs: ${{ steps.prefetch.outputs.vllm_jobs }}
+      date: ${{ steps.prefetch.outputs.date }}
+
+    steps:
+      - name: Bench home
+        id: home
+        # the nightly's folder, next to the checkouts in the runner's work folder, which the runner mounts into every job container
+        run: |
+          home="$(dirname "$RUNNER_WORKSPACE")/llama-nightly"
+          {
+            echo "NIGHTLY_HOME=$home"
+            echo "HF_HOME=$home/container/hf-cache"
+          } >> "$GITHUB_ENV"
+
+      - name: Dependencies
+        id: depends
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates git curl
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Python venv
+        id: venv
+        # venv and its Python in NIGHTLY_HOME: the column jobs use it inside their vLLM images (AIPerf builds crick from source on arm64)
+        env:
+          UV_VERSION: 0.13.7
+        run: |
+          UV="$NIGHTLY_HOME/uv-bin/uv"
+          if ! "$UV" --version 2>/dev/null | grep -qF " $UV_VERSION "; then
+            curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | env UV_UNMANAGED_INSTALL="$NIGHTLY_HOME/uv-bin" sh
+          fi
+          export UV_PYTHON_INSTALL_DIR="$NIGHTLY_HOME/container/uv-python" UV_CACHE_DIR="$NIGHTLY_HOME/container/uv-cache"
+          "$UV" venv -q --allow-existing --python 3.12 --managed-python "$NIGHTLY_HOME/container/weekly-venv"
+          VIRTUAL_ENV="$NIGHTLY_HOME/container/weekly-venv" "$UV" pip install -q -r "$BENCH_DIR/requirements.txt"
+
+      - name: Prefetch images and checkpoints
+        id: prefetch
+        # images: digest and vLLM version from the registry; each column job's container pulls its own
+        env:
+          COLUMNS_IN: ${{ inputs.columns }}
+          VLLM_IMAGE: ${{ inputs.vllm_image }}
+          RESUME: ${{ inputs.resume }}
+        run: |
+          echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+          "$NIGHTLY_HOME/container/weekly-venv/bin/python" "$BENCH_DIR/nightly.py" prefetch --config "$BENCH_DIR/weekly.yaml" ${COLUMNS_IN:+--models "$COLUMNS_IN"} ${VLLM_IMAGE:+--vllm-image "$VLLM_IMAGE"} ${RESUME:+--resume "$RESUME"}
+
+      - name: Return files to the host user
+        if: ${{ always() }}
+        # the container runs as root; the runner on the host reuses the work folder
+        run: |
+          owner=$(stat -c %u:%g "$(dirname "$NIGHTLY_HOME")")
+          find "$NIGHTLY_HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" ! -uid "${owner%:*}" -exec chown -h "$owner" {} +
+
+  bench:
+    name: bench (${{ matrix.column }})
+    needs: prefetch
+    runs-on: [self-hosted, Linux, gb10, perf]
+    strategy:
+      # one column after the other: one server on the Spark at a time; all add to one night
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prefetch.outputs.jobs) }}
+    # the column's vLLM image (by digest) runs the bench itself, with the recipe's docker options
+    container:
+      image: ${{ matrix.image }}
+      options: --gpus all --ipc host ${{ matrix.docker_args }}
+    # 11 runs per column: ~2.1 h measured (tools/server/bench/nightly/BENCHMARKS.md)
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      BENCH_DIR: tools/server/bench/nightly
+
+    steps:
+      - name: Bench home
+        id: home
+        run: |
+          home="$(dirname "$RUNNER_WORKSPACE")/llama-nightly"
+          {
+            echo "NIGHTLY_HOME=$home"
+            echo "HF_HOME=$home/container/hf-cache"
+          } >> "$GITHUB_ENV"
+
+      - name: Clone
+        id: checkout
+        uses: actions/checkout@v6
+
+      - name: Run suites
+        id: run
+        env:
+          COLUMN: ${{ matrix.column }}
+          DATE: ${{ needs.prefetch.outputs.date }}
+          SUITES: ${{ inputs.suites }}
+          CONFIGS: ${{ inputs.configs }}
+          RESUME: ${{ inputs.resume }}
+          NIGHTLY_WORKFLOW_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          "$NIGHTLY_HOME/container/weekly-venv/bin/python" "$BENCH_DIR/nightly.py" run --config "$BENCH_DIR/weekly.yaml" --models "$COLUMN" --date "$DATE" ${SUITES:+--suites "$SUITES"} ${CONFIGS:+--configs "$CONFIGS"} ${RESUME:+--resume "$RESUME"} --summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload results
+        if: ${{ always() && steps.run.outputs.night_dir != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-weekly-${{ steps.run.outputs.night_id }}
+          path: ${{ steps.run.outputs.night_dir }}
+          retention-days: 30
+          # each column job uploads the night so far; the last one has every column
+          overwrite: true
+
+      - name: Return files to the host user
+        if: ${{ always() }}
+        # the container runs as root; the runner on the host reuses the work folder
+        run: |
+          owner=$(stat -c %u:%g "$(dirname "$NIGHTLY_HOME")")
+          find "$NIGHTLY_HOME" "$GITHUB_WORKSPACE" "$RUNNER_TEMP" ! -uid "${owner%:*}" -exec chown -h "$owner" {} +
