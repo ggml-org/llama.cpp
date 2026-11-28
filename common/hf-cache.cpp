@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <stdexcept>
+#include <unordered_set>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -225,7 +226,6 @@ static std::string get_repo_commit(const std::string & repo_id,
         }
 
         fs::path refs_path = get_repo_path(repo_id) / "refs";
-        std::string name;
         std::string commit;
         fs::path name_path;
 
@@ -250,20 +250,18 @@ static std::string get_repo_commit(const std::string & repo_id,
             }
 
             if (_name == "main") {
-                name = _name;
                 commit = _commit;
                 name_path = candidate;
                 break;
             }
 
-            if (name.empty() || commit.empty()) {
-                name = _name;
+            if (name_path.empty() || commit.empty()) {
                 commit = _commit;
                 name_path = candidate;
             }
         }
 
-        if (name.empty() || commit.empty()) {
+        if (name_path.empty() || commit.empty()) {
             LOG_WRN("%s: no valid branch for '%s'\n", __func__, repo_id.c_str());
             return {};
         }
@@ -292,8 +290,9 @@ hf_files get_repo_files(const std::string & repo_id,
         return {};
     }
 
-    fs::path blobs_path = get_repo_path(repo_id) / "blobs";
-    fs::path commit_path = get_repo_path(repo_id) / "snapshots" / commit;
+    const fs::path repo_path = get_repo_path(repo_id);
+    fs::path blobs_path = repo_path / "blobs";
+    fs::path commit_path = repo_path / "snapshots" / commit;
 
     hf_files files;
 
@@ -504,6 +503,139 @@ std::string finalize_file(const hf_file & file, const std::function<bool()> & ke
         }
     }
     return file.final_path;
+}
+
+static bool path_contains(const fs::path & path, const fs::path & subpath) {
+    if (path.empty() || subpath.empty() || path == subpath) {
+        return false;
+    }
+    const auto [path_end, _] = std::mismatch(path.begin(), path.end(), subpath.begin(), subpath.end());
+    return path_end == path.end();
+}
+
+static fs::path resolve_blob_path(const fs::path & canonical_repo, const fs::path & snapshot_path, std::error_code & ec, bool for_reference = false) {
+    const fs::file_status status = fs::symlink_status(snapshot_path, ec);
+    if (ec || !fs::is_symlink(status)) {
+        return {};
+    }
+
+    const fs::path target = fs::read_symlink(snapshot_path, ec);
+    if (ec) {
+        return {};
+    }
+
+    const fs::path snapshot_parent = fs::weakly_canonical(snapshot_path.parent_path(), ec);
+    if (ec) {
+        return {};
+    }
+    fs::path blob_path = target.is_absolute() ? target : snapshot_parent / target;
+
+    if (for_reference) {
+        blob_path = fs::weakly_canonical(blob_path, ec);
+        if (ec) {
+            return {};
+        }
+    } else {
+        blob_path = fs::absolute(blob_path).lexically_normal();
+        const fs::path blobs_path = canonical_repo / "blobs";
+
+        // HF blobs are direct children of the repository's blobs directory
+        if (blob_path.parent_path() != blobs_path) {
+            return {};
+        }
+    }
+    return blob_path;
+}
+
+static std::string blob_reference(const fs::path & path) {
+    std::error_code ec;
+    fs::path reference = fs::weakly_canonical(path, ec);
+    if (ec) {
+        reference = fs::absolute(path, ec).lexically_normal();
+    }
+    return reference.string();
+}
+
+bool remove_cached_files(const std::string & repo_id, const hf_files & files) {
+    const fs::path repo_path = get_repo_path(repo_id);
+
+    std::error_code ec;
+    const fs::path canonical_repo = fs::weakly_canonical(repo_path, ec);
+    const fs::path canonical_blobs = ec ? fs::path() : fs::weakly_canonical(repo_path / "blobs", ec);
+    const bool cleanup_blobs = !ec && path_contains(canonical_repo, canonical_blobs);
+
+    // resolve blob paths from symlinks before deleting snapshot entries
+    std::vector<fs::path> blobs_to_check;
+    if (cleanup_blobs) {
+        for (const auto & f : files) {
+            const fs::path p = f.local_path;
+            const fs::path blob = resolve_blob_path(canonical_repo, p, ec);
+            if (ec) {
+                LOG_WRN("%s: failed to resolve %s: %s\n", __func__, p.string().c_str(), ec.message().c_str());
+                blobs_to_check.clear();
+                break;
+            }
+            if (!blob.empty()) {
+                blobs_to_check.push_back(blob);
+            }
+        }
+    }
+
+    // remove snapshot entries
+    bool removed = false;
+    for (const auto & f : files) {
+        const fs::path p = f.local_path;
+        std::error_code ec;
+        const fs::path canonical_parent = fs::weakly_canonical(p.parent_path(), ec);
+        if (!ec && path_contains(canonical_repo, canonical_parent)) {
+            removed = fs::remove(p, ec) || removed;
+        } else if (!ec) {
+            ec = std::make_error_code(std::errc::permission_denied);
+        }
+        if (ec) {
+            LOG_WRN("%s: failed to remove %s: %s\n", __func__, p.string().c_str(), ec.message().c_str());
+        }
+    }
+
+    if (blobs_to_check.empty()) {
+        return removed;
+    }
+
+    // collect blobs still referenced by any remaining snapshot entry
+    std::unordered_set<std::string> still_referenced;
+    try {
+        for (const auto & revision : fs::directory_iterator(repo_path / "snapshots")) {
+            if (!revision.is_directory()) {
+                continue;
+            }
+            for (const auto & entry : fs::recursive_directory_iterator(revision.path())) {
+                const fs::path blob = resolve_blob_path(repo_path, entry.path(), ec, true);
+                if (ec) {
+                    LOG_WRN("%s: failed to resolve %s: %s\n", __func__, entry.path().string().c_str(), ec.message().c_str());
+                    return removed;
+                }
+                if (!blob.empty()) {
+                    still_referenced.insert(blob.string());
+                }
+            }
+        }
+    } catch (const fs::filesystem_error & e) {
+        LOG_WRN("%s: failed to scan remaining snapshots: %s\n", __func__, e.code().message().c_str());
+        return removed;
+    }
+
+    // remove orphaned blobs
+    for (const auto & blob : blobs_to_check) {
+        if (still_referenced.find(blob_reference(blob)) == still_referenced.end()) {
+            std::error_code ec;
+            removed = fs::remove(blob, ec) || removed;
+            if (ec) {
+                LOG_WRN("%s: failed to remove blob %s: %s\n", __func__, blob.string().c_str(), ec.message().c_str());
+            }
+        }
+    }
+
+    return removed;
 }
 
 bool remove_cached_repo(const std::string & repo_id) {
