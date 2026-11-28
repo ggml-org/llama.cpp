@@ -5,7 +5,7 @@ description: Guided workflow for adding a new model architecture to llama.cpp. U
 
 # Add a new model architecture to llama.cpp
 
-This skill walks a contributor through adding a new model architecture. AI-generated code is permitted in this project, so you may write full implementations for the steps below rather than only pointing at patterns - but follow `AGENTS.md`'s AI usage policy throughout:
+This skill walks a contributor through adding a new model architecture. AI-generated code is permitted in this project, so you may write full implementations for the steps below rather than only pointing at patterns - but follow `AGENTS.md` throughout:
 
 - The contributor is 100% responsible for every line, however it was produced. They must be able to explain and defend any part of it to a reviewer. Check in with them as you go (don't silently generate everything and hand over a finished diff) so they actually absorb what was written.
 - Before writing code, make sure the contributor owns the design choices for this architecture (which reference model to follow, how non-standard bits like RoPE variants or MoE routing should be handled) - AI accelerates a design the contributor has already made, it doesn't make the design for them.
@@ -23,7 +23,7 @@ Before starting, read `CONTRIBUTING.md`, `AGENTS.md` and `docs/development/HOWTO
 Ask the contributor:
 1. Which model (HF repo id or name)? Is it text-only or does it have a multimodal (vision/audio) encoder?
 2. Do they already have the HF `config.json`/weights available locally?
-3. Have they checked for an existing PR/issue on this model? Suggest `gh search issues "<model name>"` and `gh search prs "<model name>"` in the `ggml-org/llama.cpp` repo. If an existing PR covers it, the contributor should comment there and collaborate rather than open a duplicate (per CONTRIBUTING.md's AI Usage Policy).
+3. Have they checked for an existing PR/issue on this model? Suggest `gh search issues "<model name>"` and `gh search prs "<model name>"` in the `ggml-org/llama.cpp` repo. If an existing PR covers it, the contributor should comment there and collaborate rather than open a duplicate (see "Duplicate-work checks" in `AGENTS.md`).
 4. What existing supported architecture is this model closest to (e.g. "Llama-like with sliding window", "MoE like DBRX", "BERT-style encoder")?
 
 If the contributor doesn't know the closest reference architecture, you may grep `conversion/*.py` and `src/models/*.cpp` for architectures with a similar config shape (layer count, head count, MoE expert count, norm placement) and suggest 1-2 candidates - but let the contributor confirm the choice rather than picking one yourself; this choice is a design decision they need to own.
