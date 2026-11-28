@@ -4,6 +4,13 @@
 void sum_rows_f32_cuda(const float * x, float * dst, const int ncols, const int nrows, cudaStream_t stream) {
     const int  id  = ggml_cuda_get_device();
     const int  nsm = ggml_cuda_info().devices[id].nsm;
+    if (ncols <= CUDA_REDUCE_ROWS_SHORT_NCOLS) {
+        const dim3 block_dims(256, 1, 1);
+        const dim3 block_nums((nrows + 255) / 256, 1, 1);
+        const ggml_cuda_kernel_launch_params launch_params = ggml_cuda_kernel_launch_params(block_nums, block_dims, 0, stream);
+        ggml_cuda_kernel_launch(reduce_rows_f32_short</*norm=*/false>, launch_params, x, dst, ncols, (int64_t) nrows);
+        return;
+    }
     const dim3 block_nums(nrows, 1, 1);
     if ((nrows / nsm) < 2) {
         const dim3 block_dims(512, 1, 1);
