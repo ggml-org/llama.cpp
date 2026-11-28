@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -81,6 +82,47 @@ int main() {
         fprintf(stderr, "\n");
         success = false;
     }
+
+    // flint pre-tokenizer: the std::regex fallback recurses per whitespace char and overflows the stack
+    const std::vector<std::string> flint_exprs = {
+        "\\p{N}{1,3}",
+        "[一-龥぀-ゟ゠-ヿ]+",
+        "[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]*[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]+(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?|[^\\r\\n\\p{L}\\p{N}]?[\\p{Lu}\\p{Lt}\\p{Lm}\\p{Lo}\\p{M}]+[\\p{Ll}\\p{Lm}\\p{Lo}\\p{M}]*(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])?| ?[\\p{P}\\p{S}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+",
+    };
+    const struct {
+        std::string text;
+        std::vector<std::string> expected;
+    } flint_tests[] = {
+        { "abc" + std::string(1000000, '\n') + "def", { "abc", std::string(1000000, '\n'), "def" } },
+        { "a  b",              { "a", " ", " b" } },
+        { "ABCdef's tail",     { "ABCdef's", " tail" } },
+        { "1234567",           { "123", "456", "7" } },
+        { "你好world",          { "你好", "world" } },
+        { "it'ſ",              { "it", "'ſ" } },
+        { "123don't",          { "123", "don't" } },
+        { "123don'",           { "123", "don", "'" } },
+        { "hi .\n",            { "hi", " .\n" } },
+        { "a\x01 b",           { "a", "\x01", " b" } },
+        { "a  ",               { "a", "  " } },
+        { "a1b22c333",         { "a", "1", "b", "22", "c", "333" } },
+    };
+    // run on a worker thread: musl gives pthreads a small stack, where the std::regex fallback overflows
+    bool flint_success = true;
+    std::thread flint_thread([&] {
+        for (const auto & test : flint_tests) {
+            const auto actual = unicode_regex_split(test.text, flint_exprs, false);
+            if (actual != test.expected) {
+                fprintf(stderr, "unexpected flint split:");
+                for (const auto & piece : actual) {
+                    fprintf(stderr, " [%s]", piece.c_str());
+                }
+                fprintf(stderr, "\n");
+                flint_success = false;
+            }
+        }
+    });
+    flint_thread.join();
+    success &= flint_success;
 
     return success ? 0 : 1;
 }
