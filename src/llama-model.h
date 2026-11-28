@@ -15,6 +15,7 @@
 #include <vector>
 
 struct llama_cparams;
+struct llama_file;
 struct llama_ubatch;
 struct llama_model_loader;
 struct llama_model;
@@ -811,6 +812,12 @@ struct llama_rope_params {
     ggml_tensor * k_norm  = nullptr; // K norm weight applied after RoPE, a K-shift has to undo it
 };
 
+struct llama_moe_cache_source {
+    const llama_file * file = nullptr;
+    size_t offset = 0;
+    size_t stride = 0;
+};
+
 struct llama_model {
     llm_type type = LLM_TYPE_UNKNOWN;
     llm_arch arch = LLM_ARCH_UNKNOWN;
@@ -1023,7 +1030,11 @@ struct llama_model {
 
     uint32_t n_gpu_layers() const;
     llama_split_mode split_mode() const;
+    bool no_host() const;
     bool no_alloc() const;
+
+    size_t moe_cache_host_size() const;
+    const llama_moe_cache_source * moe_cache_source(const ggml_tensor * tensor) const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
