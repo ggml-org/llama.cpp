@@ -5101,6 +5101,10 @@ struct test_loop_ctrl : public test_case {
 
     test_loop_ctrl(int64_t n = 2304, int64_t r = 64, int64_t T = 1) : n(n), r(r), T(T) {}
 
+    double max_nmse_err() override {
+        return 5e-3;
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * cur = ggml_scale(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, T), 1.0f);
         ggml_tensor * msg = ggml_scale(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, T), 1.0f);
@@ -8438,6 +8442,31 @@ struct test_concat : public test_case {
         return VARS_TO_STR5(type, ne_a, ne_b_d, dim, v);
     }
 
+    int64_t grad_nmax() override {
+        return 40000;
+    }
+
+    std::string op_desc(ggml_tensor * t) override {
+        GGML_UNUSED(t);
+        return "CONCAT";
+    }
+
+    // the weighted loss is linear in a and b, so a large eps is exact and keeps f32 rounding small
+    float grad_eps() override {
+        return 1.0f;
+    }
+
+    void initialize_tensors(ggml_context * ctx) override {
+        for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != nullptr; t = ggml_get_next_tensor(ctx, t)) {
+            // keep weights away from 0 because a near-zero gradient makes the relative error of the grad check blow up
+            if (strcmp(t->name, "w") == 0) {
+                init_tensor_uniform(t, 1.0f, 2.0f);
+            } else {
+                init_tensor_uniform(t);
+            }
+        }
+    }
+
     test_concat(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {10, 5, 5, 5},
             int64_t ne_b_d = 5,
@@ -8452,6 +8481,7 @@ struct test_concat : public test_case {
             auto ne = ne_a; ne[0] *= 2; ne[1] *= 4; ne[2] *= 3;
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(a, "a");
+            ggml_set_param(a);
 
             a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view_of_a");
@@ -8459,18 +8489,24 @@ struct test_concat : public test_case {
             auto ne = ne_a; ne[2] *= 2; ne[3] *= 4;
             a = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(a, "a");
+            ggml_set_param(a);
 
             a = ggml_view_4d(ctx, a, ne_a[0], ne_a[1], ne_a[2], ne_a[3], a->nb[1], a->nb[2], a->nb[3], 0);
             ggml_set_name(a, "view_of_a");
         } else {
             a = ggml_new_tensor(ctx, type, 4, ne_a.data());
             ggml_set_name(a, "a");
+            // the transposed b cases target the forward kernel, a grad check of a there takes minutes
+            if (!(v & 16)) {
+                ggml_set_param(a);
+            }
         }
         ggml_tensor * b;
         if (v & 2) {
             auto ne = ne_b; ne[0] *= 3; ne[1] *= 2; ne[2] *= 4;
             b = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(b, "b");
+            ggml_set_param(b);
 
             b = ggml_view_4d(ctx, b, ne_b[0], ne_b[1], ne_b[2], ne_b[3], b->nb[1], b->nb[2], b->nb[3], 0);
             ggml_set_name(b, "view_of_b");
@@ -8478,6 +8514,7 @@ struct test_concat : public test_case {
             auto ne = ne_b; ne[2] *= 3; ne[3] *= 2;
             b = ggml_new_tensor(ctx, type, 4, ne.data());
             ggml_set_name(b, "b");
+            ggml_set_param(b);
 
             b = ggml_view_4d(ctx, b, ne_b[0], ne_b[1], ne_b[2], ne_b[3], b->nb[1], b->nb[2], b->nb[3], 0);
             ggml_set_name(b, "view_of_b");
@@ -8491,10 +8528,20 @@ struct test_concat : public test_case {
         } else {
             b = ggml_new_tensor(ctx, type, 4, ne_b.data());
             ggml_set_name(b, "b");
+            ggml_set_param(b);
         }
 
         ggml_tensor * out = ggml_concat(ctx, a, b, dim);
         ggml_set_name(out, "out");
+
+        if (mode == MODE_GRAD) {
+            // with sum(out) as the loss every element has the same gradient, so a wrong view offset in the
+            // backward pass would go unnoticed; random weights make the gradient differ per element
+            ggml_tensor * w = ggml_new_tensor(ctx, type, 4, out->ne);
+            ggml_set_name(w, "w");
+            out = ggml_mul(ctx, out, w);
+            ggml_set_name(out, "out_weighted");
+        }
 
         return out;
     }
@@ -12752,6 +12799,9 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_conv_transpose_1d({3,2,1,1}, {3,1,2,1}, 1, 0, 1));
     test_cases.emplace_back(new test_conv_transpose_1d({2,1,1,1}, {3,1,1,1}, 1, 0, 1));
 
+    test_cases.emplace_back(new test_conv_transpose_1d({33,32,1,1}, {20,24,32,1}, 10, 0, 1));
+    test_cases.emplace_back(new test_conv_transpose_1d({35,33,1,1}, {11,17,33,1}, 5, 0, 1));
+
     for (ggml_type type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
         // ConvTranspose1d expressed as mul_mat + col2im (DAC decoder upsampling)
         test_cases.emplace_back(new test_col2im_1d(type, 16, 32, 197, 8, 0)); // kernel = 2*stride
@@ -15040,6 +15090,7 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {2, 1},  4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 4, {4, 1},  4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
     test_cases.emplace_back(new test_flash_attn_ext(256, 256, 2, {12, 1}, 4096, 512, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
+    test_cases.emplace_back(new test_flash_attn_ext(128, 128, 4, { 3, 1},  512,  32, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_F16, GGML_TYPE_F16));
 
     // dense-allocated (non-view) quant K/V at batch >= 64, in cache and native layouts
     test_cases.emplace_back(new test_flash_attn_ext(64, 64, 4, {1, 1}, 512, 75, true, false, 0, 0, GGML_PREC_F32, GGML_TYPE_Q8_0, GGML_TYPE_Q8_0, {0, 2, 1, 3}, false));

@@ -517,35 +517,64 @@ struct ggml_cuda_unroll<1> {
     }
 };
 
-template<int width = WARP_SIZE>
+// If only_lane0_is_used is set to true, then the performance can be better but only lane 0 is guaranteed to have the correct result.
+template<typename T, int width, bool only_lane0_is_used = false>
+static __device__ __forceinline__ T warp_reduce_sum_impl(T x) {
+#if defined(GGML_USE_HIP)
+    if constexpr (width <= 64 && width <= ggml_cuda_get_physical_warp_size()) {
+        static_assert(width >= 2 && width <= 64 && (width & (width - 1)) == 0, "width must be a power of two between 2 and 64");
+        x += ggml_hip_dpp_update<GGML_HIP_DPP_QUAD_PERM_1032>(x);
+        if constexpr (width >= 4) {
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_QUAD_PERM_2301>(x);
+        }
+        if constexpr (width >= 8) {
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_HALF_MIRROR>(x);
+        }
+        if constexpr (width >= 16) {
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_ROR_8>(x);
+        }
+        if constexpr (width == 64) {
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_BCAST_15>(x);
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_BCAST_31>(x);
+            if constexpr (only_lane0_is_used) {
+                return ggml_hip_dpp_update<GGML_HIP_DPP_WAVE_ROR_1>(x);
+            } else {
+                return ggml_cuda_shfl(x, 63, 64);
+            }
+        }
+        if constexpr (width == 32) {
+            return x + ggml_hip_swizzle<GGML_HIP_SWIZZLE_SWAP16>(x);
+        }
+        return x;
+    } else
+#endif // defined(GGML_USE_HIP)
+    {
+#pragma unroll
+        for (int offset = width/2; offset > 0; offset >>= 1) {
+            x += ggml_cuda_shfl_xor(x, offset, width);
+        }
+        return x;
+    }
+}
+
+template<int width = WARP_SIZE, bool only_lane0_is_used = false>
 static __device__ __forceinline__ int warp_reduce_sum(int x) {
 #if !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
     return __reduce_add_sync(GGML_CUDA_FULL_THREAD_MASK, x);
 #else
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += ggml_cuda_shfl_xor(x, offset, width);
-    }
-    return x;
+    return warp_reduce_sum_impl<int, width, only_lane0_is_used>(x);
 #endif // !defined(GGML_USE_HIP) && !defined(GGML_USE_MUSA) && __CUDA_ARCH__ >= GGML_CUDA_CC_AMPERE
 }
 
-template<int width = WARP_SIZE>
+template<int width = WARP_SIZE, bool only_lane0_is_used = false>
 static __device__ __forceinline__ float warp_reduce_sum(float x) {
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        x += ggml_cuda_shfl_xor(x, offset, width);
-    }
-    return x;
+    return warp_reduce_sum_impl<float, width, only_lane0_is_used>(x);
 }
 
-template<int width = WARP_SIZE>
+template<int width = WARP_SIZE, bool only_lane0_is_used = false>
 static __device__ __forceinline__ float2 warp_reduce_sum(float2 a) {
-#pragma unroll
-    for (int offset = width/2; offset > 0; offset >>= 1) {
-        a.x += ggml_cuda_shfl_xor(a.x, offset, width);
-        a.y += ggml_cuda_shfl_xor(a.y, offset, width);
-    }
+    a.x = warp_reduce_sum_impl<float, width, only_lane0_is_used>(a.x);
+    a.y = warp_reduce_sum_impl<float, width, only_lane0_is_used>(a.y);
     return a;
 }
 

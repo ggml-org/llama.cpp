@@ -904,10 +904,11 @@ static __global__ void mul_mat_vec_q(
                     }
                 }
             }
-            tmp[j][i] = warp_reduce_sum<warp_size>(tmp[j][i]);
+
+            tmp[j][i] = i == 0 ? warp_reduce_sum<warp_size, true>(tmp[j][i]) : warp_reduce_sum<warp_size>(tmp[j][i]);
             if constexpr (has_fusion) {
                 if (use_gate) {
-                    tmp_gate[j][i] = warp_reduce_sum<warp_size>(tmp_gate[j][i]);
+                    tmp_gate[j][i] = i == 0 ? warp_reduce_sum<warp_size, true>(tmp_gate[j][i]) : warp_reduce_sum<warp_size>(tmp_gate[j][i]);
                 }
             }
 
@@ -1053,10 +1054,10 @@ static __global__ void mul_mat_vec_q_moe(
     // Warp-level reduction only - no shared memory needed
 #pragma unroll
     for (int i = 0; i < c_rows_per_block; ++i) {
-        tmp[i] = warp_reduce_sum<warp_size>(tmp[i]);
+        tmp[i] = i == 0 ? warp_reduce_sum<warp_size, true>(tmp[i]) : warp_reduce_sum<warp_size>(tmp[i]);
         if constexpr (has_fusion) {
             if (use_gate) {
-                tmp_gate[i] = warp_reduce_sum<warp_size>(tmp_gate[i]);
+                tmp_gate[i] = i == 0 ? warp_reduce_sum<warp_size, true>(tmp_gate[i]) : warp_reduce_sum<warp_size>(tmp_gate[i]);
             }
         }
     }

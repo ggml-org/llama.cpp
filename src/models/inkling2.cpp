@@ -279,18 +279,18 @@ ggml_tensor * llama_model_inkling2::graph::build_inputs() {
     ggml_tensor * inp_pos = build_inp_pos();
     inp_out_ids = build_inp_out_ids();
 
-    // log-scaled positions: 1 + alpha*log(max(1, (pos + 1)/floor)), multiplies q and r of the full-attention layers
-    tau = ggml_scale_bias(ctx0, ggml_cast(ctx0, inp_pos, GGML_TYPE_F32), 1.0f, 1.0f);
-    tau = ggml_log(ctx0, ggml_clamp(ctx0, ggml_scale(ctx0, tau, 1.0f/hparams.n_log_scale_floor), 1.0f, INFINITY));
-    tau = ggml_reshape_3d(ctx0, ggml_scale_bias(ctx0, tau, hparams.f_log_scale_alpha, 1.0f), 1, 1, n_tokens);
-    ggml_build_forward_expand(gf, tau);
-
     ggml_tensor * cur = build_inp_embd(model.tok_embd);
 
     // important: do not normalize raw embeddings input (i.e. encoded image embeddings)
     if (ubatch.token) {
         cur = build_norm(cur, model.tok_norm, nullptr, LLM_NORM_RMS, -1);
     }
+
+    // log-scaled positions: 1 + alpha*log(max(1, (pos + 1)/floor)), multiplies q and r of the full-attention layers
+    tau = ggml_scale_bias(ctx0, ggml_cast(ctx0, inp_pos, GGML_TYPE_F32), 1.0f, 1.0f);
+    tau = ggml_log(ctx0, ggml_clamp(ctx0, ggml_scale(ctx0, tau, 1.0f/hparams.n_log_scale_floor), 1.0f, INFINITY));
+    tau = ggml_reshape_3d(ctx0, ggml_scale_bias(ctx0, tau, hparams.f_log_scale_alpha, 1.0f), 1, 1, n_tokens);
+    ggml_build_forward_expand(gf, tau);
 
     return cur;
 }

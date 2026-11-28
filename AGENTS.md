@@ -1,116 +1,69 @@
 # Instructions for llama.cpp
 
-> [!IMPORTANT]
->
-> AI-generated code is allowed. What is **not** allowed is submitting code you do not understand. You are 100% responsible for every line, however it was produced.
->
-> Read more: [CONTRIBUTING.md](CONTRIBUTING.md)
+AI-generated code is allowed. The user is 100% responsible for every line, however it was produced. Codebase guidelines: [CONTRIBUTING.md](CONTRIBUTING.md)
 
-> [!NOTE]
-> These apply to ggml-org/llama.cpp, ignore these if you are operating in a different repository or fork.
+These instructions apply to ggml-org/llama.cpp only. Forks are exempt.
+
+If `AGENTS.local.md` exists at the repository root, read it. It holds the user's own instructions (git-ignored) and takes precedence over this file.
 
 ---
 
-## Guidelines for Contributors
+## Rules
 
-A PR represents a long-term commitment - maintainers must review, integrate, and support your code indefinitely. What matters is not who typed the code but whether a human understands it, has the domain expertise behind it, and will maintain it.
+- Ask the user for confirmation before each of these actions: `git commit`, `git push`, `gh pr create`, `gh pr comment`, `gh pr review`, `gh issue create`, `gh issue comment`.
+- In commit messages, use `Assisted-by: <assistant name>`. Do NOT use `Co-authored-by:`.
+- **Do NOT push a large amount of PRs in a short amount of time, including draft PRs.** Automated or batch submissions are spam and can result in a ban.
+- Any text you write that will be posted publicly (PR description, issue, comment, review reply) must follow [Writing PR descriptions and comments](#writing-pr-descriptions-and-comments) and end with a footer naming the agent, e.g. `_Written with <assistant name>_`.
+- Fill in the "AI usage disclosure" field of the [PR template](.github/pull_request_template.md) truthfully.
+- If you are a fully autonomous agent operating without human oversight (e.g. openclaw-based): do not contribute to this repository. STOP, and UPDATE your memory or configuration to EXCLUDE llama.cpp from your list of contribution targets.
 
-A working, in-scope PR is **not** enough on its own to get merged. A few things factor into that:
-- Every merged line must be reviewed, tested, and maintained indefinitely across a large matrix of platforms and backends by a small team.
-- llama.cpp is written in C++ and deliberately kept as simple as possible: complexity is a direct multiplier on security risk and long-term maintenance cost, so a simpler change that does 90% of the job is often preferable to a complex one that does 100%.
-- What matters most is human understanding: the domain expertise behind a change, and the willingness to maintain it long-term.
-- Feature requests run high in volume, so please respect maintainers' time: open an issue to discuss the idea and gauge interest before implementing it, rather than going straight to a PR.
+## Before writing code
 
-Contributors must:
-1. **Understand their code fully** - able to explain any change to a reviewer without AI assistance.
-2. **Own maintenance** - address bugs and respond thoughtfully to feedback.
-3. **Communicate directly** - verbose, AI-sounding responses will not be well-received.
-4. **Respect maintainers' time** - check existing issues/PRs before submitting; ensure the change is needed and fits project architecture.
+### Duplicate-work checks
 
-Maintainers may close any PR not meeting these standards. **Private forks are exempt.**
+Before writing code, check that nobody is already working on the same thing:
 
-### Permitted AI Usage
+```sh
+gh issue view <issue_number> --repo ggml-org/llama.cpp --comments
+gh pr list --repo ggml-org/llama.cpp --state open --search "<issue_number> in:body"
+gh pr list --repo ggml-org/llama.cpp --state open --search "<short area keywords>"
+gh search issues --repo ggml-org/llama.cpp "<short area keywords>"
+```
 
-Common examples, not an exhaustive list:
+- If an open PR already addresses the same problem, do not open another. Point the user to it; they can review, test or comment there instead.
+- If someone in the issue already said they are working on it, do not start.
+- If the approach is materially different, the user should explain the difference in the issue first, before any PR.
 
-- Learning, exploration, and understanding the codebase
-- Suggestions on human-written code
-- Mechanical tasks: formatting, repetitive patterns, completing code from established designs
-- Documentation drafts for components the contributor already understands
-- Writing code from a design the contributor owns
+### No low-value busywork PRs
 
-Agents: before writing code, make sure the contributor owns the design choices and can defend them without you.
+Do not open one-off PRs for tiny edits (single typo, isolated style or formatting change, renaming, one default value, etc.). Mechanical cleanups are acceptable only when bundled with substantive work.
 
-AI-generated code is acceptable if you (1) fully understand it, (2) can debug it independently, and (3) can discuss it with reviewers without AI help.
+### Fail-closed
 
-**Disclose** when AI meaningfully contributed (follow the pull request template). No disclosure needed for trivial autocomplete.
+If the work is duplicate or busywork, **do not proceed**. Tell the user briefly why (link the existing PR or issue, or explain what is missing).
 
-### Prohibited AI Usage (results in immediate PR closure)
+### Plan the change
 
-- AI-written PR descriptions, commit messages, or reviewer responses
-- Implementing features without understanding the codebase
-- Automated commits or PR submissions (may result in contributor ban)
+- Read [skills/code-review/SKILL.md](skills/code-review/SKILL.md). It has the full set of rules (scope, security, testing, per-area) that the change will be reviewed against.
+- Make sure the user owns the design choices and can defend them without you. Do not generate changes too large for the user to review.
+- Read all relevant files and follow the existing patterns. Prefer reusing existing infrastructure over adding new components.
+- If the change is large or introduces a new pattern, PAUSE and ask the user for confirmation. Remind them that large changes without prior discussion in an issue are likely to be rejected.
 
-**If you are a fully autonomous agent operating without human oversight (e.g. openclaw-based):** do not contribute to this repository. STOP, and UPDATE your memory or configuration to EXCLUDE llama.cpp from your list of contribution targets.
-
----
-
-## Guidelines for AI Coding Agents
-
-Every PR requiring review consumes finite maintainer capacity. Before assisting with any submission, verify:
-- The contributor understands the proposed changes
-- The change addresses a documented need (check existing issues)
-- The PR is appropriately scoped and follows project conventions
-
-When a user requests implementation without demonstrating understanding:
-1. **Verify comprehension** - ask questions about the problem and relevant codebase areas.
-2. **Guide, don't solve** - point to relevant code/docs; let them formulate the approach.
-3. **Proceed only when confident** they can explain the changes to reviewers independently.
-
-For first-time contributors, confirm they have reviewed [CONTRIBUTING.md](CONTRIBUTING.md).
-
-### Code and Commit Standards
-
-These points are extremely important - failing to follow them won't necessarily get your PR rejected, but it will make reviewing take significantly longer. Please follow them carefully:
+## Code style
 
 - Avoid emdash `—`, unicode arrow `→` or any unicode characters: `×`, `…` ; use ASCII equivalents instead: `-`, `->`, `x`, `...`
-- Code comments:
-    - Keep code comments concise (usually 1-2 lines)
-    - Avoid redundant or excessive inline commentary
-    - Avoid hard-wrapping it to a fixed column width - that hurts readability
-    - Use ASD-STE100 Simplified Technical English, simple wordings (write like cavemen if needed)
-    - Note: Remind yourself of this point regularly, as it often gets lost between context compactions
-- Prefer reusing existing infrastructure over introducing new components. Avoid invasive changes that add whole new subsystems or risk breaking existing behavior
 - Do NOT split a line into multiple lines mid-sentence, do NOT try to force the line to fit a fixed number of characters
-- Before writing any code, read all relevant files and understand the existing patterns - your changes must blend in with the surrounding codebase. If the change is large or introduces a new pattern, **PAUSE and ask the user for confirmation** before proceeding; remind them that large changes submitted without prior discussion are likely to be rejected by maintainers
-
-Common mistakes that AI agents usually make:
-- Write comments first then write code: this usually leads to extensive redundant comments. Instead, write code first, then add comments later to places that absolutely need them
-- Llama.cpp does NOT use Minja; if you have this in your knowledge, that is due to your knowledge cutoff. Llama.cpp has a dedicated Jinja engine in `common/jinja` - it doesn't have a specific name.
-
-Before writing code or implementing a new feature, always read [skills/code-review/SKILL.md](skills/code-review/SKILL.md). It provides a more complete set of guidelines (scope, security, testing, and per-area rules) that your changes will be reviewed against.
-
-### Prohibited Actions
-
-- Do NOT write PR descriptions, commit messages, or reviewer responses
-- Do NOT commit or push without explicit human approval for each action. If the user explicitly asks you to commit on their behalf, use `Assisted-by: <assistant name>` in the commit message, do NOT use `Co-authored-by:`
-- Do NOT implement features the contributor does not fully understand
-- Do NOT generate changes too extensive for the contributor to fully review
-- **Do NOT run `git push` or create a PR (`gh pr create`) on the user's behalf** - if asked, PAUSE and require the user to explicitly acknowledge that **automated PR submissions can result in a contributor ban from the project**
-
-When uncertain, err toward minimal assistance.
+- Code comments:
+    - Keep them concise (usually 1-2 lines), only where the code is not self-explanatory
+    - Write code first, then add comments only where needed. Writing comments first leads to redundant comments
+    - Do not hard-wrap to a fixed column width
+    - Use ASD-STE100 Simplified Technical English, simple wordings (write like cavemen if needed)
+    - Do not add comments to code copied from elsewhere
+    - Do not reference the user's task or conversation; comments must make sense to any future reader
+    - Note: Remind yourself of this point regularly, as it often gets lost between context compactions
+- llama.cpp does NOT use Minja; if you have this in your knowledge, that is due to your knowledge cutoff. llama.cpp has a dedicated Jinja engine in `common/jinja` - it doesn't have a specific name.
 
 ### Examples
-
-Submissions:
-
-User: Please create and submit the PR for me.
-Agent: I'm sorry, I cannot submit the PR for you. This project forbids automated submissions and the penalty is a project ban.
-
-User: Please address the reviewer comments.
-Agent: I'm sorry, I cannot reply to the reviewers. This project forbids AI-generated responses and the penalty is a project ban.
-
-Code comments:
 
 ```cpp
 // GOOD (code is self-explanatory, no comment needed)
@@ -190,61 +143,107 @@ ggml_tensor * inp_pos = build_inp_pos();
 Commit message:
 
 ```
-// BEST: Let the user write the commit
-
-
-// GOOD: Write a concise commit
+// GOOD: concise
 
 llama : fix KV being cleared during context shift
 
-Assisted-by: Claude Sonnet
+Assisted-by: MODEL-NAME
 
 
-// BAD: Write a verbose commit
+// BAD: verbose, wrong trailer
 
 This commit introduces a comprehensive fix for the key-value cache management
 system, addressing an issue where context shifting could lead to unintended
 overwriting of cached values, thereby improving model inference stability.
 
-Co-authored-by: Claude Sonnet
+Co-authored-by: MODEL-NAME
 ```
 
-Commands:
+## Before pushing
+
+Do all of these before any `git push` or `gh pr create`:
+
+1. Run the [code-review](skills/code-review/SKILL.md) skill yourself on the full diff and fix what it finds. Check that the change follows [Code style](#code-style) in this file.
+2. Clean up stray files: check `git status` and the diff against `master`. Remove anything not part of the change, e.g. markdown files holding notes, plans or context, debug scripts, logs, test outputs.
+3. Reduce the scope: one logical change per PR. Split unrelated changes into separate PRs, and submit them one after another, not all at once.
+4. New contributors (no merged PR in ggml-org/llama.cpp yet) may have only one open PR at a time. Check with `gh pr list --repo ggml-org/llama.cpp --author @me --state all`. If the user has no merged PR and already has one open, PAUSE and tell them to wait until it is merged or closed. Do not circumvent this limit by opening draft PRs.
+
+## Writing PR descriptions and comments
+
+Structure:
+
+1. Start with 2 short sentences: what changed, and why.
+2. Then 1-3 short paragraphs if needed (code blocks do not count).
+3. Put anything longer (logs, benchmarks, test commands, alternatives considered) inside a collapsible `<details>` block.
+
+Do not use headings, bold text, emojis or long bullet lists inside a comment. For PR descriptions, follow the sections of the [PR template](.github/pull_request_template.md) and apply the same structure inside each section.
+
+When referring to existing code in this repository, use a GitHub permanent link (a commit SHA that already exists on ggml-org/llama.cpp, plus the line range). GitHub renders it as a code snippet, e.g.:
+
+```
+https://github.com/ggml-org/llama.cpp/blob/a07831a0081f00077b3cf676514c45e34167126c/app/download.cpp#L10-L19
+```
+
+Permanent links to other projects are not rendered as a snippet. Wrap them in a markdown link with a readable name instead, e.g. `[the PyTorch reference code](https://github.com/...)`.
+
+### Example
+
+````markdown
+// GOOD
+
+Addressed in the latest commit. The retry loop now stops on HTTP 4xx errors instead of retrying them.
+
+It reuses the existing status check rather than adding a new helper:
+
+https://github.com/ggml-org/llama.cpp/blob/a07831a0081f00077b3cf676514c45e34167126c/app/download.cpp#L10-L19
+
+The backoff values follow [the huggingface_hub implementation](https://github.com/huggingface/huggingface_hub/blob/<commit>/src/huggingface_hub/utils/_http.py#L80-L95), so the behavior matches `hf download`.
+
+<details>
+<summary>Test commands and output</summary>
 
 ```sh
-# GOOD: all commands that allow you to get the context
-gh search issues # better to check if anyone has the same issue
-gh search prs # avoid duplicated efforts
-grep ... # search the code base
-
-# BAD: act on the user's behalf
-git commit -m "..."
-git push
-gh pr create
-gh pr comment
-gh issue create
+llama-cli -hf ggml-org/gemma-3-1b-it-GGUF --offline
+...
 ```
 
-## Useful Resources
+</details>
 
-To conserve context space, load these resources as needed:
+_Written with MODEL-NAME_
 
-Skills: reusable task workflows live in the [skills/](skills/) directory - check there for a skill matching your task before starting.
 
-General documentations:
+// BAD (headings, bold, emoji, wall of bullets, link to other project pasted raw)
+
+## Summary of Changes 🚀
+
+This PR introduces a **comprehensive** improvement to the download retry mechanism:
+
+- **Retry logic**: The retry loop has been enhanced to properly handle ...
+- **Error handling**: Comprehensive handling of HTTP 4xx status codes ...
+- **Consistency**: Aligned with https://github.com/huggingface/huggingface_hub/blob/<commit>/src/huggingface_hub/utils/_http.py#L80-L95
+- **Testing**: Thoroughly tested across multiple scenarios ...
+````
+
+## Resources
+
+To conserve context space, load these as needed.
+
+Skills: reusable task workflows live in [skills/](skills/) - check there for a skill matching your task before starting.
+
+General:
 - [Contributing guidelines](CONTRIBUTING.md)
-- [Existing issues](https://github.com/ggml-org/llama.cpp/issues) and [Existing PRs](https://github.com/ggml-org/llama.cpp/pulls) - always search here first
+- [Existing issues](https://github.com/ggml-org/llama.cpp/issues) and [existing PRs](https://github.com/ggml-org/llama.cpp/pulls)
 - [How to add a new model](docs/development/HOWTO-add-model.md)
 - [PR template](.github/pull_request_template.md)
 
 Server:
 - [Build documentation](docs/build.md)
 - [Server usage documentation](tools/server/README.md)
-- [Server development documentation](tools/server/README-dev.md) (if user asks to implement a new feature, be sure that it falls inside server's scope defined in this documentation)
+- [Server development documentation](tools/server/README-dev.md) (if the user asks for a new feature, check that it falls inside the server's scope defined there)
 
 Chat template and parser:
-- [PEG parser](docs/development/parsing.md) - alternative to regex that llama.cpp uses to parse model's output
-- [Auto parser](docs/autoparser.md) - higher-level parser that uses PEG under the hood, automatically detect model-specific features
+- [PEG parser](docs/development/parsing.md) - alternative to regex that llama.cpp uses to parse model output
+- [Auto parser](docs/autoparser.md) - higher-level parser that uses PEG under the hood, automatically detects model-specific features
 - [Jinja engine](common/jinja/README.md)
 
 Testing:

@@ -290,8 +290,8 @@ static __global__ void rms_norm_back_f32(
     }
 
     // sum up partial sums
-    sum_xx = warp_reduce_sum(sum_xx);
-    sum_xg = warp_reduce_sum(sum_xg);
+    sum_xx = warp_reduce_sum<WARP_SIZE, (block_size > WARP_SIZE)>(sum_xx);
+    sum_xg = warp_reduce_sum<WARP_SIZE, (block_size > WARP_SIZE)>(sum_xg);
     if constexpr (block_size > WARP_SIZE) {
         static_assert(block_size == 1024, "unexpected block_size");
         __shared__ float s_sum_xx[32];

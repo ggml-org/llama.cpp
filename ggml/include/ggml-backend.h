@@ -410,9 +410,9 @@ extern "C" {
 
         GGML_BACKEND_SPLIT_AXIS_MIRRORED = 10, // all values on all backends
         GGML_BACKEND_SPLIT_AXIS_PARTIAL  = 11, // each backend has a partial sum
+        GGML_BACKEND_SPLIT_AXIS_NONE     = 98, // the entire data is on a single device, effectively running without parallelization
 
         // for internal bookkeeping only:
-        GGML_BACKEND_SPLIT_AXIS_NONE    = 98,
         GGML_BACKEND_SPLIT_AXIS_UNKNOWN = 99,
     };
     GGML_API const char * ggml_backend_meta_split_axis_name(enum ggml_backend_meta_split_axis split_axis);
@@ -433,6 +433,11 @@ extern "C" {
         //     that each need to be split individually across devices so that each device gets a slice of Q, K, and V,
         //     the Q matrix can be larger than the K and V matrices so this can either be expressed as 3 segments or as 2 segments
         //     where the segment for K/V repeats twice
+        // for tensors with axis == MIRRORED || axis == PARTIAL || axis == NONE:
+        //   - n_segments == 1
+        //   - nr[0] == 1
+        // for tensors with axis == NONE:
+        //   - ne[i] is nonzero if and only if the ith device holds the data
         int64_t  ne[16*GGML_BACKEND_META_MAX_DEVICES];
         uint32_t nr[16];
         uint32_t n_segments;
