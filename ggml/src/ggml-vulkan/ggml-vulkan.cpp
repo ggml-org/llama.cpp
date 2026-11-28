@@ -11888,16 +11888,14 @@ void ggml_vk_pad_reflect_1d(ggml_backend_vk_context * ctx, vk_context& subctx, c
 }
 
 void ggml_vk_roll(ggml_backend_vk_context * ctx, vk_context& subctx, const ggml_tensor * src0, ggml_tensor * dst) {
-    const int32_t s0 = ggml_get_op_params_i32(dst, 0);
-    const int32_t s1 = ggml_get_op_params_i32(dst, 1);
-    const int32_t s2 = ggml_get_op_params_i32(dst, 2);
-    const int32_t s3 = ggml_get_op_params_i32(dst, 3);
-    const uint32_t s01_packed = ((s0 + 0x8000) << 16) | (s1 + 0x8000);
-    const uint32_t s23_packed = ((s2 + 0x8000) << 16) | (s3 + 0x8000);
-
     vk_op_unary_push_constants p = vk_op_unary_push_constants_init(src0, dst);
-    memcpy(&p.param1, &s01_packed, sizeof(float));
-    memcpy(&p.param2, &s23_packed, sizeof(float));
+    float * params[] = { &p.param1, &p.param2, &p.param3, &p.param4 };
+    for (int i = 0; i < 4; ++i) {
+        const int64_t shift = ggml_get_op_params_i32(dst, i);
+        const uint32_t normalized = uint32_t(shift < 0 ? shift + dst->ne[i] : shift);
+        // The shader reads the integer bits from the float slots.
+        memcpy(params[i], &normalized, sizeof(normalized));
+    }
 
     ggml_vk_op_f32(ctx, subctx, src0, nullptr, nullptr, nullptr, dst, GGML_OP_ROLL, std::move(p));
 }
