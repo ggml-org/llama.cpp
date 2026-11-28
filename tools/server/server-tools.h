@@ -33,6 +33,7 @@ struct server_tool {
 };
 
 struct server_tools_runtime; // impl detail, defined in server-tools.cpp
+struct server_bg_processes;  // impl detail, defined in server-tools.cpp
 
 struct server_tools {
     std::vector<std::unique_ptr<server_tool>> tools;
@@ -44,12 +45,18 @@ struct server_tools {
     // set when --tools-runtime is configured; routes every tool call through an isolate
     std::unique_ptr<server_tools_runtime> runtime;
 
+    // background processes started by exec_shell_command, stopped when this is destroyed
+    std::shared_ptr<server_bg_processes> bg;
+
     void setup(const std::vector<std::string> & enabled_tools,
                server_mcp & mcp_mgr,
                const std::string & tools_runtime);
 
     server_http_context::handler_t handle_get;
     server_http_context::handler_t handle_post;
+    server_http_context::handler_t handle_bg_list; // GET  /tools/background
+    server_http_context::handler_t handle_bg_log;  // GET  /tools/background/log?id=N
+    server_http_context::handler_t handle_bg_stop; // POST /tools/background/stop {"id": N}
 
     server_tools();
     ~server_tools();

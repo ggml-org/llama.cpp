@@ -1,4 +1,6 @@
 import os
+import sys
+import time
 import re
 import shutil
 import subprocess
@@ -224,6 +226,25 @@ def test_tools_builtin_exec_shell_command_stream():
     chunks = "".join(e["chunk"] for e in events[:-1])
     assert "hello" in chunks
     assert "[exit code: 0]" in chunks
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="background commands need a POSIX shell")
+def test_tools_builtin_exec_shell_command_background():
+    global server
+    server.start()
+
+    # a daemon that never exits must not hold the tool call open
+    start = time.time()
+    res = call_tool("exec_shell_command", {"command": "echo started; sleep 30", "background": True})
+    assert time.time() - start < 15
+    out = res["plain_text_response"]
+    assert "started" in out
+    assert "[still running]" in out
+
+    pid = re.search(r"\[background pid: (\d+)\]", out).group(1)
+    log = re.search(r"\[log file: (.+)\]", out).group(1)
+    assert "started" in call_tool("exec_shell_command", {"command": f"cat {log}"})["plain_text_response"]
+    call_tool("exec_shell_command", {"command": f"kill {pid}"})
 
 
 def test_tools_builtin_cwd_header(tmp_path):

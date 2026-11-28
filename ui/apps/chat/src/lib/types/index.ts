@@ -242,6 +242,7 @@ export type { DesktopIconStripItem, MenuAction } from './navigation';
 
 // Tools types
 export type {
+	BackgroundProcess,
 	EditFileEdit,
 	EditFileMeta,
 	EditFileTitleMeta,

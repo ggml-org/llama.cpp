@@ -8,6 +8,7 @@
 		ChatAttachmentsList,
 		ChatFormActions,
 		ChatFormActionsRecording,
+		ChatFormBackgroundProcesses,
 		ChatFormCurrentWorkingDirectory,
 		ChatFormInput,
 		ChatFormInputFileInputInvisible,
@@ -1012,6 +1013,8 @@
 		{#if systemMessageChip}
 			<ChatFormSystemMessageChip content={systemMessageChip} {disabled} />
 		{/if}
+
+		<ChatFormBackgroundProcesses />
 	</div>
 </form>
 

@@ -7,13 +7,35 @@
 
 import { API_TOOLS, HEADERS, HOME_TILDE, SEARCH } from '#lib/constants/index.ts';
 import { BuiltInTool, GlobSearchType, ToolResponseField } from '#lib/enums/index.ts';
-import type { GlobEntry, ServerToolInfo, ToolExecutionResult } from '#lib/types/index.ts';
+import type {
+	BackgroundProcess,
+	GlobEntry,
+	ServerToolInfo,
+	ToolExecutionResult
+} from '#lib/types/index.ts';
 import { getJsonHeaders } from '#lib/utils/api-headers.ts';
 import { apiFetch, buildCaseInsensitiveGlob, joinPath, lastPathSegment } from '#lib/utils/index.ts';
 import { serverUrl } from '#lib/utils/server-config.ts';
 import { parseSseJsonStream, type SseJsonEvent } from '#lib/utils/sse.ts';
 
 export class ToolsService {
+	/** Background processes started by `exec_shell_command` with `background: true` */
+	static async listBackgroundProcesses(signal?: AbortSignal): Promise<BackgroundProcess[]> {
+		return apiFetch<BackgroundProcess[]>(API_TOOLS.BACKGROUND, { signal });
+	}
+
+	/** The tail of a background process's log */
+	static async getBackgroundProcessLog(id: number, signal?: AbortSignal): Promise<string> {
+		const res = await apiFetch<{ log: string }>(`${API_TOOLS.BACKGROUND_LOG}?id=${id}`, { signal });
+
+		return res.log;
+	}
+
+	/** Stop a background process (its whole process group) and drop it from the list */
+	static async stopBackgroundProcess(id: number): Promise<void> {
+		await apiFetch(API_TOOLS.BACKGROUND_STOP, { body: JSON.stringify({ id }), method: 'POST' });
+	}
+
 	/**
 	 * Execute a server tool on the server.
 	 *

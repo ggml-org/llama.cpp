@@ -20,9 +20,16 @@ export const API_SLOTS = {
 };
 
 export const API_TOOLS = {
+	BACKGROUND: '/tools/background',
+	BACKGROUND_LOG: '/tools/background/log',
+	BACKGROUND_STOP: '/tools/background/stop',
 	EXECUTE: '/tools',
 	LIST: '/tools'
 };
+
+// background processes poll their list while any runs, and an open log faster
+export const BACKGROUND_PROCESSES_POLL_MS = 3000;
+export const BACKGROUND_PROCESS_LOG_POLL_MS = 1000;
 
 // resumable stream routes, the conv::model identity travels as the conv_id query param
 // because model names can contain slashes that a path segment cannot carry

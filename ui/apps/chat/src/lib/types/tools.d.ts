@@ -81,3 +81,17 @@ export interface EditFileTitleMeta {
 	editsApplied?: number;
 	errorMessage?: string;
 }
+
+/** A process started by `exec_shell_command` with `background: true`, as `/tools/background` lists it */
+export interface BackgroundProcess {
+	id: number;
+	pid: string;
+	command: string;
+	/** the model's description of the call, may be empty */
+	description: string;
+	cwd: string;
+	log_path: string;
+	/** unix seconds */
+	started_at: number;
+	running: boolean;
+}

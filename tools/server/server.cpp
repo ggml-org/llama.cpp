@@ -308,6 +308,9 @@ static bool server_setup_features(
         }
         ctx_http.get ("/tools",           ex_wrapper(tools.handle_get));
         ctx_http.post("/tools",           ex_wrapper(tools.handle_post));
+        ctx_http.get ("/tools/background",      ex_wrapper(tools.handle_bg_list));
+        ctx_http.get ("/tools/background/log",  ex_wrapper(tools.handle_bg_log));
+        ctx_http.post("/tools/background/stop", ex_wrapper(tools.handle_bg_stop));
         if (!params.server_tools.empty()) {
             warn_names.push_back("server tools (experimental)");
         }
@@ -320,6 +323,9 @@ static bool server_setup_features(
     } else {
         ctx_http.get ("/tools",           ex_wrapper(res_403));
         ctx_http.post("/tools",           ex_wrapper(res_403));
+        ctx_http.get ("/tools/background",      ex_wrapper(res_403));
+        ctx_http.get ("/tools/background/log",  ex_wrapper(res_403));
+        ctx_http.post("/tools/background/stop", ex_wrapper(res_403));
     }
 
     if (!warn_names.empty()) {

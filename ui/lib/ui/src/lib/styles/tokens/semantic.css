@@ -75,6 +75,9 @@
 	/* one red for every danger state: the danger action is the status fill itself, the alerts' red */
 	--action-danger: var(--fill-danger);
 	--action-danger-hover: color-mix(in oklch, var(--action-danger) 90%, transparent);
+	/* the quiet danger action: red text on a faint wash of the same red, stronger on hover */
+	--action-danger-secondary: color-mix(in oklch, var(--fill-danger) 8%, transparent);
+	--action-danger-secondary-hover: color-mix(in oklch, var(--fill-danger) 16%, transparent);
 	--action-quiet: color-mix(in oklch, var(--neutral-100) 30%, transparent);
 	--action-quiet-hover: var(--neutral-100);
 	--action-ghost-hover: color-mix(in oklch, var(--neutral-500) 10%, transparent);
@@ -174,6 +177,8 @@
 	/* the same red as every danger state, as matte glass: the status fill, frosted and translucent over the page */
 	--action-danger: color-mix(in oklch, var(--fill-danger) 58%, transparent);
 	--action-danger-hover: color-mix(in oklch, var(--fill-danger) 68%, transparent);
+	--action-danger-secondary: color-mix(in oklch, var(--fill-danger) 12%, transparent);
+	--action-danger-secondary-hover: color-mix(in oklch, var(--fill-danger) 22%, transparent);
 	--action-quiet: color-mix(in oklch, var(--neutral-400) 15%, transparent);
 	--action-quiet-hover: color-mix(in oklch, var(--neutral-400) 25%, transparent);
 	--action-ghost-hover: color-mix(in oklch, var(--neutral-400) 10%, transparent);
