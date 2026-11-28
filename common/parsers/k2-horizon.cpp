@@ -71,6 +71,10 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
     auto extract_reasoning   = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
     auto include_grammar     = has_response_format || (has_tools && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE);
 
+    // A tool call may start before the thought is closed, the real closers stay first, the budget sampler forces them
+    const auto think_closers = data.thinking_end_tags;
+    data.thinking_end_tags.push_back(SECTION_START);
+
     if (inputs.has_continuation()) {
         const auto & msg = inputs.continue_msg;
 
@@ -86,12 +90,13 @@ common_chat_params common_chat_params_init_k2_horizon(const common_chat_template
         auto generation_prompt = p.literal(GEN_PREFIX);
 
         auto think_end = p.choice();
-        for (const auto & tag : data.thinking_end_tags) {
+        for (const auto & tag : think_closers) {
             think_end |= p.literal(tag);
         }
         auto think_body  = p.until_one_of(data.thinking_end_tags);
         auto think_block = [&](const common_peg_parser & body) {
-            return p.optional(THINK_START + p.space() + p.through(body, think_end));
+            // Peek only, because the tool call rule will consume <ifm|tool_calls>
+            return p.optional(THINK_START + p.space() + body + (think_end | p.peek(p.literal(SECTION_START))));
         };
         auto reasoning = extract_reasoning ? think_block(p.reasoning(think_body)) : p.eps();
 
