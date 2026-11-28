@@ -77,6 +77,15 @@ struct server_prompt_cache_state {
     }
 };
 
+// safety margin kept free when deciding whether a prompt state can be saved: covers the check-to-alloc race window (other slots and the OS allocate concurrently) plus the duration of the state serialization itself
+// the check is best-effort, not a guarantee
+constexpr size_t SERVER_PROMPT_CACHE_SAVE_MARGIN = 512ull*1024*1024;
+
+// whether a prompt state of state_size bytes can be saved given the free host memory - see server_slot::prompt_save() in server-context.cpp
+inline bool server_prompt_cache_fits(size_t state_size, size_t free_mem) {
+    return state_size + SERVER_PROMPT_CACHE_SAVE_MARGIN <= free_mem;
+}
+
 struct server_prompt_cache {
     server_prompt_cache(int32_t limit_size_mib, size_t limit_tokens) {
         this->limit_size   = 1024ull*1024ull*(limit_size_mib < 0 ? 0 : limit_size_mib);

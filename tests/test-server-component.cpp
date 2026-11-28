@@ -20,6 +20,19 @@
 // NOTE: end-to-end tests live in tools/server/tests
 // see skills/code-review/SKILL.md for more
 
+static void test_prompt_cache_fits(testing & t) {
+    const size_t MiB = 1024ull*1024;
+    const size_t margin = SERVER_PROMPT_CACHE_SAVE_MARGIN;
+
+    t.assert_true("small state fits", server_prompt_cache_fits(100*MiB, 100*MiB + margin));
+    t.assert_true("exact boundary fits", server_prompt_cache_fits(1024*MiB, 1024*MiB + margin));
+    t.assert_true("one byte over the margin does not fit", !server_prompt_cache_fits(1024*MiB, 1024*MiB + margin - 1));
+    t.assert_true("large state does not fit", server_prompt_cache_fits(4096*MiB, 2000*MiB) == false);
+    t.assert_true("zero free memory does not fit", !server_prompt_cache_fits(1, 0));
+    t.assert_true("zero state needs only the margin", server_prompt_cache_fits(0, margin));
+    t.assert_true("zero state without the margin", !server_prompt_cache_fits(0, margin - 1));
+}
+
 //
 // server_tokens (text only, has_mtmd = false)
 //
@@ -957,6 +970,7 @@ int main(int argc, char ** argv) {
     t.test("server_prompt_reuse", test_server_prompt_reuse);
     t.test("server_pipe",   test_server_pipe);
     t.test("decision_escape", test_decision_escape);
+    t.test("prompt_cache_fits", test_prompt_cache_fits);
     t.test("rerank_template", test_rerank_template);
     t.test("decision_class_scores", test_decision_class_scores);
     t.test("decision_ocr_jev_validation", test_decision_ocr_jev_validation);
