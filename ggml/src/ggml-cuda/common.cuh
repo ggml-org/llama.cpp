@@ -630,6 +630,32 @@ static __device__ __forceinline__ float warp_reduce_max(float x) {
 
 template<typename T, int width = WARP_SIZE>
 static __device__ __forceinline__ T warp_prefix_inclusive_sum(T x) {
+#if defined(GGML_USE_HIP)
+    if constexpr (std::is_same_v<T, float> && (width == 32 || width == 64)) {
+        x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_SHR_1, 0xf, false>(x);
+        x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_SHR_2, 0xf, false>(x);
+        x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_SHR_4, 0xf, false>(x);
+        x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_SHR_8, 0xf, false>(x);
+
+#if defined(GCN) || defined(CDNA1) || defined(CDNA2) || defined(CDNA3) || defined(CDNA4)
+        x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_BCAST_15, 0xa, false>(x);
+        if constexpr (width == 64) {
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_ROW_BCAST_31, 0xc, false>(x);
+        }
+#else
+        // Propagate the previous 16-lane row sum to rows 1 and 3.
+        const float sum_16 = __uint_as_float(__builtin_amdgcn_permlanex16(0u, __float_as_uint(x), 0xffffffffu, 0xffffffffu, false, false));
+        x += ggml_hip_dpp_update<GGML_HIP_DPP_QUAD_PERM_ID, 0xa, false>(sum_16);
+
+        if constexpr (width == 64) {
+            // Propagate the lower 32-lane sum to rows 2 and 3.
+            const float sum_32 = __int_as_float(__builtin_amdgcn_readlane(__float_as_int(x), 31));
+            x += ggml_hip_dpp_update<GGML_HIP_DPP_QUAD_PERM_ID, 0xc, false>(sum_32);
+        }
+#endif
+        return x;
+    }
+#endif
     const int lane_id = threadIdx.x % width;
 #pragma unroll
     for (int offset = 1; offset < width; offset <<= 1) {
