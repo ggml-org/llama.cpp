@@ -346,8 +346,6 @@ public:
     // the states are read from the cache, see llama_memory_recurrent_context::get_rs_in_place
     bool rs_in_place;
 
-    // rows to gather, shared by all layers; empty when rs_in_place
-    ggml_tensor * s_copy_rows; // I32 [n_rs] or [0]
 };
 
 class llm_graph_input_cross_embd : public llm_graph_input_i {
