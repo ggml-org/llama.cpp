@@ -15,9 +15,12 @@ export const SVG = {
 	/**
 	 * Shadow root style for an inline svg block. Mirrors the centered, padded
 	 * sizing the light dom used before the svg moved behind a shadow boundary.
+	 * The svg box includes its padding and stays within the message width and the
+	 * block's max height (less the scroll container's 4rem of padding), so the
+	 * whole drawing shows without scrolling.
 	 */
 	INLINE_SHADOW_STYLE:
-		':host{display:block;width:100%;text-align:center}svg{display:block;margin:0 auto;width:auto;height:auto;max-width:100%;max-height:70vh;min-height:8rem;padding:3rem 1rem}',
+		':host{display:block;width:100%;text-align:center}svg{box-sizing:border-box;display:block;margin:0 auto;width:auto;height:auto;max-width:100%;max-height:min(70vh,calc(var(--max-message-height,70vh) - 4rem));min-height:8rem;padding:3rem 1rem}',
 	// Languages that mark a code block as svg content.
 	LANGUAGE: 'svg',
 	/**
