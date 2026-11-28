@@ -238,6 +238,50 @@ void ggml_gemm_mxfp4_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs,
 void ggml_gemm_mxfp4_8x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_q8_0_4x4_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
 void ggml_gemm_q8_0_4x8_q8_0_generic(int n, float * GGML_RESTRICT s, size_t bs, const void * GGML_RESTRICT vx, const void * GGML_RESTRICT vy, int nr, int nc);
+// Q8_0 weights in the x86 VNNI 8x4 layout: block_q8_0x8-sized panels with qs as [8 groups of 4 k][8 rows][4 bytes],
+// every byte stored as q + 128. Activations are plain block_q8_0 rows plus a per-block {float d; int32 comp} aux.
+#if defined(__AVXVNNI__) || (defined(__AVX512VNNI__) && defined(__AVX512VL__))
+void ggml_q8_0_vnni_comp(const void * GGML_RESTRICT q8_row, void * GGML_RESTRICT aux, int64_t k);
+// s[nr x nc] (row stride bs floats) = vy[nr rows of block_q8_0, k = n] x vx[nc rows packed in 8x4 panels]^T
+void ggml_gemm_q8_0_8x4_q8_0(int                        n,
+                             float * GGML_RESTRICT      s,
+                             size_t                     bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy,
+                             const void * GGML_RESTRICT vy_aux,
+                             int                        nr,
+                             int                        nc);
+// Q4_0 weights in the same layout: block_q4_0x8-sized panels with qs as [4 groups of 4 k][8 rows][4 bytes], the
+// Q4_0 nibble pairs kept as is (k low, k + 16 high). Same activation side as the Q8_0 kernel.
+void ggml_gemm_q4_0_8x4_q8_0(int                        n,
+                             float * GGML_RESTRICT      s,
+                             size_t                     bs,
+                             const void * GGML_RESTRICT vx,
+                             const void * GGML_RESTRICT vy,
+                             const void * GGML_RESTRICT vy_aux,
+                             int                        nr,
+                             int                        nc);
+#endif
+// The x86 AVX-512 VNNI 16x4 layout: the 8x4 layout with 16-row panels (block_q8_0x16 / block_q4_0x16-sized, qs as
+// [group of 4 k][16 rows][4 bytes]). Same activation side as the 8x4 kernels.
+#if defined(__AVX512VNNI__) && defined(__AVX512VL__)
+void ggml_gemm_q8_0_16x4_q8_0(int                        n,
+                              float * GGML_RESTRICT      s,
+                              size_t                     bs,
+                              const void * GGML_RESTRICT vx,
+                              const void * GGML_RESTRICT vy,
+                              const void * GGML_RESTRICT vy_aux,
+                              int                        nr,
+                              int                        nc);
+void ggml_gemm_q4_0_16x4_q8_0(int                        n,
+                              float * GGML_RESTRICT      s,
+                              size_t                     bs,
+                              const void * GGML_RESTRICT vx,
+                              const void * GGML_RESTRICT vy,
+                              const void * GGML_RESTRICT vy_aux,
+                              int                        nr,
+                              int                        nc);
+#endif
 #if defined __riscv_zvfh
 void ggml_quantize_mat_q8_0_4x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
 void ggml_quantize_mat_q8_K_4x1_generic(const float * GGML_RESTRICT x, void * GGML_RESTRICT vy, int64_t k);
