@@ -237,7 +237,7 @@ struct ggml_backend_registry {
         auto backend_init_fn = (ggml_backend_init_t) dl_get_sym(handle.get(), "ggml_backend_init");
         if (!backend_init_fn) {
             if (!silent) {
-                GGML_LOG_ERROR("%s: failed to find ggml_backend_init in %s\n", __func__, path_str(path).c_str());
+                GGML_LOG_ERROR("%s: failed to find ggml_backend_init in %s: %s\n", __func__, path_str(path).c_str(), dl_error());
             }
             return nullptr;
         }
