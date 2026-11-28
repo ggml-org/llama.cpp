@@ -559,7 +559,16 @@ static void tiled_unpack_src1_q8_K(const block_q8_K * const * rows, int n_rows, 
         for (int r = 0; r < n_padded; r++) {
             if (r < n_rows) {
                 const block_q8_K & x = rows[r][kblk + slab];
-                for (int s = 0; s < n16; s++) { tile->bsums[(slab * n16 + s) * bs_stride + r] = (int32_t) x.bsums[s]; }
+#if defined(__AVX2__) && defined(__AVXVNNI__) && \
+    !(defined(__AVX512VNNI__) && defined(__AVX512VL__) && defined(__AVX512DQ__))
+                // The Q8_K quantizer leaves bsums untouched for zero blocks.
+                if (x.d == 0.0f) {
+                    for (int s = 0; s < n16; s++) { tile->bsums[(slab * n16 + s) * bs_stride + r] = 0; }
+                } else
+#endif
+                {
+                    for (int s = 0; s < n16; s++) { tile->bsums[(slab * n16 + s) * bs_stride + r] = (int32_t) x.bsums[s]; }
+                }
                 tile->d[slab * TILED_MICRO + r] = x.d;
             } else {
                 for (int s = 0; s < n16; s++) { tile->bsums[(slab * n16 + s) * bs_stride + r] = 0; }
