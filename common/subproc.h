@@ -14,6 +14,7 @@ static constexpr int subprocess_option_no_window = 0;
 static constexpr int subprocess_option_combined_stdout_stderr = 0;
 static constexpr int subprocess_option_inherit_environment = 0;
 static constexpr int subprocess_option_search_user_path = 0;
+static constexpr int subprocess_option_windows_verbatim_arguments = 0;
 #endif
 
 // RAII-style wrapper around https://github.com/sheredom/subprocess.h,

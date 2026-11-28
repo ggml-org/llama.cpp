@@ -93,7 +93,13 @@ enum subprocess_option_e {
 
   // Make subprocess_read_stdout and subprocess_read_stderr return immediately
   // with 0 if no data is available. Requires subprocess_option_enable_async.
-  subprocess_option_enable_async_no_wait = 0x20
+  subprocess_option_enable_async_no_wait = 0x20,
+
+  // On Windows, join the command line arguments with a single space and do
+  // not quote or escape them. Use this for programs such as cmd.exe that do
+  // not parse their command line with the C runtime rules. Ignored on other
+  // platforms.
+  subprocess_option_windows_verbatim_arguments = 0x40
 };
 
 // Error codes returned by subprocess_create and subprocess_create_ex.
@@ -839,6 +845,7 @@ int subprocess_create_ex(const char *const commandLine[], int options,
   int wide_len;
   int i, j;
   int need_quoting;
+  int verbatim;
   subprocess_size_t bs_run;
   unsigned long flags = 0;
   unsigned long last_error = 0;
@@ -1094,6 +1101,9 @@ int subprocess_create_ex(const char *const commandLine[], int options,
     out_process->hEventError = SUBPROCESS_NULL;
   }
 
+  verbatim = subprocess_option_windows_verbatim_arguments ==
+             (options & subprocess_option_windows_verbatim_arguments);
+
   // Combine commandLine together into a single string
   len = 0;
   for (i = 0; commandLine[i]; i++) {
@@ -1101,8 +1111,9 @@ int subprocess_create_ex(const char *const commandLine[], int options,
     len++;
 
     // Quote the argument if it has a space in it
-    need_quoting = strpbrk(commandLine[i], "\t\v ") != SUBPROCESS_NULL ||
-                   commandLine[i][0] == SUBPROCESS_NULL;
+    need_quoting = !verbatim &&
+                   (strpbrk(commandLine[i], "\t\v ") != SUBPROCESS_NULL ||
+                    commandLine[i][0] == SUBPROCESS_NULL);
     if (need_quoting)
       len += 2;
 
@@ -1113,7 +1124,7 @@ int subprocess_create_ex(const char *const commandLine[], int options,
       if ('\\' == commandLine[i][j]) {
         bs_run++;
       } else {
-        if ('"' == commandLine[i][j]) {
+        if (!verbatim && '"' == commandLine[i][j]) {
           // Duplicate the preceding run and escape the quote.
           len += bs_run + 1;
         }
@@ -1142,8 +1153,9 @@ int subprocess_create_ex(const char *const commandLine[], int options,
       commandLineCombined[len++] = ' ';
     }
 
-    need_quoting = strpbrk(commandLine[i], "\t\v ") != SUBPROCESS_NULL ||
-                   commandLine[i][0] == SUBPROCESS_NULL;
+    need_quoting = !verbatim &&
+                   (strpbrk(commandLine[i], "\t\v ") != SUBPROCESS_NULL ||
+                    commandLine[i][0] == SUBPROCESS_NULL);
     if (need_quoting) {
       commandLineCombined[len++] = '"';
     }
@@ -1155,7 +1167,7 @@ int subprocess_create_ex(const char *const commandLine[], int options,
         j++;
       }
 
-      if ('"' == commandLine[i][j]) {
+      if (!verbatim && '"' == commandLine[i][j]) {
         // 2n + 1 slashes preserve n slashes and escape the quote.
         bs_run = (bs_run * 2) + 1;
       } else if ('\0' == commandLine[i][j] && need_quoting) {
