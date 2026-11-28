@@ -2305,6 +2305,11 @@ void llama_vocab::impl::load(llama_model_loader & ml, const LLM_KV & kv) {
             // read vocab size from metadata
             uint32_t n_tokens = 0;
             if (ml.get_key(LLM_KV_VOCAB_SIZE, n_tokens, false)) {
+                // bound n_tokens to avoid huge allocations
+                constexpr uint32_t n_tokens_max = 1u << 24;
+                if (n_tokens > n_tokens_max) {
+                    throw std::runtime_error(format("invalid vocab size %u, must be <= %u", n_tokens, n_tokens_max));
+                }
                 LLAMA_LOG_WARN("%s: adding %u dummy tokens\n", __func__, n_tokens);
                 id_to_token.resize(n_tokens);
             }
