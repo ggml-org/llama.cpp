@@ -126,6 +126,24 @@ void common_ngram_map_begin(
             map.idx_last_check, size_begin, map.keys.size());
 
     size_t idx_begin_cleanup = map.size_last_begin;
+
+    // clean up from where a different prompt diverges from the previous one
+    bool diverged = false;
+    {
+        const size_t n_cmp = std::min(map.tokens_last_begin.size(), tokens.size());
+        size_t n_common = 0;
+        while (n_common < n_cmp && map.tokens_last_begin[n_common] == tokens[n_common]) {
+            ++n_common;
+        }
+        if (n_common < map.size_last_begin) {
+            const size_t nm = (size_t) map.size_key + map.size_value;
+            idx_begin_cleanup = n_common > nm ? n_common - nm : 0;
+            diverged = true;
+            LOG_DBG("%s: prompt diverges at %zu (previous begin %zu): cleanup from %zu\n", __func__,
+                    n_common, map.size_last_begin, idx_begin_cleanup);
+        }
+    }
+
     if (idx_begin_cleanup > size_begin) {
         if (size_begin > (size_t) map.size_key + map.size_value) {
             idx_begin_cleanup = size_begin - map.size_key - map.size_value;
@@ -136,7 +154,7 @@ void common_ngram_map_begin(
     }
 
     size_t count_map_entries_upd = 0;
-    if (!map.key_map.empty() && size_begin < map.idx_last_check) {
+    if (!map.key_map.empty() && (size_begin < map.idx_last_check || diverged)) {
         if (map.show_key_map_stats) {
             // Print statistics of hash map map_key.
             size_t count_nonzero = 0;
@@ -168,7 +186,7 @@ void common_ngram_map_begin(
         map.key_map_last_idx = (idx_begin_cleanup > 0) ? (uint32_t) (idx_begin_cleanup - 1) : 0;
     }
 
-    if (size_begin < map.idx_last_check && !map.keys.empty()) {
+    if ((size_begin < map.idx_last_check || diverged) && !map.keys.empty()) {
         size_t count_keys = map.keys.size();
         size_t count_keys_del = 0;
         size_t count_values_del = 0;
@@ -216,6 +234,7 @@ void common_ngram_map_begin(
 
     map.idx_last_check = size_begin;
     map.size_last_begin = size_begin;
+    map.tokens_last_begin = tokens;
 }
 
 void common_ngram_map_draft(common_ngram_map & map,

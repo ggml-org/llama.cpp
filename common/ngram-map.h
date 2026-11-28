@@ -80,6 +80,7 @@ struct common_ngram_map {
     // A rebuild of the ngram map is needed after that.
 
     size_t   size_last_begin      = 0; // number of tokens at previous start of generation
+    llama_tokens tokens_last_begin;     // prompt at previous start of generation
 
     bool     last_draft_created   = false; // true if a draft was created at last call.
     size_t   last_draft_key_idx   = 0; // index of last key used for draft generation (0 = no draft)
