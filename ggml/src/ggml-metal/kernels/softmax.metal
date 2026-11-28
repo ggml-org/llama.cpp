@@ -214,10 +214,80 @@ kernel void kernel_soft_max_4(
     }
 }
 
+template<typename T>
+kernel void kernel_soft_max_short(
+        constant ggml_metal_kargs_soft_max & args,
+        device const  char * src0,
+        device const  char * src1,
+        device const  char * src2,
+        device        char * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3  tptg[[threads_per_threadgroup]]) {
+    const int32_t ir = tgpig.x*tptg.x + tpitg.x;
+    if (ir >= args.ne01*args.ne02) {
+        return;
+    }
+
+    const int32_t i03 = tgpig.z;
+    const int32_t i02 = ir/args.ne01;
+    const int32_t i01 = ir%args.ne01;
+
+    const int32_t i13 = i03%args.ne13;
+    const int32_t i12 = i02%args.ne12;
+    const int32_t i11 = i01;
+
+    device const float * psrc0 =                (device const float *) (src0 + i01*args.nb01 + i02*args.nb02 + i03*args.nb03);
+    device const     T * pmask = src1 != src0 ? (device const T *    ) (src1 + i11*args.nb11 + i12*args.nb12 + i13*args.nb13) : nullptr;
+    device const float * psrc2 = src2 != src0 ? (device const float *) (src2)                                                 : nullptr;
+    device       float * pdst  =                (device       float *) (dst  + i01*args.nb1  + i02*args.nb2  + i03*args.nb3);
+
+    float slope = 1.0f;
+
+    if (args.max_bias > 0.0f) {
+        const int32_t h = i02;
+
+        const float base = h < args.n_head_log2 ? args.m0 : args.m1;
+        const int   exp  = h < args.n_head_log2 ? h + 1 : 2*(h - args.n_head_log2) + 1;
+
+        slope = pow(base, exp);
+    }
+
+    float vals[N_SHORT_ROW_NCOLS];
+    float max_val = psrc2 ? psrc2[i02] : -INFINITY;
+
+    for (int i00 = 0; i00 < N_SHORT_ROW_NCOLS; ++i00) {
+        if (i00 < args.ne00) {
+            vals[i00] = psrc0[i00]*args.scale + (pmask ? slope*pmask[i00] : 0.0f);
+            max_val = MAX(max_val, vals[i00]);
+        }
+    }
+
+    float sum = psrc2 ? exp(psrc2[i02] - max_val) : 0.0f;
+
+    for (int i00 = 0; i00 < N_SHORT_ROW_NCOLS; ++i00) {
+        if (i00 < args.ne00) {
+            vals[i00] = exp(vals[i00] - max_val);
+            sum += vals[i00];
+        }
+    }
+
+    const float inv_sum = 1.0f/sum;
+
+    for (int i00 = 0; i00 < N_SHORT_ROW_NCOLS; ++i00) {
+        if (i00 < args.ne00) {
+            pdst[i00] = vals[i00]*inv_sum;
+        }
+    }
+}
+
 typedef decltype(kernel_soft_max<float>)    kernel_soft_max_t;
 typedef decltype(kernel_soft_max_4<float4>) kernel_soft_max_4_t;
+typedef decltype(kernel_soft_max_short<float>) kernel_soft_max_short_t;
 
 template [[host_name("kernel_soft_max_f16")]]   kernel kernel_soft_max_t   kernel_soft_max<half>;
 template [[host_name("kernel_soft_max_f32")]]   kernel kernel_soft_max_t   kernel_soft_max<float>;
 template [[host_name("kernel_soft_max_f16_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<half4>;
 template [[host_name("kernel_soft_max_f32_4")]] kernel kernel_soft_max_4_t kernel_soft_max_4<float4>;
+template [[host_name("kernel_soft_max_short_f16")]] kernel kernel_soft_max_short_t kernel_soft_max_short<half>;
+template [[host_name("kernel_soft_max_short_f32")]] kernel kernel_soft_max_short_t kernel_soft_max_short<float>;

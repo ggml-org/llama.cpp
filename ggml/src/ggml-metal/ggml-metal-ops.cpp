@@ -1085,6 +1085,14 @@ int ggml_metal_op_sum_rows(ggml_metal_op_t ctx, int idx) {
     ggml_metal_encoder_set_buffer  (enc, bid_src0, 1);
     ggml_metal_encoder_set_buffer  (enc, bid_dst,  2);
 
+    if (ne00 <= N_SHORT_ROW_NCOLS) {
+        const int nth = 256;
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01*ne02 + nth - 1)/nth, 1, ne03, nth, 1, 1);
+
+        return 1;
+    }
+
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 
     ggml_metal_encoder_dispatch_threadgroups(enc, ne01, ne02, ne03, nth, 1, 1);
@@ -1792,6 +1800,14 @@ int ggml_metal_op_soft_max(ggml_metal_op_t ctx, int idx) {
         ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op->src[0]), 3);
     }
     ggml_metal_encoder_set_buffer(enc, ggml_metal_get_buffer_id(op), 4);
+
+    if (ne00 <= N_SHORT_ROW_NCOLS) {
+        const int nth = 256;
+
+        ggml_metal_encoder_dispatch_threadgroups(enc, (ne01*ne02 + nth - 1)/nth, 1, ne03, nth, 1, 1);
+
+        return 1;
+    }
 
     ggml_metal_encoder_set_threadgroup_memory_size(enc, smem, 0);
 

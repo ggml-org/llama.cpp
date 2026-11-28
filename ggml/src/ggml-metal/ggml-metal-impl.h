@@ -15,6 +15,7 @@
 #define N_MM_SIMD_GROUP_Y 2
 
 #define N_ARGMAX_NPART_MAX 256
+#define N_SHORT_ROW_NCOLS 8
 #define N_ARGMAX_CHUNK 4096
 
 #define N_SG_CONV_2D 4

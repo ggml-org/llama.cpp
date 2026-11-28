@@ -116,6 +116,34 @@ typedef decltype(kernel_sum_rows_impl<float, float>) kernel_sum_rows_t;
 template [[host_name("kernel_sum_rows_f32_f32")]]   kernel kernel_sum_rows_t kernel_sum_rows_impl<float,  float>;
 template [[host_name("kernel_sum_rows_f32_f32_4")]] kernel kernel_sum_rows_t kernel_sum_rows_impl<float4, float>;
 
+kernel void kernel_sum_rows_short_f32_f32(
+        constant ggml_metal_kargs_sum_rows & args,
+        device const char * src0,
+        device       char * dst,
+        uint3 tgpig[[threadgroup_position_in_grid]],
+        uint3 tpitg[[thread_position_in_threadgroup]],
+        uint3   ntg[[threads_per_threadgroup]]) {
+    const int64_t ir = (int64_t) tgpig.x*ntg.x + tpitg.x;
+    if (ir >= args.ne01*args.ne02) {
+        return;
+    }
+
+    const int64_t i3 = tgpig.z;
+    const int64_t i2 = ir/args.ne01;
+    const int64_t i1 = ir%args.ne01;
+
+    device const float * src_row = (device const float *) (src0 + i1*args.nb01 + i2*args.nb02 + i3*args.nb03);
+    device       float * dst_row = (device       float *) (dst  + i1*args.nb1  + i2*args.nb2  + i3*args.nb3);
+
+    float sumf = 0.0f;
+
+    for (int64_t i0 = 0; i0 < args.ne00; ++i0) {
+        sumf += src_row[i0];
+    }
+
+    dst_row[0] = FC_sum_rows_op == OP_SUM_ROWS_NUM_MEAN ? sumf/args.ne00 : sumf;
+}
+
 template<typename T>
 kernel void kernel_cumsum_blk(
         constant ggml_metal_kargs_cumsum_blk & args,

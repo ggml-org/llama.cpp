@@ -381,9 +381,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_sum_rows(ggml_me
     const char * t0_str = ggml_type_name(op->src[0]->type);
     const char * t_str  = ggml_type_name(op->type);
 
-    const bool is_c4 = op->src[0]->ne[0] % 4 == 0;
+    const bool is_short = op->src[0]->ne[0] <= N_SHORT_ROW_NCOLS;
+    const bool is_c4    = op->src[0]->ne[0] % 4 == 0 && !is_short;
 
-    snprintf(base, 256, "kernel_sum_rows_%s_%s%s", t0_str, t_str, is_c4 ? "_4" : "");
+    snprintf(base, 256, "kernel_sum_rows_%s%s_%s%s", is_short ? "short_" : "", t0_str, t_str, is_c4 ? "_4" : "");
     snprintf(name, 256, "%s_op=%d", base, op_num);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -397,7 +398,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_sum_rows(ggml_me
         ggml_metal_cv_free(cv);
     }
 
-    res.smem = 32*sizeof(float);
+    res.smem = is_short ? 0 : 32*sizeof(float);
 
     if (is_c4) {
         res.smem *= 4;
@@ -472,13 +473,15 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_soft_max(ggml_me
 
     const char * suffix = "";
 
-    if (op->src[0]->ne[0] % 4 == 0) {
+    const bool is_short = op->src[0]->ne[0] <= N_SHORT_ROW_NCOLS;
+
+    if (op->src[0]->ne[0] % 4 == 0 && !is_short) {
         suffix = "_4";
     }
 
     const ggml_type tsrc1 = op->src[1] ? op->src[1]->type : GGML_TYPE_F32;
 
-    snprintf(base, 256, "kernel_soft_max_%s%s", ggml_type_name(tsrc1), suffix);
+    snprintf(base, 256, "kernel_soft_max_%s%s%s", is_short ? "short_" : "", ggml_type_name(tsrc1), suffix);
     snprintf(name, 256, "%s", base);
 
     ggml_metal_pipeline_with_params res = ggml_metal_library_get_pipeline(lib, name);
@@ -486,7 +489,7 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_soft_max(ggml_me
         res = ggml_metal_library_compile_pipeline(lib, base, name, nullptr);
     }
 
-    res.smem = 32*sizeof(float);
+    res.smem = is_short ? 0 : 32*sizeof(float);
 
     return res;
 }
