@@ -112,3 +112,23 @@ def test_responses_stream_with_llama_telemetry():
     assert completed is not None
     assert "usage" in completed["response"]
     assert "timings" in completed
+
+
+@pytest.mark.parametrize("reasoning_item", [
+    {"type": "reasoning", "id": "r1", "summary": None},
+    {"type": "reasoning", "id": "r2", "summary": []},
+    {"type": "reasoning", "id": "r3"},
+])
+def test_responses_with_noop_reasoning_items(reasoning_item):
+    global server
+    server.start()
+    res = server.make_request("POST", "/responses", data={
+        "input": [
+            reasoning_item,
+            {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        ],
+        "max_output_tokens": 16,
+    })
+    assert res.status_code == 200, f"Server returned error: {res.status_code} {res.body}"
+    assert res.body["status"] == "completed"
+    assert len(res.body["output"]) > 0
