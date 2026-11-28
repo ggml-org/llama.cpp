@@ -180,7 +180,7 @@ rwkv_wkv7_f32_t1_warp_row(const int T, const int C, const int H, const float * r
     const float vt  = v[t];
     const float st0 = s0 * _w[lane]             + _k[lane]             * vt + sa * _b[lane];
     const float st1 = s1 * _w[lane + half_head] + _k[lane + half_head] * vt + sa * _b[lane + half_head];
-    const float y   = warp_reduce_sum(st0 * _r[lane] + st1 * _r[lane + half_head]);
+    const float y   = warp_reduce_sum<WARP_SIZE, true>(st0 * _r[lane] + st1 * _r[lane + half_head]);
 
     dst[T * C + state_base + lane]             = st0;
     dst[T * C + state_base + lane + half_head] = st1;

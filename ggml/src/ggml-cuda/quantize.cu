@@ -122,7 +122,7 @@ static __global__ void quantize_q8_1(
     const float  d = amax / 127.0f;
     const int8_t q = amax == 0.0f ? 0 : roundf(xi / d);
 
-    const int sum = warp_reduce_sum<QK8_1>((int) q);
+    const int sum = warp_reduce_sum<QK8_1, true>((int) q);
 
     y[ib].qs[iqs] = q;
 
@@ -680,7 +680,7 @@ static __device__ __forceinline__ void quantize_mmq_few_store(const float4 xi, i
     // as in quantize_mmq_q8_1: the sum of the quantized values; the int warp_reduce_sum reduces the whole warp on Ampere+
     [[maybe_unused]] float sum = 0.0f;
     if constexpr (ds_layout != MMQ_Q8_1_DS_LAYOUT_D4) {
-        sum = d*warp_reduce_sum<8>(float(q.x + q.y + q.z + q.w));
+        sum = d*warp_reduce_sum<8, true>(float(q.x + q.y + q.z + q.w));
     }
 
     const int s = iu / QK8_1; // sub-block

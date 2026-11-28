@@ -40,7 +40,7 @@ static __global__ void cross_entropy_loss_f32(
         const float logit_i = use_shared ? tmp[i] : logits[i];
         loss += (logit_i - max_logit - sum) * labels[i];
     }
-    loss = -warp_reduce_sum(loss) / (float)k;
+    loss = -warp_reduce_sum<WARP_SIZE, true>(loss) / (float)k;
 
     if (threadIdx.x != 0) {
         return;
