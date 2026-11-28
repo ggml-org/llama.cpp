@@ -11,7 +11,9 @@ void llama_model_minicpm5_moe::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_EXPERT_SHARED_COUNT,         hparams.n_expert_shared);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_SCALE,        hparams.expert_weights_scale);
     ml.get_key(LLM_KV_EXPERT_WEIGHTS_NORM,         hparams.expert_weights_norm);
-    hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
+    if (!ml.get_key(LLM_KV_EXPERT_GATING_FUNC, hparams.expert_gating_func, false)) {
+        hparams.expert_gating_func = LLAMA_EXPERT_GATING_FUNC_TYPE_SIGMOID;
+    }
     type = LLM_TYPE_UNKNOWN;
 }
 
@@ -122,7 +124,7 @@ llama_model_minicpm5_moe::graph::graph(const llm_graph_params & params) : llm_gr
             cb(Kcur, "Kcur_rope", il);
 
             cur = build_attn(inp_attn,
-                    NULL, NULL, NULL,  // wo will be applied after gating
+                    NULL, NULL,  // wo will be applied after gating
                     Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, kq_scale, il);
             cb(cur, "attn_out", il);
 
@@ -133,7 +135,7 @@ llama_model_minicpm5_moe::graph::graph(const llm_graph_params & params) : llm_gr
             cb(cur, "attn_gated", il);
 
             // now apply output projection
-            cur = build_lora_mm(model.layers[il].wo, cur, model.layers[il].wo_s);
+            cur = build_lora_mm(model.layers[il].wo, cur);
             cb(cur, "attn_o_proj", il);
         }
 
@@ -153,7 +155,6 @@ llama_model_minicpm5_moe::graph::graph(const llm_graph_params & params) : llm_gr
 
         // MoE or dense FFN
         if ((uint32_t)il >= hparams.n_layer_dense_lead) {
-            // MoE layer with sigmoid routing, normalization, and scaling
             ggml_tensor * moe_out = build_moe_ffn(cur,
                     model.layers[il].ffn_gate_inp,
                     model.layers[il].ffn_up_exps,
@@ -171,9 +172,9 @@ llama_model_minicpm5_moe::graph::graph(const llm_graph_params & params) : llm_gr
             // shared expert
             if (hparams.n_expert_shared > 0) {
                 ggml_tensor * ffn_shexp = build_ffn(cur,
-                        model.layers[il].ffn_up_shexp,   NULL, NULL,
-                        model.layers[il].ffn_gate_shexp, NULL, NULL,
-                        model.layers[il].ffn_down_shexp, NULL, NULL,
+                        model.layers[il].ffn_up_shexp,   NULL,
+                        model.layers[il].ffn_gate_shexp, NULL,
+                        model.layers[il].ffn_down_shexp, NULL,
                         NULL,
                         LLM_FFN_SILU, LLM_FFN_PAR, il);
                 cb(ffn_shexp, "ffn_shexp", il);
@@ -186,9 +187,9 @@ llama_model_minicpm5_moe::graph::graph(const llm_graph_params & params) : llm_gr
         } else {
             // dense layer
             cur = build_ffn(cur,
-                    model.layers[il].ffn_up,   NULL, NULL,
-                    model.layers[il].ffn_gate, NULL, NULL,
-                    model.layers[il].ffn_down, NULL, NULL,
+                    model.layers[il].ffn_up,   NULL,
+                    model.layers[il].ffn_gate, NULL,
+                    model.layers[il].ffn_down, NULL,
                     NULL,
                     LLM_FFN_SILU, LLM_FFN_PAR, il);
             cb(cur, "ffn_out", il);
@@ -212,7 +213,7 @@ llama_model_minicpm5_moe::graph::graph(const llm_graph_params & params) : llm_gr
     res->t_embd = cur;
 
     // lm_head
-    cur = build_lora_mm(model.output, cur, model.output_s);
+    cur = build_lora_mm(model.output, cur);
     cb(cur, "result_output", -1);
     res->t_logits = cur;
 }

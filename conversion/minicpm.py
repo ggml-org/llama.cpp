@@ -86,17 +86,12 @@ class MiniCPM5MoEModel(TextModel):
         if name.endswith("self_attn.q_proj.weight"):
             n_head = self.hparams["num_attention_heads"]
             head_dim = self.hparams.get("head_dim", self.hparams["hidden_size"] // n_head)
-            # HF interleaves query and gate rows within each head.
+            # Each HF head stores its query rows followed by its gate rows.
             query, gate = data_torch.reshape(n_head, 2 * head_dim, -1).chunk(2, dim=1)
             query = query.reshape(n_head * head_dim, -1)
             gate = gate.reshape(n_head * head_dim, -1)
-            # Q/K already use the NeoX RoPE layout expected by this architecture.
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_Q, bid), query
             yield self.format_tensor_name(gguf.MODEL_TENSOR.ATTN_GATE, bid), gate
-            return
-
-        if name.endswith(".e_score_correction_bias"):
-            yield self.format_tensor_name(gguf.MODEL_TENSOR.FFN_EXP_PROBS_B, bid, suffix="bias"), data_torch
             return
 
         if ".mlp.experts." in name:
