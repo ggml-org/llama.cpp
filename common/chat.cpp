@@ -1463,6 +1463,15 @@ static common_chat_params_init_fn common_chat_template_detect_params_init(const 
         return common_chat_params_init_lfm2_5;
     }
 
+    // GigaChat3.5 format detection: GigaChatV3 separators with GCML tool calls, checked before GigaChatV3
+    if (src.find("<|role_sep|>") != std::string::npos &&
+        src.find("<|message_sep|>") != std::string::npos &&
+        src.find("GCML") != std::string::npos &&
+        src.find("tool_calls") != std::string::npos) {
+        LOG_DBG("Using specialized template: GigaChat3.5\n");
+        return common_chat_params_init_gigachat_v3_5;
+    }
+
     // GigaChatV3 format detection
     if (src.find("<|role_sep|>") != std::string::npos &&
         src.find("<|message_sep|>") != std::string::npos &&

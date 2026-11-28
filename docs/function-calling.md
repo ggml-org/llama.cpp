@@ -302,6 +302,14 @@ llama-server --jinja -fa -hf bartowski/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q6_K_L \
 llama-server --jinja -fa -hf bartowski/DeepSeek-R1-Distill-Qwen-32B-GGUF:Q4_K_M \
     --chat-template-file models/templates/llama-cpp-deepseek-r1.jinja
 
+# GigaChat 3.5 needs our template overrides for tool calls (the official base template uses `dict.from_keys`, which is not supported)
+
+llama-server --jinja -fa -hf ai-sage/GigaChat3.5-432B-A28B-GGUF:Q4_K_M \
+    --chat-template-file models/templates/llama-cpp-gigachat3.5.jinja
+
+llama-server --jinja -fa -hf ai-sage/GigaChat3.5-432B-A28B-Reasoning-GGUF:Q4_K_M \
+    --chat-template-file models/templates/llama-cpp-gigachat3.5-reasoning.jinja
+
 # Native support requires the right template for these GGUFs:
 
 llama-server --jinja -fa -hf bartowski/functionary-small-v3.2-GGUF:Q4_K_M

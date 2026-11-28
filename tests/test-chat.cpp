@@ -5041,6 +5041,236 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
     }
 
+    // GigaChat 3.5: GCML tool calls inside the assistant message
+    {
+        auto tst = peg_tester("models/templates/llama-cpp-gigachat3.5.jinja", detailed_debug);
+
+        tst.test(R"({"answer":42})")
+            .enable_thinking(false)
+            .json_schema(R"({"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]})")
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .expect_reconstruction()
+            .run();
+
+        tst.test("Hello, world!\nWhat's up?")
+            .enable_thinking(true)
+            .chat_template_kwargs({ { "reasoning", "false" } })
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .expect_reconstruction()
+            .run();
+
+        tst.test(
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"special_function\">\n"
+               "<｜GCML｜parameter name=\"arg1\" string=\"false\">1</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+    }
+
+    // with reasoning enabled both templates open <think>, the Reasoning one always does
+    for (const char * path : { "models/templates/llama-cpp-gigachat3.5.jinja", "models/templates/llama-cpp-gigachat3.5-reasoning.jinja" }) {
+        auto tst = peg_tester(path, detailed_debug);
+        const std::string answer_schema = R"({"type":"object","properties":{"answer":{"type":"integer"}},"required":["answer"]})";
+
+        tst.test("I'm thinking</think>\n\nHello!")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .tools({ get_time_tool })
+            .expect_content("<think>I'm thinking</think>\n\nHello!")
+            .run();
+
+        tst.test(
+               "Let me check</think>\n\n"
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"get_time\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Tokyo</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", ""))
+            .expect_content("<think>Let me check</think>\n\n")
+            .run();
+
+        // model closes the think block immediately and answers
+        tst.test("</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist)
+            .run();
+
+        tst.test("I'm\nthinking</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .expect(message_assist_thoughts)
+            .run();
+
+        tst.test(
+               "</think>\n\n"
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"special_function\">\n"
+               "<｜GCML｜parameter name=\"arg1\" string=\"false\">1</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ special_function_tool })
+            .expect(message_assist_call)
+            .run();
+
+        tst.test(
+               "Let me check</think>\n\n"
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"get_time\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Tokyo</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ get_time_tool })
+            .expect(message_with_tool_calls_and_reasoning("get_time", R"({"city": "Tokyo"})", "Let me check"))
+            .run();
+
+        tst.test(
+               "Calling both</think>\n\n"
+               "<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"get_time\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Paris</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "<｜GCML｜invoke name=\"get_weather\">\n"
+               "<｜GCML｜parameter name=\"city\" string=\"true\">Paris</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n"
+               "</｜GCML｜tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .parallel_tool_calls(true)
+            .tools({ get_time_tool, get_weather_tool })
+            .expect(message_with_reasoning_content_and_multiple_tool_calls(
+                "Calling both", "",
+                { { "get_time", R"({"city": "Paris"})" }, { "get_weather", R"({"city": "Paris"})" } }))
+            .run();
+
+        tst.test(
+               "</think>\n\n<｜GCML｜tool_calls>\n"
+               "<｜GCML｜invoke name=\"tool_2req_4opt\">\n"
+               "<｜GCML｜parameter name=\"opt1\" string=\"true\">first</｜GCML｜parameter>\n"
+               "<｜GCML｜parameter name=\"req2\" string=\"false\">42</｜GCML｜parameter>\n"
+               "<｜GCML｜parameter name=\"opt2\" string=\"false\">7</｜GCML｜parameter>\n"
+               "<｜GCML｜parameter name=\"req1\" string=\"true\">required</｜GCML｜parameter>\n"
+               "<｜GCML｜parameter name=\"opt3\" string=\"true\">last</｜GCML｜parameter>\n"
+               "</｜GCML｜invoke>\n</｜GCML｜tool_calls>")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .tools({ tool_2req_4opt })
+            .expect_tool_calls({ { "tool_2req_4opt", R"({"opt1":"first","req2":42,"opt2":7,"req1":"required","opt3":"last"})", {} } })
+            .run();
+
+        const common_chat_tool mixed_tool = {
+            "mixed_arg", "Accept a string, integer or null",
+            R"({"type":"object","properties":{"value":{"type":["string","integer","null"]}},"required":["value"]})",
+        };
+        for (const auto & value : json::array({ nullptr, 42, "null" })) {
+            const bool is_string = value.is_string();
+            const std::string body = is_string ? value.get<std::string>() : value.dump();
+            tst.test(
+                   "</think>\n\n<｜GCML｜tool_calls>\n<｜GCML｜invoke name=\"mixed_arg\">\n"
+                   "<｜GCML｜parameter name=\"value\" string=\"" + std::string(is_string ? "true" : "false") + "\">" + body +
+                   "</｜GCML｜parameter>\n</｜GCML｜invoke>\n</｜GCML｜tool_calls>")
+                .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+                .tools({ mixed_tool })
+                .expect_tool_calls({ { "mixed_arg", json({ { "value", value } }).dump(), {} } })
+                .run();
+        }
+
+        // a call quoted in the reasoning is not parsed
+        const std::string quoted_call =
+            "Could call <｜GCML｜tool_calls>\n<｜GCML｜invoke name=\"get_time\">\n"
+            "<｜GCML｜parameter name=\"city\" string=\"true\">Paris</｜GCML｜parameter>\n"
+            "</｜GCML｜invoke>\n</｜GCML｜tool_calls>, but no tool is needed.";
+        tst.test(quoted_call + "</think>\n\nHello!")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .tools({ get_time_tool })
+            .expect_content("<think>" + quoted_call + "</think>\n\nHello!")
+            .run();
+
+        for (auto format : { COMMON_REASONING_FORMAT_DEEPSEEK, COMMON_REASONING_FORMAT_NONE }) {
+            tst.test("Calculated.</think>\n\n{\"answer\":42}")
+                .reasoning_format(format)
+                .tools({ get_time_tool })
+                .json_schema(answer_schema)
+                .expect_reasoning(format == COMMON_REASONING_FORMAT_NONE ? "" : "Calculated.")
+                .expect_content(format == COMMON_REASONING_FORMAT_NONE ? "<think>Calculated.</think>\n\n{\"answer\":42}" : R"({"answer":42})")
+                .run();
+        }
+
+        tst.test("</think>\n\n{\"answer\":42}")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .json_schema(R"({"type":"object"})")
+            .expect_content("<think></think>\n\n{\"answer\":42}")
+            .run();
+
+        // Continuation tests
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .messages({ message_user, message_assist_prefill_content })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test(" thinking</think>\n\nHello, world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .messages({ message_user, message_assist_prefill_reasoning })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_reasoning("I'm thinking")
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        // content continuation keeps the empty think block the template opened
+        tst.test("world!\nWhat's up?")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .messages({ message_user, simple_assist_msg("Hello, ", "") })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_content("Hello, world!\nWhat's up?")
+            .run();
+
+        tst.test("42}")
+            .reasoning_format(COMMON_REASONING_FORMAT_DEEPSEEK)
+            .json_schema(answer_schema)
+            .messages({ message_user, simple_assist_msg("{\"answer\":", "Calculated.") })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_reasoning("Calculated.")
+            .expect_content(R"({"answer":42})")
+            .run();
+
+        tst.test("culated.</think>\n\n{\"answer\":42}")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .json_schema(answer_schema)
+            .messages({ message_user, simple_assist_msg("", "Cal") })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_REASONING)
+            .expect_content("<think>Calculated.</think>\n\n{\"answer\":42}")
+            .run();
+
+        tst.test("42}")
+            .reasoning_format(COMMON_REASONING_FORMAT_NONE)
+            .json_schema(answer_schema)
+            .messages({ message_user, simple_assist_msg("<think>Calculated.</think>\n\n{\"answer\":", "") })
+            .add_generation_prompt(false)
+            .continue_final_message(COMMON_CHAT_CONTINUATION_CONTENT)
+            .expect_content("<think>Calculated.</think>\n\n{\"answer\":42}")
+            .run();
+    }
+
     // GLM-4.6 tests - format: <tool_call>function_name\n<arg_key>...</arg_key>\n<arg_value>...</arg_value>\n</tool_call>
     {
         auto tst = peg_tester("models/templates/GLM-4.6.jinja", detailed_debug);
@@ -8481,6 +8711,14 @@ static void test_template_generation_prompt() {
     }
 
     {
+        auto tmpls = read_templates("models/templates/llama-cpp-gigachat3.5.jinja");
+        check(tmpls, basic(), "assistant<|role_sep|>\n<think>");
+        auto no_thinking = basic();
+        no_thinking.enable_thinking = false;
+        check(tmpls, no_thinking, "assistant<|role_sep|>\n");
+    }
+
+    {
         auto tmpls = read_templates("models/templates/deepseek-ai-DeepSeek-V3.2.jinja");
         check(tmpls, basic(),                  "<｜Assistant｜><think>");
         check(tmpls, continuation_content(),   "<｜Assistant｜><think>I'm thinking</think>Hello, ");
@@ -8911,6 +9149,196 @@ static void test_deepseek_v4_1_message_fields() {
         assert_equals(size_t(1), msg.tool_calls.size());
         assert_equals(std::string("get_time"), msg.tool_calls[0].name);
         assert_equals(std::string("{\"city\":\"Tokyo\"}"), msg.tool_calls[0].arguments);
+    }
+}
+
+static void test_gigachat_v3_5_tool_string_schema() {
+    LOG_DBG("%s\n", __func__);
+
+    auto tmpls = read_templates("models/templates/llama-cpp-gigachat3.5-reasoning.jinja");
+    common_chat_templates_inputs inputs;
+    inputs.messages = { message_user };
+    inputs.tool_choice = COMMON_CHAT_TOOL_CHOICE_REQUIRED;
+    inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+
+    const json units   = { { "type", "string" }, { "enum", json::array({ "C", "Celsius", "F" }) } };
+    const json pattern = { { "type", "string" }, { "pattern", "^[CF]$" } };
+    struct test_case {
+        json        schema;
+        std::string arg;      // the parameter as written by the model
+        bool        accepted; // by the grammar
+        std::string parsed;   // empty if the parser is not run
+    };
+    const std::vector<test_case> cases = {
+        // enum and const values are sampled raw
+        { units,                   "string=\"true\">C",       true,  "C"       },
+        { units,                   "string=\"true\">Celsius", true,  "Celsius" },
+        { units,                   "string=\"true\">Kelvin",  false, ""        },
+        { json{ { "const", "C" } }, "string=\"true\">F",       false, ""        },
+        // a pattern is sampled in the JSON form, the raw form is still parsed
+        { pattern,                 "string=\"false\">\"F\"",  true,  "F"       },
+        { pattern,                 "string=\"false\">\"K\"",  false, ""        },
+        { pattern,                 "string=\"true\">K",       false, ""        },
+        { pattern,                 "string=\"true\">F",       false, "F"       },
+    };
+    for (const auto & tc : cases) {
+        inputs.tools = { { "weather", "", json({
+            { "type", "object" }, { "properties", json{ { "unit", tc.schema } } }, { "required", json::array({ "unit" }) }
+        }).dump() } };
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+        auto grammar = build_grammar(session.grammar());
+        const std::string output = "</think>\n\n<｜GCML｜tool_calls>\n<｜GCML｜invoke name=\"weather\">\n"
+            "<｜GCML｜parameter name=\"unit\" " + tc.arg + "</｜GCML｜parameter>\n</｜GCML｜invoke>\n</｜GCML｜tool_calls>";
+        assert_equals(tc.accepted, match_string(session.generation_prompt() + output, grammar.get()));
+        if (!tc.parsed.empty()) {
+            const auto msg = session.finish(common_chat_input(output));
+            assert_equals(size_t(1), msg.tool_calls.size());
+            assert_equals(tc.parsed, json::parse(msg.tool_calls[0].arguments).at("unit").get<std::string>());
+        }
+    }
+
+    // a required call follows the reasoning without text in between
+    common_chat_session session(tmpls.get(), nullptr, inputs);
+    const auto call = [](const std::string & name) {
+        return "<｜GCML｜tool_calls>\n<｜GCML｜invoke name=\"" + name + "\">\n"
+               "<｜GCML｜parameter name=\"unit\" string=\"false\">\"F\"</｜GCML｜parameter>\n</｜GCML｜invoke>\n</｜GCML｜tool_calls>";
+    };
+    const auto accepts = [](const common_chat_session & s, const std::string & output) {
+        auto grammar = build_grammar(s.grammar());
+        return match_string(s.generation_prompt() + "</think>\n\n" + output, grammar.get());
+    };
+    assert_equals(true,  accepts(session, call("weather")));
+    assert_equals(false, accepts(session, "Calling it.\n\n" + call("weather")));
+
+    inputs.tools.push_back({ "forecast", "", inputs.tools.front().parameters });
+    inputs.tool_choice = common_chat_tool_choice_parse_oaicompat(
+        json{ { "type", "function" }, { "function", { { "name", "forecast" } } } }, inputs.tools);
+    common_chat_session named(tmpls.get(), nullptr, inputs);
+    assert_equals(true,  accepts(named, call("forecast")));
+    assert_equals(false, accepts(named, call("weather")));
+}
+
+static void test_gigachat_v3_5_history_thinking() {
+    LOG_DBG("%s\n", __func__);
+
+    common_chat_msg system;
+    system.role    = "system";
+    system.content = "System instructions";
+    common_chat_msg developer;
+    developer.role    = "developer system";
+    developer.content = "Developer instructions";
+    common_chat_msg response;
+    response.role         = "tool";
+    response.tool_call_id = "call_1";
+    response.content      = "12:00";
+    auto previous = simple_assist_msg("Previous answer", "Previous reasoning");
+    auto current  = simple_assist_msg("", "Current reasoning");
+    current.tool_calls = { { "get_time", "{}", "call_1" } };
+
+    const std::vector<std::vector<common_chat_msg>> conversations = {
+        { message_user, previous, message_user, current, response },
+        { system, message_user, previous, message_user, current, response },
+        { developer, system, message_user, previous, message_user, current, response },
+    };
+    for (const char * path : { "models/templates/llama-cpp-gigachat3.5.jinja", "models/templates/llama-cpp-gigachat3.5-reasoning.jinja" }) {
+        auto tmpls = read_templates(path);
+
+        // a reply with only reasoning goes back into the history as a think block
+        common_chat_templates_inputs inputs;
+        inputs.messages = { message_user };
+        inputs.reasoning_format = COMMON_REASONING_FORMAT_DEEPSEEK;
+        common_chat_session session(tmpls.get(), nullptr, inputs);
+        const auto parsed = session.finish(common_chat_input("Thought</think>"));
+        assert_equals(std::string(), parsed.content);
+        const auto history = common_chat_msgs_parse_oaicompat(common_chat_msgs_to_json_oaicompat({ parsed }));
+        inputs.messages = { message_user, history[0], message_user };
+        inputs.chat_template_kwargs = { { "drop_history_thinking", "false" } };
+        assert_contains(common_chat_templates_apply(tmpls.get(), inputs).prompt.str(),
+                        "assistant<|role_sep|>\n<think>Thought</think><|message_sep|>\n\n");
+
+        // only the reasoning of the current turn is kept when dropping it from the history
+        for (const auto & messages : conversations) {
+            for (bool drop : { false, true }) {
+                inputs.messages = messages;
+                inputs.chat_template_kwargs = { { "drop_history_thinking", drop ? "true" : "false" } };
+                const auto prompt = common_chat_templates_apply(tmpls.get(), inputs).prompt.str();
+                assert_contains(prompt, "Current reasoning");
+                assert_equals(!drop, prompt.find("Previous reasoning") != std::string::npos);
+
+                // clients that send the reasoning back inside the content get the same prompt
+                for (auto & msg : inputs.messages) {
+                    if (!msg.reasoning_content.empty()) {
+                        msg.content = "<think>" + msg.reasoning_content + "</think>" + (msg.content.empty() ? "" : "\n\n" + msg.content);
+                        msg.reasoning_content.clear();
+                    }
+                }
+                assert_equals(prompt, common_chat_templates_apply(tmpls.get(), inputs).prompt.str());
+            }
+        }
+    }
+}
+
+static void test_gigachat_v3_5_tool_result_ordering() {
+    LOG_DBG("%s\n", __func__);
+
+    common_chat_msg calls;
+    calls.role = "assistant";
+    calls.tool_calls = { { "get_time", "{\"city\":\"Paris\"}", "call_1" },
+                         { "get_weather", "{\"city\":\"Tokyo\"}", "call_2" } };
+    common_chat_msg time;
+    time.role = "tool";
+    time.tool_call_id = "call_1";
+    time.content = "12:00";
+    common_chat_msg weather;
+    weather.role = "tool";
+    weather.tool_call_id = "call_2";
+    weather.content = "sunny";
+
+    auto no_ids = calls;
+    no_ids.tool_calls[0].id.clear();
+    no_ids.tool_calls[1].id.clear();
+    auto same_name = calls;
+    same_name.tool_calls[1].name = "get_time";
+
+    for (const char * path : { "models/templates/llama-cpp-gigachat3.5.jinja", "models/templates/llama-cpp-gigachat3.5-reasoning.jinja" }) {
+        auto tmpls = read_templates(path);
+        auto render = [&](const std::vector<common_chat_msg> & messages) {
+            common_chat_templates_inputs inputs;
+            inputs.messages = messages;
+            inputs.add_generation_prompt = false;
+            return common_chat_templates_apply(tmpls.get(), inputs).prompt.str();
+        };
+        const std::string ordered = "<function_response name=\"get_time\">12:00</function_response>\n"
+                                    "<function_response name=\"get_weather\">sunny</function_response>";
+        assert_contains(render({ message_user, calls, time, weather }), ordered);
+        assert_contains(render({ message_user, calls, weather, time }), ordered);
+        assert_contains(render({ message_user, same_name, weather, time }),
+                        "<function_response name=\"get_time\">12:00</function_response>\n"
+                        "<function_response name=\"get_time\">sunny</function_response>");
+
+        // replies that cannot be matched by id keep their order
+        const std::string positional = "<function_response name=\"get_time\">sunny</function_response>\n"
+                                       "<function_response name=\"get_weather\">12:00</function_response>";
+        assert_contains(render({ message_user, no_ids, weather, time }), positional);
+        auto no_id = weather;
+        no_id.tool_call_id.clear();
+        assert_contains(render({ message_user, calls, no_id, time }), positional);
+
+        auto one_call = calls;
+        one_call.tool_calls.resize(1);
+        assert_contains(render({ message_user, one_call, time, message_user, calls, weather, time }), ordered);
+        for (const auto & history : std::vector<std::vector<common_chat_msg>>{
+                { message_user, one_call, time, message_user, time },
+                { message_user, calls, time, weather, message_user, time },
+                { message_user, one_call, message_user, time },
+        }) {
+            try {
+                render(history);
+                GGML_ABORT("expected an orphan tool result to be rejected");
+            } catch (const std::invalid_argument & e) {
+                assert_contains(e.what(), "without preceding tool calls");
+            }
+        }
     }
 }
 
@@ -9520,6 +9948,9 @@ int main(int argc, char ** argv) {
         test_deepseek_v4_thinking_retention();
         test_deepseek_v4_tool_result_ordering();
         test_deepseek_v4_1_message_fields();
+        test_gigachat_v3_5_tool_result_ordering();
+        test_gigachat_v3_5_tool_string_schema();
+        test_gigachat_v3_5_history_thinking();
         test_inkling2_media_blocks();
         test_raon_prompt();
         test_template_generation_prompt();
