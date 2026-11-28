@@ -424,10 +424,10 @@ static __global__ void swiglu_oai_kernel(const T * x, const T * g, T * dst, cons
     const int64_t j0 = (i / n) * o0 + (i % n);
     const int64_t j1 = o0 == o1 ? j0 : (i / n) * o1 + (i % n);
 
-    float xi = x[j0];
-    float gi = g[j1];
+    float xi = ggml_cuda_cast<float>(x[j0]);
+    float gi = ggml_cuda_cast<float>(g[j1]);
 
-    dst[i] = ggml_cuda_op_swiglu_oai_single(xi, gi, alpha, limit);
+    dst[i] = ggml_cuda_cast<T>(ggml_cuda_op_swiglu_oai_single(xi, gi, alpha, limit));
 }
 
 template <typename T>
@@ -451,8 +451,8 @@ void ggml_cuda_op_swiglu_oai(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
     GGML_ASSERT(src0->nb[0] == ggml_element_size(src0));
     GGML_ASSERT(ggml_is_contiguous(dst));
 
-    GGML_ASSERT(src0->type == GGML_TYPE_F32);
-    GGML_ASSERT( dst->type == GGML_TYPE_F32);
+    GGML_ASSERT(src0->type == GGML_TYPE_F32 || src0->type == GGML_TYPE_F16 || src0->type == GGML_TYPE_BF16);
+    GGML_ASSERT( dst->type == GGML_TYPE_F32 || dst->type == GGML_TYPE_F16 || dst->type == GGML_TYPE_BF16);
     GGML_ASSERT(src0->type == dst->type);
     GGML_ASSERT(dst->ne[0] == nc);
     GGML_ASSERT(ggml_nrows(dst) == ggml_nrows(src0));
@@ -469,15 +469,31 @@ void ggml_cuda_op_swiglu_oai(ggml_backend_cuda_context & ctx, ggml_tensor * dst)
     const float alpha = ggml_get_op_params_f32(dst, 2);
     const float limit = ggml_get_op_params_f32(dst, 3);
 
-    float * src0_p = (float *) src0_d;
-    float * src1_p = (float *) src1_d;
-
-    if (!src1) {
-        src0_p += swapped ? nc : 0;
-        src1_p += swapped ? 0 : nc;
+    if (src0->type == GGML_TYPE_F16) {
+        half * src0_p = (half *) src0_d;
+        half * src1_p = (half *) src1_d;
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+        swiglu_oai_cuda(src0_p, src1_p, (half *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(half), src1_o / sizeof(half), alpha, limit, stream);
+    } else if (src0->type == GGML_TYPE_BF16) {
+        nv_bfloat16 * src0_p = (nv_bfloat16 *) src0_d;
+        nv_bfloat16 * src1_p = (nv_bfloat16 *) src1_d;
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+        swiglu_oai_cuda(src0_p, src1_p, (nv_bfloat16 *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(nv_bfloat16), src1_o / sizeof(nv_bfloat16), alpha, limit, stream);
+    } else {
+        float * src0_p = (float *) src0_d;
+        float * src1_p = (float *) src1_d;
+        if (!src1) {
+            src0_p += swapped ? nc : 0;
+            src1_p += swapped ? 0 : nc;
+        }
+        swiglu_oai_cuda(src0_p, src1_p, (float *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float), src1_o / sizeof(float), alpha, limit, stream);
     }
-
-    swiglu_oai_cuda(src0_p, src1_p, (float *)dst_d, ggml_nelements(dst), nc, src0_o / sizeof(float), src1_o / sizeof(float), alpha, limit, stream);
 }
 
 // swiglu_clamp

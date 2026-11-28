@@ -4197,11 +4197,7 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_GLU_OP_GEGLU_ERF:
                 case GGML_GLU_OP_GEGLU_QUICK:
                 case GGML_GLU_OP_SWIGLU_CLAMP:
-                    if (op->src[0]->type == GGML_TYPE_BF16 &&
-                            (ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_OAI || ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_CLAMP)) {
-                        return false;
-                    }
-                    if (op->src[0]->type == GGML_TYPE_F16 && ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_OAI) {
+                    if (op->src[0]->type == GGML_TYPE_BF16 && ggml_get_glu_op(op) == GGML_GLU_OP_SWIGLU_CLAMP) {
                         return false;
                     }
                     return ggml_is_contiguous_1(op->src[0]);
