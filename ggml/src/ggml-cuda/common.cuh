@@ -453,6 +453,21 @@ static __device__ __forceinline__ T ggml_cuda_shfl_xor(T value, int lane_mask, i
     return __shfl_xor_sync(mask, value, lane_mask, width);
 }
 
+template<typename T>
+static __device__ __forceinline__ T ggml_cuda_shfl_uniform(T value, int src_lane) {
+#if defined(GGML_USE_HIP)
+    // Shuffle from a uniform source lane. On HIP, readlane is simpler and cheaper than the generic shuffle.
+    static_assert(sizeof(T) == sizeof(int), "ggml_cuda_shfl_uniform requires a 32-bit type");
+    static_assert(__is_trivially_copyable(T), "ggml_cuda_shfl_uniform requires a trivially copyable type");
+
+    const int bits = __builtin_bit_cast(int, value);
+    const int result = __builtin_amdgcn_readlane(bits, src_lane & (ggml_cuda_get_physical_warp_size() - 1));
+    return __builtin_bit_cast(T, result);
+#else
+    return ggml_cuda_shfl(value, src_lane);
+#endif
+}
+
 static __device__ __forceinline__ ggml_cuda_thread_mask_t ggml_cuda_ballot(int predicate, ggml_cuda_thread_mask_t mask = GGML_CUDA_FULL_THREAD_MASK) {
     return __ballot_sync(mask, predicate);
 }
