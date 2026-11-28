@@ -223,7 +223,42 @@ struct ggml_custom_op_params {
     ggml_custom_op_t fun;
     int              n_tasks;
     void           * userdata;
+
+    // ggml_custom_op_4d(): the op with its kernels, fun is the CPU kernel and userdata the copy of the params, NULL for the other custom ops
+    const struct ggml_custom_op * op;
+    uint32_t params_size;
 };
+
+// see ggml_custom_op_init() in ggml.h
+
+struct ggml_custom_sched {
+    int n_tasks;       // CPU
+    int n_groups[3];   // other backends
+    int group_size[3];
+    bool async;        // can run next to the nodes after it, until the first node that takes it
+};
+
+struct ggml_custom_kernel {
+    char *              backend;
+    ggml_custom_sched_t sched;
+    ggml_custom_op_t    fun;       // CPU
+    void *              code;      // other backends: a copy, with a 0 after it
+    size_t              code_size;
+    char *              name;      // name of the kernel in the code
+    uint64_t            uid;       // of the code, to cache what a backend loads from it
+};
+
+struct ggml_custom_op {
+    char *                       name;
+    struct ggml_custom_kernel ** kernels;
+    int                          n_kernels;
+};
+
+// the kernel that a node of ggml_custom_op_4d() has for the backend (ggml_backend_reg_name()), NULL if it has none
+GGML_API const struct ggml_custom_kernel * ggml_custom_op_kernel(const struct ggml_tensor * node, const char * backend);
+
+// how the kernel runs the node, see ggml_custom_sched_t
+GGML_API struct ggml_custom_sched ggml_custom_op_sched(const struct ggml_tensor * node, const struct ggml_custom_kernel * kernel);
 
 // bitset
 
