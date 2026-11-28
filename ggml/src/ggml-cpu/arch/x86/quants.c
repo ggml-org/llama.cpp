@@ -3167,7 +3167,68 @@ void ggml_vec_dot_iq2_s_q8_K(int n, float * GGML_RESTRICT s, size_t bs, const vo
 
     const int nb = n / QK_K;
 
-#if defined(__AVX2__)
+#if defined(__AVX512F__) && defined(__AVX512BW__) && defined(__AVX512VL__) && defined(__AVX2__)
+
+    static const uint8_t k_mask1_64[64] __attribute__((aligned(64))) = {
+        0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1,1, 2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3,
+        0,0,0,0,0,0,0,0, 1,1,1,1,1,1,1,1, 2,2,2,2,2,2,2,2, 3,3,3,3,3,3,3,3
+    };
+    static const uint8_t k_mask2_64[64] __attribute__((aligned(64))) = {
+        1,2,4,8,16,32,64,128,1,2,4,8,16,32,64,128,1,2,4,8,16,32,64,128,1,2,4,8,16,32,64,128,
+        1,2,4,8,16,32,64,128,1,2,4,8,16,32,64,128,1,2,4,8,16,32,64,128,1,2,4,8,16,32,64,128
+    };
+    const __m512i mask1 = _mm512_load_si512((const void*)k_mask1_64);
+    const __m512i mask2 = _mm512_load_si512((const void*)k_mask2_64);
+    const __m128i m4 = _mm_set1_epi8(0xf);
+    const __m128i m1 = _mm_set1_epi8(1);
+
+    __m512 accumf = _mm512_setzero_ps();
+    for (int i = 0; i < nb; ++i) {
+        const float d = GGML_CPU_FP16_TO_FP32(x[i].d) * y[i].d;
+        const uint8_t * GGML_RESTRICT qs = x[i].qs;
+        const uint8_t * GGML_RESTRICT qh = x[i].qh;
+        const uint16_t * GGML_RESTRICT signs = (const uint16_t *)(x[i].qs + QK_K/8);
+        const int8_t  * GGML_RESTRICT q8 = y[i].qs;
+
+        uint64_t aux64;
+        memcpy(&aux64, x[i].scales, 8);
+        const __m128i scales8 = _mm_add_epi8(_mm_slli_epi16(_mm_and_si128(_mm_set_epi64x(aux64 >> 4, aux64), m4), 1), m1);
+        const __m256i scales16_256 = _mm256_cvtepi8_epi16(scales8);
+
+        __m512i sumi = _mm512_setzero_si512();
+        for (int ib32 = 0; ib32 < QK_K/32; ib32 += 2) {
+            const __m512i q8_512 = _mm512_loadu_si512((const void *)q8); q8 += 64;
+            const __m512i q2 = _mm512_set_epi64(
+                iq2s_grid[qs[7] | ((qh[ib32+1] << 2) & 0x300)],
+                iq2s_grid[qs[6] | ((qh[ib32+1] << 4) & 0x300)],
+                iq2s_grid[qs[5] | ((qh[ib32+1] << 6) & 0x300)],
+                iq2s_grid[qs[4] | ((qh[ib32+1] << 8) & 0x300)],
+                iq2s_grid[qs[3] | ((qh[ib32+0] << 2) & 0x300)],
+                iq2s_grid[qs[2] | ((qh[ib32+0] << 4) & 0x300)],
+                iq2s_grid[qs[1] | ((qh[ib32+0] << 6) & 0x300)],
+                iq2s_grid[qs[0] | ((qh[ib32+0] << 8) & 0x300)]);
+            qs += 8;
+
+            const uint32_t s01 = signs[0] | ((uint32_t)signs[1] << 16);
+            const uint32_t s23 = signs[2] | ((uint32_t)signs[3] << 16);
+            __m512i aux = _mm512_set_epi32(s23,s23,s23,s23,s23,s23,s23,s23,s01,s01,s01,s01,s01,s01,s01,s01);
+            aux = _mm512_and_si512(_mm512_shuffle_epi8(aux, mask1), mask2);
+            const __mmask64 sm = _mm512_cmpeq_epi8_mask(aux, mask2);
+            const __m512i q8s = _mm512_mask_sub_epi8(q8_512, sm, _mm512_xor_si512(q8_512, _mm512_set1_epi8(-1)), _mm512_set1_epi8(-1));
+            signs += 4;
+
+            const __m512i dot = _mm512_maddubs_epi16(q2, q8s);
+            const __m512i sc_shuf = _mm512_inserti64x4(_mm512_castsi256_si512(get_scale_shuffle_k4(ib32+0)), get_scale_shuffle_k4(ib32+1), 1);
+            const __m512i sc16 = _mm512_shuffle_epi8(_mm512_inserti64x4(_mm512_castsi256_si512(scales16_256), scales16_256, 1), sc_shuf);
+            sumi = _mm512_add_epi32(sumi, _mm512_madd_epi16(dot, sc16));
+        }
+
+        accumf = _mm512_fmadd_ps(_mm512_set1_ps(d), _mm512_cvtepi32_ps(sumi), accumf);
+    }
+
+    *s = 0.125f * _mm512_reduce_add_ps(accumf);
+
+#elif defined(__AVX2__)
 
    static const uint8_t k_mask1[32] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01,
                                        0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03
