@@ -250,6 +250,18 @@ static int ggml_cuda_flash_attn_ext_mma_f16_get_ncols2(const int cc, const ggml_
     while (gqa_ratio > ncols2 && ncols2 < ncols2_max) {
         ncols2 *= 2;
     }
+
+    // For large batches use the ncols2 with the least head padding, ties go to the larger ncols2.
+    // The sparse variants only exist for ncols2 == 8.
+    if (ncols2_max == 8 && gqa_ratio > 4 && GGML_CUDA_CC_IS_NVIDIA(cc) &&
+            Q->ne[1] >= 32 && ggml_get_op_params_i32(dst, 4) == 0) {
+        const auto padded = [&](const int n) { return (gqa_ratio + n - 1) / n * n; };
+        for (const int n : {4, 2}) {
+            if (padded(n) < padded(ncols2)) {
+                ncols2 = n;
+            }
+        }
+    }
     return ncols2;
 }
 
