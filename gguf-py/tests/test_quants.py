@@ -66,7 +66,7 @@ class GGMLQuants:
         for t in (
             "q4_0", "q4_1", "q5_0", "q5_1", "q8_0",
             "q2_K", "q3_K", "q4_K", "q5_K", "q6_K",
-            "tq1_0", "tq2_0",
+            "tq1_0", "tq2_0", "ptq1_0",
             "mxfp4",
             "nvfp4",
             "q1_0", "q2_0",
@@ -250,14 +250,96 @@ def do_test(libggml_path: Path, quick: bool = False, user_type: GGMLQuantization
                 logger.info(f"Dequantization from random f16 data as {qtype.name} matches exactly ✅")
 
 
+
+def do_test_ptq1_contract(libggml_path: Path):
+    import math
+
+    c_quants = GGMLQuants(libggml_path)
+    qtype = GGMLQuantizationType.PTQ1_0
+    assert qtype.value == 143
+    assert gguf.GGML_QUANT_SIZES[qtype] == (128, 28)
+
+    def scalar_pack(data: np.ndarray) -> np.ndarray:
+        result = bytearray()
+        for block in data.reshape((-1, 128)):
+            scale = np.max(np.abs(block))
+            inv = np.float32(1 / scale) if scale else np.float32(0)
+            trits = []
+            for value in block:
+                value = float(np.float32(value * inv))
+                trits.append((math.floor(value + 0.5) if value >= 0 else -math.floor(-value + 0.5)) + 1)
+            for start, width, count in ((0, 16, 5), (80, 8, 5), (120, 2, 4)):
+                for lane in range(width):
+                    digits = trits[start + lane:start + width * count:width]
+                    number = sum(digit * 3 ** (4 - i) for i, digit in enumerate(digits))
+                    result.append((number * 256 + 242) // 243)
+            result.extend(np.float16(scale).astype("<f2").tobytes())
+        return np.frombuffer(result, dtype=np.uint8).reshape(data.shape[:-1] + (-1,))
+
+    fixtures = [np.zeros((1, 128), dtype=np.float32),
+                np.ones((1, 128), dtype=np.float32),
+                -np.ones((1, 128), dtype=np.float32)]
+    rng = np.random.default_rng(29672)
+    for rows, width in ((1, 128), (3, 256), (4, 1024)):
+        trits = rng.integers(-1, 2, size=(rows, width), dtype=np.int32).astype(np.float32)
+        scales = np.array([0.25, 0.5, 1, 2], dtype=np.float32)
+        trits *= np.resize(scales, (rows, width // 128)).repeat(128, axis=-1)
+        fixtures.append(trits)
+    fixtures.append(rng.standard_normal((3, 1024)).astype(np.float32))
+    fixtures.append(np.tile(np.array([-1, -0.5, 0, 0.5, 1, 0, 0, 0], dtype=np.float32), (2, 32)))
+
+    for data in fixtures:
+        encoded = gguf.quantize(data, qtype)
+        np.testing.assert_array_equal(encoded, scalar_pack(data))
+        np.testing.assert_array_equal(encoded, c_quants.quantize(data, qtype))
+        decoded = gguf.dequantize(encoded, qtype)
+        np.testing.assert_array_equal(decoded.view(np.uint32), c_quants.dequantize(encoded, qtype).view(np.uint32))
+        assert np.isfinite(decoded).all()
+    for data in fixtures[:6]:
+        np.testing.assert_array_equal(gguf.dequantize(gguf.quantize(data, qtype), qtype), data)
+
+    # Published block order is 24 qs bytes, two qh bytes, then little-endian fp16.
+    golden = [bytes([128] * 24 + [127, 127, 0, 0]),
+              bytes([255] * 24 + [253, 253, 0, 60]),
+              bytes([0] * 26 + [0, 60])]
+    for data, expected in zip(fixtures, golden):
+        assert gguf.quantize(data, qtype).tobytes() == expected
+
+    payload = np.tile(np.arange(256, dtype=np.uint8)[:, None], (1, 28))
+    payload[:, 26:] = np.array([0, 56], dtype=np.uint8)  # fp16 0.5
+    np.testing.assert_array_equal(gguf.dequantize(payload, qtype), c_quants.dequantize(payload, qtype))
+    assert np.isfinite(gguf.dequantize(payload, qtype)).all()
+
+    # A TQ1_0 block cannot preserve two distinct group-128 scales.
+    distinct_scales = np.concatenate([np.full(128, 0.5), np.full(128, -1)]).astype(np.float32).reshape(1, 256)
+    np.testing.assert_array_equal(gguf.dequantize(gguf.quantize(distinct_scales, qtype), qtype), distinct_scales)
+    tq1 = GGMLQuantizationType.TQ1_0
+    tq1_bytes = gguf.quantize(distinct_scales, tq1)
+    np.testing.assert_array_equal(tq1_bytes, c_quants.quantize(distinct_scales, tq1))
+    np.testing.assert_array_equal(gguf.dequantize(tq1_bytes, tq1), c_quants.dequantize(tq1_bytes, tq1))
+    assert not np.array_equal(gguf.dequantize(tq1_bytes, tq1), distinct_scales)
+
+    for width in (1, 127, 129):
+        try:
+            gguf.quantize(np.zeros((1, width), dtype=np.float32), qtype)
+        except gguf.quants.QuantError:
+            continue
+        raise AssertionError(f"PTQ1_0 accepted non-block-aligned width {width}")
+    print("PTQ1_0 contract: C/Python/scalar bytes, golden blocks, lossless g128, all-byte decode, TQ1_0 control, invalid widths passed")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Test Python (de)quantization against the reference C implementation")
     parser.add_argument("--libggml", type=Path, default=Path(__file__).parent.parent.parent / "build" / "bin" / "libggml.so", help="The path to libggml.so")
     parser.add_argument("--quick", action="store_true", help="Don't quantize with C when it's not strictly necessary")
     parser.add_argument("--type", type=str, help="The quant type to test (all by default)")
+    parser.add_argument("--ptq1-contract", action="store_true", help="Run bounded PTQ1_0 byte and group-128 contract checks")
 
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG)
 
-    do_test(args.libggml, args.quick, GGMLQuantizationType[args.type.upper()] if args.type is not None else None)
+    if args.ptq1_contract:
+        do_test_ptq1_contract(args.libggml)
+    else:
+        do_test(args.libggml, args.quick, GGMLQuantizationType[args.type.upper()] if args.type is not None else None)
