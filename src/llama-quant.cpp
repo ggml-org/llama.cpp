@@ -3421,7 +3421,9 @@ static void llama_model_quantize_impl(const std::string & fname_inp, const std::
                 metadata[i].name.c_str(), ggml_type_name(metadata[i].target_type)));
         }
 
-        metadata[i].requires_imatrix = tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
+        // tensors that keep their type are copied as-is and do not require an imatrix
+        metadata[i].requires_imatrix = metadata[i].target_type != tensor->type &&
+            tensor_requires_imatrix(tensor->name, metadata[i].target_type, ftype);
 
         if (params->imatrix) { metadata[i].remapped_imatrix_name = remap_imatrix(tensor->name, mapped); }
         else if (metadata[i].allows_quantization && metadata[i].requires_imatrix) {
