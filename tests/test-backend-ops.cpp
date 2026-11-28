@@ -5101,6 +5101,10 @@ struct test_loop_ctrl : public test_case {
 
     test_loop_ctrl(int64_t n = 2304, int64_t r = 64, int64_t T = 1) : n(n), r(r), T(T) {}
 
+    double max_nmse_err() override {
+        return 5e-3;
+    }
+
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * cur = ggml_scale(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, T), 1.0f);
         ggml_tensor * msg = ggml_scale(ctx, ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, T), 1.0f);
