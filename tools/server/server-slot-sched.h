@@ -95,7 +95,7 @@ struct server_prompt_cache {
 
     size_t n_tokens() const;
 
-    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft);
+    server_prompt_cache_state * alloc(const server_prompt & prompt, size_t state_size_main, size_t state_size_drft, bool use_thp);
 
     // the cached state that is a better starting point than `prompt` for `tokens_new`, states.end() if none
     // lcp: the common prefix of that state with `tokens_new`

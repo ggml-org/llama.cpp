@@ -421,6 +421,10 @@ Related flags: `--cors-origins`, `--cors-methods`, `--cors-headers`, `--cors-cre
 
 If your host reaches the internet through a corporate proxy, export `HTTP_PROXY` and `HTTPS_PROXY` before running commands that download models (e.g. `export HTTPS_PROXY=http://proxy.example.com:8080`). Hosts listed in `NO_PROXY` and loopback addresses are contacted directly.
 
+### Transparent huge pages for saved cache state
+
+On Linux, set **LLAMA_SERVER_CACHE_HUGEPAGE=1** to request transparent huge pages for large checkpoint and prompt cache save buffers. This is off by default. Buffers between one and two huge pages reserve one extra huge page of virtual address space for alignment. The server uses the regular allocation path if the mapping or huge page advice fails. Performance depends on the host's transparent huge page settings and memory layout.
+
 ## Build
 
 `llama-server` is built alongside everything else from the root of the project
