@@ -524,43 +524,8 @@ llama_model_qwen35::graph_mtp::graph_mtp(const llm_graph_params & params)
     GGML_ASSERT(layer.nextn.enorm   && "MTP block missing nextn.enorm");
     GGML_ASSERT(layer.nextn.hnorm   && "MTP block missing nextn.hnorm");
 
-    // TODO: extract in a common llm_graph_context::build_inp_embd_h()
-    auto inp = std::make_unique<llm_graph_input_embd_h>(hparams.n_embd_inp(), hparams.n_embd);
-
-    inp->tokens = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-    ggml_set_input(inp->tokens);
-
-    inp->embd = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, hparams.n_embd_inp(), n_tokens);
-    ggml_set_input(inp->embd);
-
-    // TODO: make static using `ggml_build_forward_select()`
-    //       see llm_graph_context::build_inp_embd() for reference
-    ggml_tensor * tok_embd;
-    ASSERT_EMBD_OR_TOKEN(ubatch);
-    if (ubatch.token) {
-        ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd;
-
-        tok_embd = ggml_get_rows(ctx0, tok_embd_w, inp->tokens);
-
-        // a Hadamard-latent table stores rotated rows; restore the primal basis
-        if (hdmd) {
-            if (const auto it = hdmd->inv.find(tok_embd_w); it != hdmd->inv.end()) {
-                tok_embd = llama_mul_mat_hadamard(ctx0, tok_embd, it->second.rot);
-                if (it->second.signs) {
-                    tok_embd = ggml_mul(ctx0, tok_embd, it->second.signs);
-                }
-            }
-        }
-    } else {
-        tok_embd = inp->embd;
-    }
-    cb(tok_embd, "mtp_tok_embd", il);
-
-    inp->h = build_inp_embd_state(inp.get(), hparams.n_embd);
-
-    ggml_tensor * h_embd = inp->h;
-
-    res->add_input(std::move(inp));
+    auto [tok_embd, h_embd] = build_inp_embd_h(
+        layer.nextn.embed_tokens ? layer.nextn.embed_tokens : model.tok_embd, il);
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();

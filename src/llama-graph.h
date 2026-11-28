@@ -1320,6 +1320,9 @@ struct llm_graph_context {
     // tok_scale: applied to token rows only
     ggml_tensor * build_inp_embd(ggml_tensor * tok_embd, float tok_scale = 1.0f) const;
 
+    // MTP/NextN token embedding + hidden state inputs, shared by the NextN graph builders
+    std::pair<ggml_tensor *, ggml_tensor *> build_inp_embd_h(ggml_tensor * tok_embd_w, int il) const;
+
     // the state input of an MTP graph: rows of the h_nextn device buffer of ctx_state_src (see llama_set_ctx_state_src()),
     // or uploaded from ubatch.embd_state
     ggml_tensor * build_inp_embd_state(llm_graph_input_embd_h * inp, int64_t n_embd_state) const;
