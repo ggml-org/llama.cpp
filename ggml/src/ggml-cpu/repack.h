@@ -49,7 +49,7 @@ struct block_q4_Kx8 {
     ggml_half d[8];      // super-block scale for quantized scales
     ggml_half dmin[8];   // super-block scale for quantized mins
     uint8_t scales[96];  // scales and mins, quantized with 6 bits
-    uint8_t qs[1024];    // 4--bit quants
+    uint8_t qs[1024];    // 4-bit quants
 };
 
 static_assert(sizeof(block_q4_Kx8) == sizeof(ggml_half) * 16 + K_SCALE_SIZE * 8 + QK_K * 4, "wrong q4_K block size/padding");
@@ -57,7 +57,7 @@ struct block_q4_Kx16 {
     ggml_half d[16];      // super-block scale for quantized scales
     ggml_half dmin[16];   // super-block scale for quantized mins
     uint8_t scales[192];  // scales and mins, quantized with 6 bits
-    uint8_t qs[2048];    // 4--bit quants
+    uint8_t qs[2048];    // 4-bit quants
 };
 
 static_assert(sizeof(block_q4_Kx16) == sizeof(ggml_half) * 32 + K_SCALE_SIZE * 16 + QK_K * 8, "wrong q4_K block size/padding");
@@ -65,7 +65,7 @@ struct block_q2_Kx8 {
     ggml_half d[8];      // super-block scale for quantized scales
     ggml_half dmin[8];   // super-block scale for quantized mins
     uint8_t scales[128];  // scales and mins, quantized with 4 bits
-    uint8_t qs[512];    // 2--bit quants
+    uint8_t qs[512];    // 2-bit quants
 };
 
 static_assert(sizeof(block_q2_Kx8) == sizeof(ggml_half) * 16 + QK_K/2 + QK_K * 2, "wrong q2_K block size/padding");
