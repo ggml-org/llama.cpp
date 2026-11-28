@@ -5192,7 +5192,8 @@ static bool ggml_backend_webgpu_device_supports_op(ggml_backend_dev_t dev, const
 
                 // subgroup matrix path requirements
                 const bool use_subgroup_matrix = ggml_webgpu_flash_attn_can_use_subgroup_matrix_path(
-                    capabilities.supports_subgroup_matrix, capabilities.sg_mat_k, capabilities.sg_mat_n, src0, src2);
+                    capabilities.supports_subgroup_matrix, capabilities.sg_mat_k, capabilities.sg_mat_n, src0, src2,
+                    ggml_flash_attn_ext_get_prec(op));
 
                 // tile path requirements
                 const bool float_vec4_aligned =
