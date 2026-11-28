@@ -208,6 +208,39 @@ performance matters, try following the split build used in our release workflow
 is built with clang (`cmake/arm64-windows-llvm.cmake`) and the CUDA backend with MSVC
 (`cmake/arm64-windows-msvc-cuda.cmake`), and the artifacts are merged afterwards.
 
+### Compilation with NCCL
+
+#### Get NCCL on Linux
+
+Refer to [NVIDIA NCCL documentation](https://docs.nvidia.com/deeplearning/nccl/install-guide/index.html) for instructions.
+
+#### Get NCCL on Windows
+
+Since pre-built NCCL binaries are not published for Windows, build NCCL from the official [NVIDIA/nccl repository](https://github.com/NVIDIA/nccl). Install Visual Studio with the **Desktop development with C++** workload and the CUDA Toolkit. Open **Developer PowerShell for VS** ; this shell sets the environment variables needed to find the MSVC compiler, linker, and Windows SDK headers and libraries. See Microsoft's [developer shell documentation](https://learn.microsoft.com/en-us/visualstudio/ide/reference/command-prompt-powershell) for details.
+
+Clone the repository, then run the following commands in Developer PowerShell for VS:
+
+```powershell
+git clone https://github.com/NVIDIA/nccl.git
+cd nccl
+mkdir build; cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+cmake --build . --parallel --config Release --clean-first
+```
+
+Use the generated headers and libraries with the `NCCL_ROOT` layout described below. Add the directory containing `nccl.dll` to `PATH` before running llama.cpp so Windows can load it.
+
+#### Build llama.cpp with NCCL
+
+To build with NCCL, set `NCCL_ROOT` to the NCCL output directory containing its headers and libraries:
+
+```bash
+cmake -B build -DGGML_CUDA=ON -DNCCL_ROOT=<path/to/nccl/output>
+cmake --build build --config Release
+```
+
+Under `NCCL_ROOT`, CMake looks for `include/nccl.h` and the NCCL library (for example, `libnccl.so`, `libnccl.a`, or `nccl.lib`) in `lib/` or `lib64/`.
+
 ### Non-Native Builds
 
 By default llama.cpp will be built for the hardware that is connected to the system at that time.
