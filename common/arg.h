@@ -19,6 +19,8 @@
 // CLI argument parsing
 //
 
+ggml_type common_parse_kv_cache_type(const std::string & value);
+
 struct common_arg {
     std::set<enum llama_example> examples = {LLAMA_EXAMPLE_COMMON};
     std::set<enum llama_example> excludes = {};
