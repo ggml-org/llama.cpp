@@ -13775,6 +13775,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
         }
     }
 
+    // stream-k with more tiles than SMs, also batched
+    for (ggml_type type_a : {GGML_TYPE_Q8_0, GGML_TYPE_Q4_K}) {
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 3968, 512, 1024, {1, 1}, {1, 1}));
+        test_cases.emplace_back(new test_mul_mat(type_a, GGML_TYPE_F32, 2688, 384, 1024, {3, 1}, {1, 1}));
+    }
+
     // BF16 matrices of few rows and a long K at small batch sizes (MMVF instead of MMF)
     for (int n : {2, 3, 4, 5, 8}) {
         test_cases.emplace_back(new test_mul_mat(GGML_TYPE_BF16, GGML_TYPE_F32,  320, n, 10240, {1, 1}, {1, 1}));
