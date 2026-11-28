@@ -62,23 +62,19 @@ class GptOssModel(TextModel):
         self.gguf_writer.add_tensor(new_name, new_data, raw_dtype=gguf.GGMLQuantizationType.MXFP4)
 
     def generate_extra_tensors(self) -> Iterable[tuple[str, Tensor]]:
-        blocks0: Tensor = torch.zeros(1)
-        blocks1: Tensor = torch.zeros(1)
-        # we assume that tensors are loaded in the correct order
-        for name, data_torch in self.get_tensors():
-            if "mlp.experts.down_proj_blocks" in name:
-                blocks0 = data_torch
-            elif "mlp.experts.down_proj_scales" in name:
-                new_name = self.map_tensor_name(name.replace("_scales", ".weight"))
-                self.repack_mxfp4(new_name, blocks0, data_torch)
-            elif "mlp.experts.gate_up_proj_blocks" in name:
-                blocks0, blocks1 = data_torch[:, ::2, :, :], data_torch[:, 1::2, :, :]
-            elif "mlp.experts.gate_up_proj_scales" in name:
-                scales0, scales1 = data_torch[:, ::2, :], data_torch[:, 1::2, :]
+        for name, get_scales in self.model_tensors.items():
+            if not name.endswith(("mlp.experts.down_proj_scales", "mlp.experts.gate_up_proj_scales")):
+                continue
+            proj = name.removesuffix("_scales")
+            blocks = self.model_tensors[proj + "_blocks"]()
+            scales = get_scales()
+            if proj.endswith("down_proj"):
+                self.repack_mxfp4(self.map_tensor_name(proj + ".weight"), blocks, scales)
+            else:
                 new_name_gate = self.map_tensor_name(name.replace("gate_up_proj_scales", "gate_proj.weight"))
                 new_name_up = self.map_tensor_name(name.replace("gate_up_proj_scales", "up_proj.weight"))
-                self.repack_mxfp4(new_name_gate, blocks0, scales0)
-                self.repack_mxfp4(new_name_up, blocks1, scales1)
+                self.repack_mxfp4(new_name_gate, blocks[:, ::2, :, :], scales[:, ::2, :])
+                self.repack_mxfp4(new_name_up, blocks[:, 1::2, :, :], scales[:, 1::2, :])
         return []
 
     @classmethod
