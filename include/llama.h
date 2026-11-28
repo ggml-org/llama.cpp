@@ -923,38 +923,36 @@ extern "C" {
                           size_t   n_token_capacity,
                           size_t * n_token_count_out);
 
-#define LLAMA_STATE_SEQ_FLAGS_NONE 0
+    enum llama_state_seq_flags {
+        LLAMA_STATE_SEQ_FLAGS_NONE         = 0,
+        LLAMA_STATE_SEQ_FLAGS_SWA_ONLY     = 1, // for backwards-compat
+        LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY = 1, // work only with partial states, such as SWA KV cache or recurrent cache (e.g. Mamba)
+        // Keeps the tensor data on device buffers (i.e. not accessible in host memory, but faster save/load).
+        // Getting the state for a seq_id with this flag invalidates all prior states gotten for that seq_id with this flag.
+        LLAMA_STATE_SEQ_FLAGS_ON_DEVICE    = 2,
+    };
 
-// for backwards-compat
-#define LLAMA_STATE_SEQ_FLAGS_SWA_ONLY 1
-
-// work only with partial states, such as SWA KV cache or recurrent cache (e.g. Mamba)
-#define LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY 1
-
-// Keeps the tensor data on device buffers (i.e. not accessible in host memory, but faster save/load).
-// Getting the state for a seq_id with this flag invalidates all prior states gotten for that seq_id with this flag.
-#define LLAMA_STATE_SEQ_FLAGS_ON_DEVICE 2
-
-    typedef uint32_t llama_state_seq_flags;
+    // keep the type name for source compatibility with the previous typedef
+    typedef enum llama_state_seq_flags llama_state_seq_flags;
 
     LLAMA_API size_t llama_state_seq_get_size_ext(
             struct llama_context * ctx,
                     llama_seq_id   seq_id,
-           llama_state_seq_flags   flags);
+      enum llama_state_seq_flags   flags);
 
     LLAMA_API size_t llama_state_seq_get_data_ext(
             struct llama_context * ctx,
                          uint8_t * dst,
                           size_t   size,
                     llama_seq_id   seq_id,
-           llama_state_seq_flags   flags);
+      enum llama_state_seq_flags   flags);
 
     LLAMA_API size_t llama_state_seq_set_data_ext(
             struct llama_context * ctx,
                    const uint8_t * src,
                           size_t   size,
                     llama_seq_id   dest_seq_id,
-           llama_state_seq_flags   flags);
+      enum llama_state_seq_flags   flags);
 
     //
     // Decoding
