@@ -122,9 +122,11 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>,
             break;
         }
 #ifdef SRC_OVERLAP
-        sum += pow(merged_src[i_rn_src_row + col], 2.0);
+        let v = merged_src[i_rn_src_row + col];
+        sum += v * v;
 #else
-        sum += pow(rn_src[i_rn_src_row + col], 2.0);
+        let v = rn_src[i_rn_src_row + col];
+        sum += v * v;
 #endif
         col += WG_SIZE;
     }
