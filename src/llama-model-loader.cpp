@@ -441,6 +441,7 @@ namespace GGUFMeta {
         return get_key(llm_kv(kid), result, required);
     }
 
+    template bool llama_model_loader::get_key<bool>       (const std::string & key, bool & result, bool required);
     template bool llama_model_loader::get_key<bool>       (enum llm_kv kid, bool & result,        bool required);
     template bool llama_model_loader::get_key<float>      (enum llm_kv kid, float & result,       bool required);
     template bool llama_model_loader::get_key<uint32_t>   (enum llm_kv kid, uint32_t & result,    bool required);
@@ -1448,7 +1449,7 @@ struct ggml_tensor * llama_model_loader::create_tensor(
     };
 
     if (files.empty()) {
-        if (flags & TENSOR_SKIP_IF_VIRTUAL) {
+        if (flags & (TENSOR_SKIP | TENSOR_SKIP_IF_VIRTUAL)) {
             return nullptr;
         }
         ggml_type type = GGML_TYPE_F32;

@@ -230,6 +230,10 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
 endif()
 
 llama_build(test-llama-archs.cpp)
+if (GGML_CPU OR GGML_CPU_ALL_VARIANTS)
+    llama_test(test-llama-archs NAME test-sensenova-loop-roundtrip LABEL "main behavior backend"
+        ARGS -a sensenova_loop -b CPU -s 42)
+endif()
 if (GGML_CPU AND (NOT WIN32 OR NOT BUILD_SHARED_LIBS))
     llama_build(test-fp8.cpp)
     set(FP8_MODEL_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-models-fp8")

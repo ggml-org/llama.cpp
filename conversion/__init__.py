@@ -18,6 +18,9 @@ __all__ = [
 
 TEXT_MODEL_MAP: dict[str, str] = {
     "NEOChatModel": "sensenova_u1",
+    "SenseNovaLoopForConditionalGeneration": "sensenova_loop",
+    "SenseNovaLoopModel": "sensenova_loop",
+    "Qwen3_5LoopForConditionalGeneration": "sensenova_loop",
     "AfmoeForCausalLM": "afmoe",
     "LagunaForCausalLM": "laguna",
     "RicursiveForCausalLM": "ricursive",
@@ -429,6 +432,9 @@ MMPROJ_MODEL_MAP: dict[str, str] = {
     "PaddleOCRVisionModel": "ernie",
     "Phi4ForCausalLMV": "phi",
     "NEOVisionModel": "sensenova_u1",
+    "SenseNovaLoopForConditionalGeneration": "sensenova_loop",
+    "SenseNovaLoopModel": "sensenova_loop",
+    "Qwen3_5LoopForConditionalGeneration": "sensenova_loop",
     "Qwen2AudioForConditionalGeneration": "ultravox",
     "Qwen2VLForConditionalGeneration": "qwenvl",
     "Qwen2VLModel": "qwenvl",

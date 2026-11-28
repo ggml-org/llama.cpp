@@ -249,7 +249,7 @@ struct kv_writer {
     }
 };
 
-static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const uint32_t n_layer_min = 0) {
+static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const uint32_t n_layer_min = 0, const bool mtp = false) {
     gguf_context_ptr ret(gguf_init_empty());
     kv_writer ms(arch, ret.get());
     const uint32_t n_ctx = 256;
@@ -333,6 +333,8 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_vocab = 3072; // TODO: should be 4096, but user code cannot get `n_vocab_out` yet [TAG_LLAMA_N_VOCAB_OUT]
     } else if (arch == LLM_ARCH_HRM_TEXT) {
         n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
+    } else if (arch == LLM_ARCH_SENSENOVA_LOOP) {
+        n_layer = 6; // 4 physical layers, with the middle 2 visited twice
     } else if (arch == LLM_ARCH_INKLING2 || arch == LLM_ARCH_INKLING2_LOOP) {
         n_embd  = 128;
         n_head  = 4;
@@ -353,7 +355,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
         n_head_kv = 2;
         n_layer   = 4;
     }
-    n_layer = std::max(n_layer, n_layer_min);
+    n_layer = std::max(n_layer, n_layer_min) + (mtp ? 1 : 0);
     const uint32_t n_embd_head = n_embd / n_head;
 
     ms.add_kv(LLM_KV_GENERAL_ARCHITECTURE,      llama_arch_name(arch));
@@ -363,6 +365,9 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
     ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
     ms.add_kv(LLM_KV_LEADING_DENSE_BLOCK_COUNT, uint32_t(1));
+    if (mtp) {
+        ms.add_kv(LLM_KV_NEXTN_PREDICT_LAYERS, uint32_t(1));
+    }
 
     if (arch == LLM_ARCH_K2_HORIZON) {
         ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, 128.0f);
@@ -376,6 +381,11 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
             n_ff_per_layer.push_back(il <= 1 ? 0 : n_ff);
         }
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
+    } else if (mtp) {
+        std::vector<uint32_t> n_ff_per_layer(n_layer, n_ff);
+        n_ff_per_layer[n_layer - 2] += 32;
+        n_ff_per_layer.back() += 64;
+        ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff_per_layer);
     } else {
         ms.add_kv(LLM_KV_FEED_FORWARD_LENGTH, n_ff);
     }
@@ -385,6 +395,23 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_TIME_MIX_EXTRA_DIM,      uint32_t(64));
     ms.add_kv(LLM_KV_TIME_DECAY_EXTRA_DIM,    uint32_t(128));
     ms.add_kv(LLM_KV_FULL_ATTENTION_INTERVAL, uint32_t(2));
+
+    if (arch == LLM_ARCH_SENSENOVA_LOOP) {
+        ms.add_kv(LLM_KV_LOOP_START,                           uint32_t(1));
+        ms.add_kv(LLM_KV_LOOP_END,                             uint32_t(3));
+        ms.add_kv(LLM_KV_LOOP_COUNT,                           uint32_t(2));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_START,               uint32_t(1));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_END,                 uint32_t(3));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,               uint32_t(2));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_SINKHORN_ITERATIONS, uint32_t(20));
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_PRE_SCALE,           1.0f);
+        ms.add_kv(LLM_KV_HYPER_CONNECTION_FIXED_IDENTITY,      false);
+        std::vector<uint32_t> recurrent;
+        for (uint32_t il = 0; il < n_layer; ++il) {
+            recurrent.push_back((!mtp || il + 1 < n_layer) && il % 2 == 0);
+        }
+        ms.add_kv(LLM_KV_ATTENTION_RECURRENT_LAYERS, recurrent);
+    }
 
     if (arch == LLM_ARCH_PLAMO2 || arch == LLM_ARCH_JAMBA || arch == LLM_ARCH_NEMOTRON_H || arch == LLM_ARCH_NEMOTRON_H_MOE ||
             arch == LLM_ARCH_GRANITE_HYBRID || arch == LLM_ARCH_LFM2 || arch == LLM_ARCH_LFM2MOE || arch == LLM_ARCH_LFM3 ||
@@ -892,7 +919,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe, const 
     ms.add_kv(LLM_KV_XIELU_ALPHA_P,             1.0f);
     ms.add_kv(LLM_KV_XIELU_BETA,                1.0f);
     ms.add_kv(LLM_KV_XIELU_EPS,                 1.0e-7f);
-    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_ZONOS3 ? 256 : 2*n_embd);
+    ms.add_kv(LLM_KV_SSM_INNER_SIZE,            arch == LLM_ARCH_QWEN3NEXT || arch == LLM_ARCH_QWEN35 || arch == LLM_ARCH_SENSENOVA_LOOP || arch == LLM_ARCH_QWEN35MOE || arch == LLM_ARCH_QWEN4EXP || arch == LLM_ARCH_CLOVER_MOE || arch == LLM_ARCH_ZONOS3 ? 256 : 2*n_embd);
     ms.add_kv(LLM_KV_ROUTER_HIDDEN_SIZE,        n_embd);
     ms.add_kv(LLM_KV_SSM_CONV_KERNEL,           uint32_t(arch == LLM_ARCH_ZAYA1 ? 2 : 4)); // ZAYA CCA convs have kernel 2
     ms.add_kv(LLM_KV_SSM_STATE_SIZE,            uint32_t(128));
@@ -941,15 +968,31 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
 }
 
 static std::string get_tmp_gguf_path() {
+    struct temp_dir {
+        const std::filesystem::path path = std::filesystem::temp_directory_path() /
+            ("test-llama-archs-" + std::to_string(std::random_device{}()));
+
+        temp_dir() {
+            if (!std::filesystem::create_directory(path)) {
+                throw std::runtime_error("failed to create test GGUF directory");
+            }
+        }
+
+        ~temp_dir() {
+            std::error_code error;
+            std::filesystem::remove_all(path, error);
+        }
+    };
+    static const temp_dir dir;
     static size_t id = 0;
-    return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
+    return (dir.path / (std::to_string(++id) + ".gguf")).string();
 }
 
 static llama_model_ptr get_model(
         struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
         const std::vector<ggml_backend_dev_t> & devs,
         const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER,
-        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr) {
+        const llama_model_tensor_buft_override * tensor_buft_overrides = nullptr, bool load_mtp = false) {
     GGML_ASSERT((gguf_ctx == nullptr) != (file == nullptr));
     llama_model_params model_params = llama_model_default_params();
     model_params.progress_callback = silent_model_load_progress;
@@ -958,6 +1001,7 @@ static llama_model_ptr get_model(
     model_params.devices = devs_copy.data();
     model_params.split_mode = split_mode;
     model_params.tensor_buft_overrides = tensor_buft_overrides;
+    model_params.load_mtp = load_mtp;
 
     tensor_data_params tensor_params = { seed, stdev };
     llama_model_ptr model(gguf_ctx != nullptr ?
@@ -1385,6 +1429,108 @@ static std::string get_device_label(ggml_backend_dev_t dev) {
     return std::string(desc) + " (" + name + ")";
 }
 
+static void save_mtp_only(const std::string & source_path, const std::string & draft_path, uint32_t first_mtp_layer) {
+    ggml_context * ctx = nullptr;
+    gguf_context_ptr source(gguf_init_from_file(source_path.c_str(), {false, &ctx}));
+    ggml_context_ptr weights(ctx);
+    gguf_context_ptr draft(gguf_init_empty());
+    GGML_ASSERT(source && weights && draft);
+    gguf_set_kv(draft.get(), source.get());
+    const std::string prefix = "blk." + std::to_string(first_mtp_layer) + ".";
+    for (int64_t i = 0; i < gguf_get_n_tensors(source.get()); ++i) {
+        const char * name = gguf_get_tensor_name(source.get(), i);
+        if (strncmp(name, "blk.", 4) != 0 || strncmp(name, prefix.c_str(), prefix.size()) == 0) {
+            gguf_add_tensor(draft.get(), ggml_get_tensor(weights.get(), name));
+        }
+    }
+    GGML_ASSERT(gguf_write_to_file(draft.get(), draft_path.c_str(), false));
+}
+
+static void test_mtp_roundtrip(const llm_arch arch, const size_t seed, const float stdev) {
+    auto gguf = get_gguf_ctx(arch, false, 0, true);
+    auto model = get_model(gguf.get(), nullptr, seed, stdev, {}, LLAMA_SPLIT_MODE_LAYER, nullptr, true);
+    auto virtual_trunk = get_model(gguf.get(), nullptr, seed, stdev, {});
+
+    llama_model_params load_params = llama_model_default_params();
+    load_params.n_gpu_layers = 0;
+    load_params.progress_callback = silent_model_load_progress;
+
+    const std::string ff_key = llama_arch_kv_name(arch, LLM_KV_FEED_FORWARD_LENGTH);
+    const auto * ff_lengths = static_cast<const uint32_t *>(gguf_get_arr_data(gguf.get(), gguf_find_key(gguf.get(), ff_key.c_str())));
+    auto check_ff_lengths = [&](const std::string & path, size_t n_layers) {
+        gguf_context_ptr saved(gguf_init_from_file(path.c_str(), {true, nullptr}));
+        GGML_ASSERT(saved);
+        const int64_t key = gguf_find_key(saved.get(), ff_key.c_str());
+        GGML_ASSERT(key >= 0 && gguf_get_kv_type(saved.get(), key) == GGUF_TYPE_ARRAY);
+        GGML_ASSERT(gguf_get_arr_type(saved.get(), key) == GGUF_TYPE_UINT32 && gguf_get_arr_n(saved.get(), key) == n_layers);
+        const auto * saved_lengths = static_cast<const uint32_t *>(gguf_get_arr_data(saved.get(), key));
+        GGML_ASSERT(std::equal(ff_lengths, ff_lengths + n_layers, saved_lengths));
+    };
+
+    const std::string full_path = get_tmp_gguf_path();
+    const std::string trunk_path = get_tmp_gguf_path();
+    const std::string draft_path = get_tmp_gguf_path();
+    const std::string resaved_draft_path = get_tmp_gguf_path();
+    llama_model_save_to_file(model.get(), full_path.c_str());
+    check_ff_lengths(full_path, llama_model_n_layer(model.get()) + 1);
+    save_mtp_only(full_path, draft_path, llama_model_n_layer(model.get()));
+    llama_context_params ctx_params = llama_context_default_params();
+    ctx_params.n_ctx = 0;
+    ctx_params.n_threads = ctx_params.n_threads_batch = 4;
+    ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+    {
+        llama_model_ptr trunk(llama_model_load_from_file(full_path.c_str(), load_params));
+        llama_model_ptr skipped_draft(llama_model_load_from_file(draft_path.c_str(), load_params));
+        load_params.load_mtp = true;
+        llama_model_ptr full(llama_model_load_from_file(full_path.c_str(), load_params));
+        llama_model_ptr draft_only(llama_model_load_from_file(draft_path.c_str(), load_params));
+        GGML_ASSERT(trunk && skipped_draft && full && draft_only);
+        GGML_ASSERT(llama_model_n_layer_nextn(full.get()) == 1);
+
+        llama_context_ptr draft(llama_init_from_model(full.get(), ctx_params));
+        GGML_ASSERT(draft);
+        llama_context_ptr missing_draft(llama_init_from_model(trunk.get(), ctx_params));
+        GGML_ASSERT(!missing_draft);
+        llama_context_ptr virtual_draft(llama_init_from_model(virtual_trunk.get(), ctx_params));
+        GGML_ASSERT(!virtual_draft);
+        llama_context_ptr standalone_draft(llama_init_from_model(draft_only.get(), ctx_params));
+        GGML_ASSERT(standalone_draft);
+
+        llama_model_save_to_file(skipped_draft.get(), resaved_draft_path.c_str());
+        GGML_ASSERT(!std::filesystem::exists(resaved_draft_path));
+        llama_model_save_to_file(draft_only.get(), resaved_draft_path.c_str());
+        llama_model_ptr resaved_draft(llama_model_load_from_file(resaved_draft_path.c_str(), load_params));
+        GGML_ASSERT(resaved_draft && llama_model_n_layer_nextn(resaved_draft.get()) == 1);
+        llama_context_ptr resaved_draft_ctx(llama_init_from_model(resaved_draft.get(), ctx_params));
+        GGML_ASSERT(resaved_draft_ctx);
+
+        llama_model_save_to_file(trunk.get(), trunk_path.c_str());
+        check_ff_lengths(trunk_path, llama_model_n_layer(trunk.get()));
+        llama_model_ptr resaved(llama_model_load_from_file(trunk_path.c_str(), load_params));
+        GGML_ASSERT(resaved);
+        GGML_ASSERT(llama_model_n_layer_nextn(resaved.get()) == 0);
+        GGML_ASSERT(llama_model_n_layer(resaved.get()) == llama_model_n_layer(trunk.get()));
+
+        ctx_params.ctx_type = LLAMA_CONTEXT_TYPE_DEFAULT;
+        llama_context_ptr draft_as_trunk(llama_init_from_model(draft_only.get(), ctx_params));
+        GGML_ASSERT(!draft_as_trunk);
+        llama_context_ptr skipped_as_trunk(llama_init_from_model(skipped_draft.get(), ctx_params));
+        GGML_ASSERT(!skipped_as_trunk);
+        llama_context_ptr virtual_trunk_ctx(llama_init_from_model(virtual_trunk.get(), ctx_params));
+        llama_context_ptr trunk_ctx(llama_init_from_model(trunk.get(), ctx_params));
+        llama_context_ptr resaved_ctx(llama_init_from_model(resaved.get(), ctx_params));
+        GGML_ASSERT(virtual_trunk_ctx && trunk_ctx && resaved_ctx);
+        const std::vector<llama_token> tokens = {1, 2, 3, 4};
+        const auto trunk_logits = get_logits(trunk.get(), trunk_ctx.get(), tokens);
+        GGML_ASSERT(trunk_logits == get_logits(virtual_trunk.get(), virtual_trunk_ctx.get(), tokens));
+        GGML_ASSERT(trunk_logits == get_logits(resaved.get(), resaved_ctx.get(), tokens));
+    }
+    std::filesystem::remove(full_path);
+    std::filesystem::remove(trunk_path);
+    std::filesystem::remove(draft_path);
+    std::filesystem::remove(resaved_draft_path);
+}
+
 static int test_backends(const std::string & arch_filter, const size_t seed, const float stdev, const int verbosity, const char * target_backend) {
     struct user_data_t {
         struct {
@@ -1660,6 +1806,13 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                 LOG(template_row_res.c_str(), status_nmse.c_str(), nmse_str, status_roundtrip.c_str(), status_mixed.c_str(), mixed_str);
             }
         }
+    }
+
+    if (arch_matches(arch_filter, LLM_ARCH_SENSENOVA_LOOP) &&
+            ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU) &&
+            (!target_backend || strcmp(target_backend, "CPU") == 0)) {
+        test_mtp_roundtrip(LLM_ARCH_SENSENOVA_LOOP, seed, stdev);
+        ++n_tests;
     }
 
     if (n_tests == 0) {
