@@ -601,7 +601,14 @@ struct vk_op_soft_max_push_constants {
     uint32_t n_head_log2;
     uint32_t nrows_x;
     uint32_t has_sinks;
+    uint32_t ne0_1mp, ne0_1L;
+    uint32_t ne0_12mp, ne0_12L;
 };
+
+template <> inline void init_pushconst_fastdiv(vk_op_soft_max_push_constants &p) {
+    init_fastdiv_values(p.ne01*p.ne02, p.ne0_12mp, p.ne0_12L);
+    init_fastdiv_values(p.ne01,        p.ne0_1mp,  p.ne0_1L);
+}
 
 struct vk_op_argsort_push_constants {
     uint32_t ncols;
