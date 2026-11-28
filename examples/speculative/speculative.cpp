@@ -90,6 +90,11 @@ int main(int argc, char ** argv) {
     model_tgt = llama_init_tgt->model();
     ctx_tgt   = llama_init_tgt->context();
 
+    if (model_tgt == nullptr || ctx_tgt == nullptr) {
+        LOG_ERR("%s : failed to init target\n", __func__);
+        return 1;
+    }
+
     // load the draft model
     params.devices = params.speculative.draft.devices;
     params.model = params.speculative.draft.mparams;
@@ -110,6 +115,11 @@ int main(int argc, char ** argv) {
 
     model_dft = llama_init_dft->model();
     ctx_dft   = llama_init_dft->context();
+
+    if (model_dft == nullptr || ctx_dft == nullptr) {
+        LOG_ERR("%s : failed to init draft\n", __func__);
+        return 1;
+    }
 
     const llama_vocab * vocab_tgt = llama_model_get_vocab(model_tgt);
     const llama_vocab * vocab_dft = llama_model_get_vocab(model_dft);
