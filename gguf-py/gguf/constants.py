@@ -179,6 +179,9 @@ class Keys:
         SAMPLE_FROM_ANCHOR                = "{arch}.sample_from_anchor"
         HAS_CONFIDENCE_HEAD               = "{arch}.has_confidence_head"
         HAS_MARKOV_CONTEXT                = "{arch}.has_markov_context"
+        LOG_SNR_CONDITIONING              = "{arch}.log_snr_conditioning"
+        MIN_LOG_SNR                       = "{arch}.min_log_snr"
+        MAX_LOG_SNR                       = "{arch}.max_log_snr"
         NORM_BEFORE_RESIDUAL              = "{arch}.norm_before_residual"
         NORM_BEFORE_FC                    = "{arch}.norm_before_fc"
         REALTIME_DELAY_TOKENS             = "{arch}.realtime_delay_tokens"
@@ -1545,6 +1548,8 @@ class MODEL_TENSOR(IntEnum):
     DSPARK_MASK_EMBD       = auto()  # per-slot mask embeddings
     DSPARK_MARKOV_CTX_MIX  = auto()  # rnn markov head: target feature mix
     DSPARK_MARKOV_CTX_NORM = auto()  # rnn markov head: target feature norm
+    DSPARK_LOG_SNR_FC1     = auto()
+    DSPARK_LOG_SNR_FC2     = auto()
     ENGRAM_KV              = auto()
     ENGRAM_GATE            = auto()
     ENGRAM_KV_B            = auto()
@@ -2614,6 +2619,8 @@ TENSOR_NAMES: dict[MODEL_TENSOR, str] = {
     MODEL_TENSOR.DSPARK_MASK_EMBD:          "mask_embd",
     MODEL_TENSOR.DSPARK_MARKOV_CTX_MIX:     "markov_ctx_mix",
     MODEL_TENSOR.DSPARK_MARKOV_CTX_NORM:    "markov_ctx_norm",
+    MODEL_TENSOR.DSPARK_LOG_SNR_FC1:        "log_snr_fc1",
+    MODEL_TENSOR.DSPARK_LOG_SNR_FC2:        "log_snr_fc2",
     MODEL_TENSOR.ENGRAM_KV:                 "blk.{bid}.engram_kv",
     MODEL_TENSOR.ENGRAM_GATE:               "blk.{bid}.engram_gate",
     MODEL_TENSOR.ENGRAM_KV_B:               "blk.{bid}.engram_kv_b",
@@ -6609,6 +6616,8 @@ MODEL_TENSORS: dict[MODEL_ARCH, list[MODEL_TENSOR]] = {
         MODEL_TENSOR.DSPARK_MASK_EMBD,
         MODEL_TENSOR.DSPARK_MARKOV_CTX_MIX,
         MODEL_TENSOR.DSPARK_MARKOV_CTX_NORM,
+        MODEL_TENSOR.DSPARK_LOG_SNR_FC1,
+        MODEL_TENSOR.DSPARK_LOG_SNR_FC2,
         MODEL_TENSOR.DFLASH_ATTN_CONV_BASE,
         MODEL_TENSOR.DFLASH_ATTN_CONV_PROJ,
         MODEL_TENSOR.DFLASH_FFN_CONV_BASE,
