@@ -968,6 +968,7 @@ enum llm_tensor {
     LLM_TENSOR_ROUTER_OUT,
     LLM_TENSOR_ATTN_V_GATE,
     LLM_TENSOR_ATTN_V_EXPS,
+    LLM_TENSOR_OUTPUT_LEXICAL, // Clef: Maps to the same tensor as LLM_TENSOR_OUTPUT but uses GET_ROWS operation
 };
 
 

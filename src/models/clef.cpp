@@ -82,6 +82,12 @@ void llama_model_clef::load_arch_tensors(llama_model_loader & ml) {
     load_norm(field_norm,          LLM_TENSOR_DECISION_FIELD_NORM,          n_embd_h);
     load_norm(option_norm,         LLM_TENSOR_DECISION_OPTION_NORM,         n_embd_h);
 
+    output_lexical = create_tensor(tn(LLM_TENSOR_OUTPUT_LEXICAL, "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+
+    if (output_lexical == nullptr) {
+        output_lexical = tok_embd;
+    }
+
     proj_memory          = create_tensor(tn(LLM_TENSOR_DECISION_PROJ_MEMORY,          "weight"), {n_embd, n_embd_h}, 0);
     proj_question        = create_tensor(tn(LLM_TENSOR_DECISION_PROJ_QUESTION,        "weight"), {n_embd, n_embd_h}, 0);
     proj_option_question = create_tensor(tn(LLM_TENSOR_DECISION_PROJ_OPTION_QUESTION, "weight"), {n_embd, n_embd_h}, 0);
@@ -559,7 +565,7 @@ ggml_tensor * llama_model_clef::graph::build_head(ggml_tensor * hidden, input_de
     ggml_tensor * opt_ctx  = ggml_mul_mat(ctx0, hidden_t, inp->pool_o); // [n_embd, n_options]
 
     // mean of the output embeddings of the tokens of each option
-    ggml_tensor * lexical = ggml_get_rows(ctx0, model.output, inp->tokens);
+    ggml_tensor * lexical = ggml_get_rows(ctx0, model.output_lexical, inp->tokens);
     lexical = ggml_mul_mat(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, lexical)), inp->pool_o); // [n_embd, n_options]
 
     // one query per option

@@ -965,6 +965,7 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
     { LLM_TENSOR_ROUTER_OUT,                             "blk.%d.ffn_router_out" },
     { LLM_TENSOR_ATTN_V_GATE,                            "blk.%d.attn_v_gate" },
     { LLM_TENSOR_ATTN_V_EXPS,                            "blk.%d.attn_v_exps" },
+    { LLM_TENSOR_OUTPUT_LEXICAL,                         "output" },
 };
 
 // declare information about the model weight tensors:
@@ -1407,6 +1408,8 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
 
     {LLM_TENSOR_ATTN_V_GATE,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT}},
     {LLM_TENSOR_ATTN_V_EXPS,                {LLM_TENSOR_LAYER_REPEATING, GGML_OP_MUL_MAT_ID}},
+    // Clef: Maps to the same tensor as LLM_TENSOR_OUTPUT, used for lexical embedding lookup
+    {LLM_TENSOR_OUTPUT_LEXICAL,             {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_GET_ROWS}},
 };
 
 LLM_KV::LLM_KV(llm_arch arch, const char * suffix) : arch(arch), suffix(suffix) {}
