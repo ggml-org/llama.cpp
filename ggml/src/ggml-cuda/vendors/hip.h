@@ -337,7 +337,7 @@ static __device__ __forceinline__ uint32_t ggml_hip_perm(const uint32_t hi, cons
 // DPP control codes.
 #define GGML_HIP_DPP_QUAD_PERM_1032  0x0b1 // quad_perm:[1,0,3,2]
 #define GGML_HIP_DPP_QUAD_PERM_2301  0x04e // quad_perm:[2,3,0,1]
-#define GGML_HIP_DPP_QUAD_PERM_ID    0xe40 // quad_perm:[0,1,2,3], identity permutation, GFX10+ only
+#define GGML_HIP_DPP_QUAD_PERM_ID    0x0e4 // quad_perm:[0,1,2,3]
 #define GGML_HIP_DPP_ROW_HALF_MIRROR 0x141 // row_half_mirror
 #define GGML_HIP_DPP_ROW_ROR_8       0x128 // row_ror:8
 #define GGML_HIP_DPP_ROW_BCAST_15    0x142 // row_bcast:15, GCN/CDNA only
