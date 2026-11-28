@@ -1,0 +1,137 @@
+// Weights and activations are rounded to f16. The sums are in f32.
+// Each stage row has 8 pad halves. The pad prevents LDS bank conflicts.
+
+template.decl @ggml.weight.wmma16(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index, %part: index) -> (vector<8xf16>, vector<8xf16>)
+
+func.decl @ggml_hrx_mm_store_row(%dst: buffer, %d_span: index, %d_col_base: index, %row: index, %n_rows: index, %value: f32)
+
+func.def inline @ggml_hrx_mm_wmma_store1(%dst: buffer, %d_span: index, %d_base: index, %d_s1: index, %col: index, %n_cols: index, %row: index, %n_rows: index, %value: f32) {
+  %col_valid = index.cmp ult, %col, %n_cols : index
+  scf.if %col_valid {
+    %d_col_offset = index.mul %col, %d_s1 : index
+    %d_col_base = index.add %d_base, %d_col_offset : index
+    func.call @ggml_hrx_mm_store_row(%dst, %d_span, %d_col_base, %row, %n_rows, %value) : (buffer, index, index, index, index, f32)
+  }
+  func.return
+}
+
+// The fragment layout is the gfx11 wave32 result layout.
+// Values out of range are not stored.
+func.def inline @ggml_hrx_mm_wmma_store(%dst: buffer, %d_span: index, %d_base: index, %d_s1: index, %col0: index, %n_cols: index, %row0: index, %n_rows: index, %acc: vector<8xf32>) {
+  %lane0 = kernel.subgroup.lane.id : index
+  %lane = index.assume %lane0 [range(%lane0, 0, 31)] : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c6 = index.constant 6 : index
+  %c8 = index.constant 8 : index
+  %c10 = index.constant 10 : index
+  %c12 = index.constant 12 : index
+  %c14 = index.constant 14 : index
+  %c16 = index.constant 16 : index
+  %lane_col = index.div %lane, %c16 : index
+  %lane_row = index.rem %lane, %c16 : index
+  %row = index.add %row0, %lane_row : index
+  %col_e0 = index.add %col0, %lane_col : index
+  %col_e1 = index.add %col_e0, %c2 : index
+  %col_e2 = index.add %col_e0, %c4 : index
+  %col_e3 = index.add %col_e0, %c6 : index
+  %col_e4 = index.add %col_e0, %c8 : index
+  %col_e5 = index.add %col_e0, %c10 : index
+  %col_e6 = index.add %col_e0, %c12 : index
+  %col_e7 = index.add %col_e0, %c14 : index
+  %v0 = vector.extract %acc[0] : vector<8xf32> -> f32
+  %v1 = vector.extract %acc[1] : vector<8xf32> -> f32
+  %v2 = vector.extract %acc[2] : vector<8xf32> -> f32
+  %v3 = vector.extract %acc[3] : vector<8xf32> -> f32
+  %v4 = vector.extract %acc[4] : vector<8xf32> -> f32
+  %v5 = vector.extract %acc[5] : vector<8xf32> -> f32
+  %v6 = vector.extract %acc[6] : vector<8xf32> -> f32
+  %v7 = vector.extract %acc[7] : vector<8xf32> -> f32
+  func.call @ggml_hrx_mm_wmma_store1(%dst, %d_span, %d_base, %d_s1, %col_e0, %n_cols, %row, %n_rows, %v0) : (buffer, index, index, index, index, index, index, index, f32)
+  func.call @ggml_hrx_mm_wmma_store1(%dst, %d_span, %d_base, %d_s1, %col_e1, %n_cols, %row, %n_rows, %v1) : (buffer, index, index, index, index, index, index, index, f32)
+  func.call @ggml_hrx_mm_wmma_store1(%dst, %d_span, %d_base, %d_s1, %col_e2, %n_cols, %row, %n_rows, %v2) : (buffer, index, index, index, index, index, index, index, f32)
+  func.call @ggml_hrx_mm_wmma_store1(%dst, %d_span, %d_base, %d_s1, %col_e3, %n_cols, %row, %n_rows, %v3) : (buffer, index, index, index, index, index, index, index, f32)
+  func.call @ggml_hrx_mm_wmma_store1(%dst, %d_span, %d_base, %d_s1, %col_e4, %n_cols, %row, %n_rows, %v4) : (buffer, index, index, index, index, index, index, index, f32)
+  func.call @ggml_hrx_mm_wmma_store1(%dst, %d_span, %d_base, %d_s1, %col_e5, %n_cols, %row, %n_rows, %v5) : (buffer, index, index, index, index, index, index, index, f32)
+  func.call @ggml_hrx_mm_wmma_store1(%dst, %d_span, %d_base, %d_s1, %col_e6, %n_cols, %row, %n_rows, %v6) : (buffer, index, index, index, index, index, index, index, f32)
+  func.call @ggml_hrx_mm_wmma_store1(%dst, %d_span, %d_base, %d_s1, %col_e7, %n_cols, %row, %n_rows, %v7) : (buffer, index, index, index, index, index, index, index, f32)
+  func.return
+}
+
+func.def inline @ggml_hrx_mm_wmma_stage_weights64(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index, %w_stage: buffer) {
+  %t0 = kernel.workitem.id<x> : index
+  %t = index.assume %t0 [range(%t0, 0, 255)] : index
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c8 = index.constant 8 : index
+  %c32 = index.constant 32 : index
+  %c0_offset = index.constant 0 : offset
+  %row = index.div %t, %c2 : index
+  %pair = index.rem %t, %c2 : index
+  %part0 = index.mul %pair, %c2 : index
+  %part1 = index.add %part0, %c1 : index
+  %k_local0 = index.mul %part0, %c8 : index
+  %k_local0_high = index.add %k_local0, %c32 : index
+  %k_local1 = index.mul %part1, %c8 : index
+  %k_local1_high = index.add %k_local1, %c32 : index
+  %w0_low, %w0_high = template.apply<@ggml.weight.wmma16>(%wtype, %weight, %w_span, %row_base, %row_valid, %k, %k_size, %part0) : (index, buffer, index, index, i1, index, index, index) -> (vector<8xf16>, vector<8xf16>)
+  %w1_low, %w1_high = template.apply<@ggml.weight.wmma16>(%wtype, %weight, %w_span, %row_base, %row_valid, %k, %k_size, %part1) : (index, buffer, index, index, i1, index, index, index) -> (vector<8xf16>, vector<8xf16>)
+  %w_view = buffer.view %w_stage[%c0_offset] : buffer -> view<128x72xf16>
+  vector.store %w0_low, %w_view[%row, %k_local0] : vector<8xf16>, view<128x72xf16>
+  vector.store %w0_high, %w_view[%row, %k_local0_high] : vector<8xf16>, view<128x72xf16>
+  vector.store %w1_low, %w_view[%row, %k_local1] : vector<8xf16>, view<128x72xf16>
+  vector.store %w1_high, %w_view[%row, %k_local1_high] : vector<8xf16>, view<128x72xf16>
+  func.return
+}
+
+func.def inline @ggml_hrx_mm_wmma_input8(%input: buffer, %x_span: index, %col_base: index, %col_valid: i1, %k: index, %k_size: index) -> (vector<8xf16>) {
+  %c7 = index.constant 7 : index
+  %c0_offset = index.constant 0 : offset
+  %zero8 = vector.splatf 0.0 : vector<8xf32>
+  %input_view = buffer.view %input[%c0_offset] : buffer -> view<[%x_span]xf32>
+  %values = scf.if %col_valid -> (vector<8xf32>) {
+    %k_in = index.cmp ult, %k, %k_size : index
+    %k_values = scf.if %k_in -> (vector<8xf32>) {
+      %index0 = index.add %col_base, %k : index
+      %index = index.assume %index0 [range(%index0, 0, 2147483646)] : index
+      %last0 = index.add %index, %c7 : index
+      %last = index.assume %last0 [range(%last0, 0, 2147483646)] : index
+      %in_span = index.cmp ult, %last, %x_span : index
+      %loaded = scf.if %in_span -> (vector<8xf32>) {
+        %v = vector.load %input_view[%index] : view<[%x_span]xf32> -> vector<8xf32>
+        scf.yield %v : vector<8xf32>
+      } else {
+        scf.yield %zero8 : vector<8xf32>
+      }
+      scf.yield %loaded : vector<8xf32>
+    } else {
+      scf.yield %zero8 : vector<8xf32>
+    }
+    scf.yield %k_values : vector<8xf32>
+  } else {
+    scf.yield %zero8 : vector<8xf32>
+  }
+  %values_f16 = vector.fptrunc %values : vector<8xf32> to vector<8xf16>
+  func.return %values_f16 : vector<8xf16>
+}
+
+func.def inline @ggml_hrx_mm_wmma_stage_input64(%input: buffer, %x_span: index, %col_base: index, %col_valid: i1, %k: index, %k_size: index, %x_stage: buffer) {
+  %t0 = kernel.workitem.id<x> : index
+  %t = index.assume %t0 [range(%t0, 0, 255)] : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c16 = index.constant 16 : index
+  %c0_offset = index.constant 0 : offset
+  %col = index.div %t, %c4 : index
+  %part = index.rem %t, %c4 : index
+  %k_local0 = index.mul %part, %c16 : index
+  %k_local1 = index.add %k_local0, %c8 : index
+  %k0 = index.add %k, %k_local0 : index
+  %k1 = index.add %k, %k_local1 : index
+  %x0 = func.call @ggml_hrx_mm_wmma_input8(%input, %x_span, %col_base, %col_valid, %k0, %k_size) : (buffer, index, index, i1, index, index) -> (vector<8xf16>)
+  %x1 = func.call @ggml_hrx_mm_wmma_input8(%input, %x_span, %col_base, %col_valid, %k1, %k_size) : (buffer, index, index, i1, index, index) -> (vector<8xf16>)
+  %x_view = buffer.view %x_stage[%c0_offset] : buffer -> view<64x72xf16>
+  vector.store %x0, %x_view[%col, %k_local0] : vector<8xf16>, view<64x72xf16>
+  vector.store %x1, %x_view[%col, %k_local1] : vector<8xf16>, view<64x72xf16>
+  func.return
+}

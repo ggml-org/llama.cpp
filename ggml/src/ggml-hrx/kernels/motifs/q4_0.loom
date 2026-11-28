@@ -1,0 +1,189 @@
+// Plain ggml block_q4_0: f16 scale, then 16 bytes of 4-bit codes. A block has 18 bytes and only 2-byte alignment.
+// The low nibbles are values 0 to 15. The high nibbles are values 16 to 31.
+
+template.decl @ggml.f16.bits_f32(%bits: i16) -> (f32)
+
+template.decl @ggml.mem.half(%weight: buffer, %span: index, %index: index) -> (i16)
+
+template.decl @ggml.mem.half_word(%weight: buffer, %span: index, %index: index) -> (vector<1xi32>)
+
+template.decl @ggml.u8.affine4(%word: i32, %scale: f32, %bias: f32) -> (vector<4xf32>)
+
+// A superblock is 8 blocks of 32 values. A part is one half of a block.
+func.def inline @ggml_block32_offsets16(%part: index) -> (index, index, index, index) {
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c12 = index.constant 12 : index
+  %c16 = index.constant 16 : index
+  %c32 = index.constant 32 : index
+  %part_in = index.assume %part [range(%part, 0, 15)] : index
+  %blk = index.div %part_in, %c2 : index
+  %half = index.rem %part_in, %c2 : index
+  %o_blk = index.mul %blk, %c32 : index
+  %o_half = index.mul %half, %c16 : index
+  %o0 = index.add %o_blk, %o_half : index
+  %o1 = index.add %o0, %c4 : index
+  %o2 = index.add %o0, %c8 : index
+  %o3 = index.add %o0, %c12 : index
+  func.return %o0, %o1, %o2, %o3 : index, index, index, index
+}
+
+template.decl @ggml.weight.block(%wtype: index) -> (index, index)
+
+template.def<@ggml.weight.block> device @ggml_q4_0_block_shape(%wtype: index) -> (index, index) where [eq(%wtype, 2)] {
+  %values = index.constant 32 : index
+  %units = index.constant 9 : index
+  template.return %values, %units : index, index
+}
+
+template.decl @ggml.weight.values4(%wtype: index, %weight: buffer, %w_span: index, %block_base: index, %j: index) -> (vector<4xf32>)
+
+// j is a multiple of 4 and below 32.
+template.def<@ggml.weight.values4> device @ggml_q4_0_values4(%wtype: index, %weight: buffer, %w_span: index, %block_base: index, %j: index) -> (vector<4xf32>) where [eq(%wtype, 2)] {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c16 = index.constant 16 : index
+  %nibbles = scalar.constant 252645135 : i32
+  %minus_8 = scalar.constant -8.0 : f32
+  %d_bits = template.apply<@ggml.mem.half>(%weight, %w_span, %block_base) : (buffer, index, index) -> (i16)
+  %d = template.apply<@ggml.f16.bits_f32>(%d_bits) : (i16) -> (f32)
+  %byte = index.rem %j, %c16 : index
+  %high = index.div %j, %c16 : index
+  %q_half0 = index.div %byte, %c2 : index
+  %q_half = index.add %q_half0, %c1 : index
+  %q_index = index.add %block_base, %q_half : index
+  %q_word = template.apply<@ggml.mem.half_word>(%weight, %w_span, %q_index) : (buffer, index, index) -> (vector<1xi32>)
+  %q_packed = vector.extract %q_word[0] : vector<1xi32> -> i32
+  %shift_index = index.mul %high, %c4 : index
+  %shift = index.cast %shift_index : index to i32
+  %q_shifted = scalar.shrui %q_packed, %shift : i32
+  %q = scalar.andi %q_shifted, %nibbles : i32
+  %bias = scalar.mulf %d, %minus_8 : f32
+  %result = template.apply<@ggml.u8.affine4>(%q, %d, %bias) : (i32, f32, f32) -> (vector<4xf32>)
+  template.return %result : vector<4xf32>
+}
+
+template.decl @ggml.weight.superblock(%wtype: index) -> (offset, offset, index)
+
+template.def<@ggml.weight.superblock> device @ggml_q4_0_superblock(%wtype: index) -> (offset, offset, index) where [eq(%wtype, 2)] {
+  %unit = index.constant 2 : offset
+  %sb = index.constant 144 : offset
+  %units = index.constant 72 : index
+  template.return %unit, %sb, %units : offset, offset, index
+}
+
+template.decl @ggml.weight.part16(%wtype: index, %weight: buffer, %sb_byte: offset, %part: index) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, index, index, index, index)
+
+template.def<@ggml.weight.part16> device @ggml_q4_0_part16(%wtype: index, %weight: buffer, %sb_byte: offset, %part: index) -> (vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, index, index, index, index) where [eq(%wtype, 2)] {
+  %c0 = index.constant 0 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %b2 = index.constant 2 : offset
+  %b18 = index.constant 18 : offset
+  %nibbles = vector.splati 252645135 : vector<4xi32>
+  %minus_8 = scalar.constant -8.0 : f32
+  %part_in = index.assume %part [range(%part, 0, 15)] : index
+  %blk = index.div %part_in, %c2 : index
+  %high = index.rem %part_in, %c2 : index
+  %blk_add = index.scale %blk, %b18 : index, offset -> offset
+  %blk_byte = index.add %sb_byte, %blk_add : offset
+  %qs_byte = index.add %blk_byte, %b2 : offset
+  %d_view = buffer.view %weight[%blk_byte] : buffer -> view<1xf16>
+  %qs_view = buffer.view %weight[%qs_byte] : buffer -> view<4xi32>
+  %d_half = view.load %d_view[%c0] : view<1xf16> -> f16
+  %qs = vector.load %qs_view[%c0] : view<4xi32> -> vector<4xi32>
+  %d = scalar.extf %d_half : f16 to f32
+  %bias = scalar.mulf %d, %minus_8 : f32
+  %shift_index = index.mul %high, %c4 : index
+  %shift_i32 = index.cast %shift_index : index to i32
+  %shift = vector.splat %shift_i32 : vector<4xi32>
+  %qs_shifted = vector.shrui %qs, %shift : vector<4xi32>
+  %q = vector.andi %qs_shifted, %nibbles : vector<4xi32>
+  %q0 = vector.extract %q[0] : vector<4xi32> -> i32
+  %q1 = vector.extract %q[1] : vector<4xi32> -> i32
+  %q2 = vector.extract %q[2] : vector<4xi32> -> i32
+  %q3 = vector.extract %q[3] : vector<4xi32> -> i32
+  %w0 = template.apply<@ggml.u8.affine4>(%q0, %d, %bias) : (i32, f32, f32) -> (vector<4xf32>)
+  %w1 = template.apply<@ggml.u8.affine4>(%q1, %d, %bias) : (i32, f32, f32) -> (vector<4xf32>)
+  %w2 = template.apply<@ggml.u8.affine4>(%q2, %d, %bias) : (i32, f32, f32) -> (vector<4xf32>)
+  %w3 = template.apply<@ggml.u8.affine4>(%q3, %d, %bias) : (i32, f32, f32) -> (vector<4xf32>)
+  %o0, %o1, %o2, %o3 = func.call @ggml_block32_offsets16(%part_in) : (index) -> (index, index, index, index)
+  template.return %w0, %w1, %w2, %w3, %o0, %o1, %o2, %o3 : vector<4xf32>, vector<4xf32>, vector<4xf32>, vector<4xf32>, index, index, index, index
+}
+
+template.decl @ggml.weight.offsets16(%wtype: index, %part: index) -> (index, index, index, index)
+
+template.def<@ggml.weight.offsets16> device @ggml_q4_0_offsets16(%wtype: index, %part: index) -> (index, index, index, index) where [eq(%wtype, 2)] {
+  %o0, %o1, %o2, %o3 = func.call @ggml_block32_offsets16(%part) : (index) -> (index, index, index, index)
+  template.return %o0, %o1, %o2, %o3 : index, index, index, index
+}
+
+// part is below 4. A part has 8 values.
+func.def inline @ggml_q4_0_block8(%weight: buffer, %w_span: index, %block_base0: index, %valid: i1, %part: index) -> (vector<8xf16>) {
+  %c1 = index.constant 1 : index
+  %c2 = index.constant 2 : index
+  %c4 = index.constant 4 : index
+  %c8 = index.constant 8 : index
+  %c0_offset = index.constant 0 : offset
+  %c0_i16 = scalar.constant 0 : i16
+  %minus_8 = scalar.constant -8.0 : f32
+  %zero4 = vector.splati 0 : vector<4xi16>
+  %nibbles = vector.splati 252645135 : vector<2xi32>
+  %halves = buffer.view %weight[%c0_offset] : buffer -> view<[%w_span]xi16>
+  %block_base = index.assume %block_base0 [range(%block_base0, 0, 2147483600)] : index
+  %byte_part = index.rem %part, %c2 : index
+  %high = index.div %part, %c2 : index
+  %part_halves = index.mul %byte_part, %c4 : index
+  %q_local = index.add %part_halves, %c1 : index
+  %q_index = index.add %block_base, %q_local : index
+  %block_last = index.add %block_base, %c8 : index
+  %q, %d_bits = scf.if %valid -> (vector<4xi16>, i16) {
+    %in_span = index.cmp ult, %block_last, %w_span : index
+    %l_q, %l_d = scf.if %in_span -> (vector<4xi16>, i16) {
+      %v_d = view.load %halves[%block_base] : view<[%w_span]xi16> -> i16
+      %v_q = vector.load %halves[%q_index] : view<[%w_span]xi16> -> vector<4xi16>
+      scf.yield %v_q, %v_d : vector<4xi16>, i16
+    } else {
+      scf.yield %zero4, %c0_i16 : vector<4xi16>, i16
+    }
+    scf.yield %l_q, %l_d : vector<4xi16>, i16
+  } else {
+    scf.yield %zero4, %c0_i16 : vector<4xi16>, i16
+  }
+  %words = vector.bitcast %q : vector<4xi16> to vector<2xi32>
+  %shift_index = index.mul %high, %c4 : index
+  %shift_i32 = index.cast %shift_index : index to i32
+  %shift = vector.splat %shift_i32 : vector<2xi32>
+  %words_shifted = vector.shrui %words, %shift : vector<2xi32>
+  %codes = vector.andi %words_shifted, %nibbles : vector<2xi32>
+  %bytes = vector.bitcast %codes : vector<2xi32> to vector<8xi8>
+  %q_f32 = vector.uitofp %bytes : vector<8xi8> to vector<8xf32>
+  %d = template.apply<@ggml.f16.bits_f32>(%d_bits) : (i16) -> (f32)
+  %bias = scalar.mulf %d, %minus_8 : f32
+  %d_splat = vector.splat %d : vector<8xf32>
+  %bias_splat = vector.splat %bias : vector<8xf32>
+  %values = vector.fmaf %q_f32, %d_splat, %bias_splat : vector<8xf32>
+  %values_f16 = vector.fptrunc %values : vector<8xf32> to vector<8xf16>
+  func.return %values_f16 : vector<8xf16>
+}
+
+template.decl @ggml.weight.wmma16(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index, %part: index) -> (vector<8xf16>, vector<8xf16>)
+
+// The second block can be past K.
+template.def<@ggml.weight.wmma16> device @ggml_q4_0_wmma16(%wtype: index, %weight: buffer, %w_span: index, %row_base: index, %row_valid: i1, %k: index, %k_size: index, %part: index) -> (vector<8xf16>, vector<8xf16>) where [eq(%wtype, 2)] {
+  %c9 = index.constant 9 : index
+  %c32 = index.constant 32 : index
+  %k_bounded = index.assume %k [range(%k, 0, 2147483646)] : index
+  %block = index.div %k_bounded, %c32 : index
+  %block_offset = index.mul %block, %c9 : index
+  %block_base = index.add %row_base, %block_offset : index
+  %block_base1 = index.add %block_base, %c9 : index
+  %k1 = index.add %k_bounded, %c32 : index
+  %k1_in = index.cmp ult, %k1, %k_size : index
+  %valid1 = scalar.andi %row_valid, %k1_in : i1
+  %low = func.call @ggml_q4_0_block8(%weight, %w_span, %block_base, %row_valid, %part) : (buffer, index, index, i1, index) -> (vector<8xf16>)
+  %high = func.call @ggml_q4_0_block8(%weight, %w_span, %block_base1, %valid1, %part) : (buffer, index, index, i1, index) -> (vector<8xf16>)
+  template.return %low, %high : vector<8xf16>, vector<8xf16>
+}
