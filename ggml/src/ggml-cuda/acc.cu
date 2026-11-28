@@ -1,7 +1,9 @@
 #include "acc.cuh"
 
+template <bool src1_contiguous>
 static __global__ void acc_f32(const float * x, const float * y, float * dst, const int64_t ne,
         const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
+        const size_t nb11, const size_t nb12, const size_t nb13,
         const int64_t s11, const int64_t s12, const int64_t s13, const int64_t offset) {
     const int64_t i = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -22,16 +24,26 @@ static __global__ void acc_f32(const float * x, const float * y, float * dst, co
 
     float val = x[i];
     if (src1_idx >= 0 && i10 < ne10 && i11 < ne11 && i12 < ne12 && i13 < ne13) {
-        val += y[((i13*ne12 + i12) * ne11 + i11) * ne10 + i10];
+        if constexpr (src1_contiguous) {
+            val += y[((i13*ne12 + i12) * ne11 + i11) * ne10 + i10];
+        } else {
+            const float * y_row = (const float *) ((const char *) y + i11*nb11 + i12*nb12 + i13*nb13);
+            val += y_row[i10];
+        }
     }
     dst[i] = val;
 }
 
 static void acc_f32_cuda(const float * x, const float * y, float * dst, const int64_t n_elements,
         const int64_t ne10, const int64_t ne11, const int64_t ne12, const int64_t ne13,
-        const int64_t s1, const int64_t s2, const int64_t s3, const int64_t offset, cudaStream_t stream) {
+        const size_t nb11, const size_t nb12, const size_t nb13,
+        const int64_t s1, const int64_t s2, const int64_t s3, const int64_t offset, bool src1_contiguous, cudaStream_t stream) {
     const int num_blocks = (n_elements + CUDA_ACC_BLOCK_SIZE - 1) / CUDA_ACC_BLOCK_SIZE;
-    acc_f32<<<num_blocks, CUDA_ACC_BLOCK_SIZE, 0, stream>>>(x, y, dst, n_elements, ne10, ne11, ne12, ne13, s1, s2, s3, offset);
+    if (src1_contiguous) {
+        acc_f32<true><<<num_blocks, CUDA_ACC_BLOCK_SIZE, 0, stream>>>(x, y, dst, n_elements, ne10, ne11, ne12, ne13, nb11, nb12, nb13, s1, s2, s3, offset);
+    } else {
+        acc_f32<false><<<num_blocks, CUDA_ACC_BLOCK_SIZE, 0, stream>>>(x, y, dst, n_elements, ne10, ne11, ne12, ne13, nb11, nb12, nb13, s1, s2, s3, offset);
+    }
 }
 
 void ggml_cuda_op_acc(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
@@ -48,7 +60,7 @@ void ggml_cuda_op_acc(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     GGML_ASSERT(src1->type == GGML_TYPE_F32);
     GGML_ASSERT( dst->type == GGML_TYPE_F32);
 
-    GGML_ASSERT(ggml_is_contiguous(src1));
+    GGML_ASSERT(ggml_is_contiguous_rows(src1));
     GGML_ASSERT(dst->nb[0] == ggml_element_size(dst));
     GGML_ASSERT(ggml_is_contiguously_allocated(dst));
 
@@ -57,5 +69,5 @@ void ggml_cuda_op_acc(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const int64_t s3     = dst->op_params[2] / sizeof(float);
     const int64_t offset = dst->op_params[3] / sizeof(float);
 
-    acc_f32_cuda(src0_d, src1_d, dst_d, ggml_nelements(dst), src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], s1, s2, s3, offset, stream);
+    acc_f32_cuda(src0_d, src1_d, dst_d, ggml_nelements(dst), src1->ne[0], src1->ne[1], src1->ne[2], src1->ne[3], src1->nb[1], src1->nb[2], src1->nb[3], s1, s2, s3, offset, ggml_is_contiguous(src1), stream);
 }

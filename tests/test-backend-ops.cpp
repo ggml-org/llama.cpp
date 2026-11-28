@@ -9098,16 +9098,18 @@ struct test_acc : public test_case {
     const std::array<int64_t, 4> ne_a;
     const std::array<int64_t, 4> ne_b;
     const int64_t stride_dim;
+    const bool inplace;
+    const size_t offset;
 
     std::string vars() override {
-        return VARS_TO_STR4(type, ne_a, ne_b, stride_dim);
+        return VARS_TO_STR6(type, ne_a, ne_b, stride_dim, inplace, offset);
     }
 
     test_acc(ggml_type type = GGML_TYPE_F32,
             std::array<int64_t, 4> ne_a = {256, 17, 2, 3},
             std::array<int64_t, 4> ne_b = {256, 16, 2, 3},
-            uint64_t stride_dim = -1)
-        : type(type), ne_a(ne_a), ne_b(ne_b), stride_dim(stride_dim) {}
+            uint64_t stride_dim = -1, bool inplace = false, size_t offset = 0)
+        : type(type), ne_a(ne_a), ne_b(ne_b), stride_dim(stride_dim), inplace(inplace), offset(offset) {}
 
     ggml_tensor * build_graph(ggml_context * ctx) override {
         ggml_tensor * a = ggml_new_tensor(ctx, type, 4, ne_a.data());
@@ -9115,19 +9117,18 @@ struct test_acc : public test_case {
         ggml_set_name(a, "a");
 
         ggml_tensor * b;
-        if (stride_dim == 1 || stride_dim == 2 || stride_dim == 3) {
-            // Create a larger tensor and take a view at a non-zero offset.
-            // This tests that the backend correctly handles b's data offset
+        if (stride_dim >= 0 && stride_dim <= 3) {
+            // Keep padding and a non-zero view offset in the source allocation.
             std::array<int64_t, 4> ne_b_pad = {ne_b[0], ne_b[1], ne_b[2], ne_b[3]};
             ne_b_pad[stride_dim] += 1;
             ggml_tensor * b_pad = ggml_new_tensor(ctx, type, 4, ne_b_pad.data());
             ggml_set_param(b_pad);
             ggml_set_name(b_pad, "b_pad");
-            // View that skips the first row, so b has a non-zero byte offset
+            const size_t view_offset = stride_dim == 0 ? b_pad->nb[0] : b_pad->nb[1];
             b = ggml_view_4d(ctx, b_pad,
                 ne_b[0], ne_b[1], ne_b[2], ne_b[3],
                 b_pad->nb[1], b_pad->nb[2], b_pad->nb[3],
-                b_pad->nb[1]);
+                view_offset);
         } else {
             b = ggml_new_tensor(ctx, type, 4, ne_b.data());
             ggml_set_param(b);
@@ -9136,7 +9137,9 @@ struct test_acc : public test_case {
 
         // When ne_b[0] < ne_a[0], a->nb[1] != b->nb[1], so the stride
         // parameters to ggml_acc don't match b's natural stride.
-        ggml_tensor * out = ggml_acc(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], 0);
+        ggml_tensor * out = inplace
+            ? ggml_acc_inplace(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], offset)
+            : ggml_acc(ctx, a, b, a->nb[1], a->nb[2], a->nb[3], offset);
         ggml_set_name(out, "out");
 
         return out;
@@ -13502,6 +13505,12 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_eval() {
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, 1));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 2));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {64, 16, 2, 3}, 3));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 0));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 0, true));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 0, false, 3*sizeof(float)));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 0, true, 3*sizeof(float)));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {17, 5, 1, 1}, {7, 3, 1, 1}, 0, false, 2*sizeof(float)));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {17, 5, 1, 1}, {1, 3, 1, 1}, 0, false, 2*sizeof(float)));
 
     test_cases.emplace_back(new test_pad());
     test_cases.emplace_back(new test_pad(GGML_TYPE_F32, {33, 17, 2, 1}, 4, 3, true)); // circular
@@ -14891,6 +14900,8 @@ static std::vector<std::unique_ptr<test_case>> make_test_cases_perf() {
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {256, 16, 2, 3}, 1));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 2));
     test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {64, 16, 2, 3}, 3));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 0));
+    test_cases.emplace_back(new test_acc(GGML_TYPE_F32, {256, 17, 2, 3}, {128, 16, 2, 3}, 0, true, 3*sizeof(float)));
 
     // GATED_DELTA_NET: realistic model configurations
     // TG: n_seq_tokens=1 (autoregressive)
