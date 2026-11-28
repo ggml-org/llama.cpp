@@ -235,7 +235,8 @@ ggml_tensor * llm_build_delta_net_base::build_recurrent_attn_replay(
     ggml_tensor * cgb = ggml_reshape_4d(ctx0, spgb, g0,  H_v, 2*n_pend, spgb->ne[1]);
 
     const auto gather = [&](ggml_tensor * rows, ggml_tensor * c) {
-        return ggml_reshape_4d(ctx0, build_rs(inp, rows, rows->ne[0], n_seqs), c->ne[0], c->ne[1], c->ne[2], n_seqs);
+        // the gdn op can store the new inputs into these rows while it replays them, so it reads a copy
+        return ggml_reshape_4d(ctx0, build_rs(inp, rows, rows->ne[0], n_seqs, nullptr, true), c->ne[0], c->ne[1], c->ne[2], n_seqs);
     };
 
     ggml_tensor * pk  = gather(spk,  ck);

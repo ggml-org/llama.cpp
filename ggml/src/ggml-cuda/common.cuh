@@ -412,6 +412,11 @@ static bool ggml_cuda_is_aligned(const ggml_tensor * tensor, const size_t alignm
            tensor->nb[3] % alignment == 0;
 }
 
+static bool ggml_cuda_is_view_or_noop(const ggml_tensor * t) {
+    return ggml_is_empty(t) || t->op == GGML_OP_RESHAPE || t->op == GGML_OP_TRANSPOSE ||
+           t->op == GGML_OP_VIEW || t->op == GGML_OP_PERMUTE || t->op == GGML_OP_NONE;
+}
+
 static constexpr __device__ int ggml_cuda_get_physical_warp_size() {
 #if defined(GGML_USE_HIP) && (defined(__GFX9__) || defined(__GFX8__))
     return 64;
@@ -1304,6 +1309,7 @@ struct ggml_cuda_device_info {
         size_t  smpb;                           // max. shared memory per block
         size_t  smpbo;                          // max. shared memory per block (with opt-in)
         bool    integrated;                     // Device is integrated as opposed to discrete
+        enum ggml_backend_dev_type type;        // GPU or IGPU, from cudaDeviceProp::integrated
         bool    vmm;                            // virtual memory support
         size_t  vmm_granularity;                // granularity of virtual memory
         size_t  total_vram;

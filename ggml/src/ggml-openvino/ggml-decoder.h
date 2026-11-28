@@ -47,6 +47,15 @@ struct ModelParams {
     // The attention masks that are graph inputs, by identity: gemma-4's KV-shared layers also read them through
     // GET_ROWS, which must resolve to the same OV parameter as the attention ops
     std::set<const ggml_tensor *> kq_masks;
+    // gemma-4's KV-shared layers attend for the output rows only (prune_shared in src/models/gemma4.cpp): llama.cpp
+    // copies their mask rows from the input masks on the host into separate inputs (out_mask, out_mask_swa), and
+    // gathers their activations, positions and per-layer embeddings with an index list (inp_prune_ids). The static
+    // models bind the input masks per prefill chunk, so these masks are not graph inputs: each maps to the input
+    // mask it copies, and the OV model gathers its rows from that mask with inp_prune_ids instead.
+    std::map<const ggml_tensor *, const ggml_tensor *> pruned_masks;
+    const ggml_tensor * prune_ids = nullptr;
+    // the output rows among the gathered rows (inp_prune_keep)
+    const ggml_tensor * prune_keep = nullptr;
 
     std::vector<std::string> kv_names;
     size_t kv_buffer_ctx_id = 0;
@@ -86,7 +95,6 @@ struct ComputeParams {
     int swa_window = -1;
     int input_len = -1;
     int token_len_per_seq = -1;
-    int past_kv_len = -1;
     int output_len = 1;
 
     int cache_rs_reset_idx = -1;
@@ -288,15 +296,37 @@ public:
 
     virtual std::set<std::string> get_model_output_names() const override { return m_model_output_names; }
 
+    virtual std::set<std::string> get_cache_output_names() const override {
+        std::set<std::string> names;
+        for (const auto & name : m_model_output_names) {
+            const ggml_tensor * tensor = m_model_outputs.at(name);
+            if (is_kvcache(tensor, nullptr) || is_recurrent_cache(tensor)) {
+                names.insert(name);
+            }
+        }
+        return names;
+    }
+
+    virtual bool is_kv_only_outputs() const override { return m_kv_only_outputs; }
+
+    // Convert the model with only the cache writes as outputs (GGML_OPENVINO_KV_ONLY_PREFILL); the conversion pipeline
+    // then drops everything that only feeds the other outputs, see pass::KeepCacheResults.
+    void set_kv_only_outputs(bool kv_only) { m_kv_only_outputs = kv_only; }
+
+    // GET_ROWS of a large host-resident weight table by graph-input ids (GGML_OPENVINO_NPU_HOST_GATHER): its rows
+    // are gathered on the host and fed through the "ggml_host_rows_<node>" input instead of an OV Gather.
+    static bool is_host_gather_rows(const ggml_tensor * node);
+    static constexpr const char * host_rows_prefix = "ggml_host_rows_";
+    const ggml_tensor * get_host_gather_rows(const std::string & input_name) const {
+        auto it = m_host_gather_rows.find(input_name);
+        return it == m_host_gather_rows.end() ? nullptr : it->second;
+    }
+
     const std::map<std::string, ggml_tensor *> & get_model_outputs() const { return m_model_outputs; }
 
     virtual int get_ctx_size() const { return m_model_params.ctx; }
 
     virtual int get_ctx_per_seq() const { return m_model_params.ctx_per_seq; }
-
-    virtual int get_ctx_per_seq_swa() const { return m_model_params.ctx_per_seq_swa; }
-
-    virtual int get_n_seq() const { return m_model_params.n_seq; }
 
     virtual int is_swa_layer(int layer) const override {
         return std::find(m_model_params.swa_layers.begin(), m_model_params.swa_layers.end(), layer) !=
@@ -318,13 +348,9 @@ public:
         return m_model_params.n_heads_kv;
     }
 
-    int get_past_kv_len() const { return m_compute_params.past_kv_len; }
-
     int get_input_len() const { return m_compute_params.input_len; }
 
     virtual int32_t * get_rope_params() const override { return const_cast<int32_t *>(m_model_params.rope_params); }
-
-    virtual bool has_mixed_rope_params() const override { return m_model_params.mixed_rope_params; }
 
     virtual int get_ssm_state_size() const override { return m_model_params.state_size; }
 
@@ -416,8 +442,6 @@ public:
         }
         return v;
     }
-
-    const ggml_tensor * get_tensor_from_name(const std::string & name) const;
 
     std::string get_hfa_history_input_name() const;
 
@@ -608,10 +632,6 @@ public:
 
     bool is_direct_gdn_view(const ggml_tensor * node) const;
 
-    static bool is_cache(const ggml_tensor * tensor, const ggml_tensor * op) {
-        return is_recurrent_cache(tensor) || is_kvcache(tensor, op);
-    }
-
     static bool is_kvcache(const ggml_tensor * tensor, const ggml_tensor * op) {
         if (tensor == nullptr || is_recurrent_cache(tensor)) {
             return false;
@@ -697,6 +717,8 @@ public:
 
     bool is_kq_mask(const ggml_tensor * tensor) const { return m_model_params.kq_masks.count(tensor) != 0; }
 
+    bool is_pruned_mask(const ggml_tensor * tensor) const { return m_model_params.pruned_masks.count(tensor) != 0; }
+
     // A graph-input index list of GET_ROWS: out_ids, or the inp->s_copy leaf when build_rs gathers
     // every recurrent state at once.
     static bool is_get_rows_input_idx(const ggml_tensor * tensor, const ggml_tensor * op) {
@@ -720,33 +742,6 @@ public:
     static bool is_inp_s_copy(const ggml_tensor * tensor, const ggml_tensor * op) {
         return op->op == GGML_OP_GET_ROWS && tensor == op->src[1] &&
                op->src[0]->buffer->usage == GGML_BACKEND_BUFFER_USAGE_ANY;
-    }
-
-    std::string get_graph_input_ov_name(const ggml_tensor * tensor, const ggml_tensor * op) const {
-        if (is_inp_pos(tensor, op)) {
-            return "inp_pos";
-        }
-        if (is_inp_emb(tensor, op)) {
-            return "embd";
-        }
-        if (is_inp_mask(tensor, op)) {
-            // Give the two attention masks distinct OV parameter names.
-            //
-            // An interleaved-SWA model builds one full-attention mask and one sliding-window mask,
-            // but build_attn_inp_kq_mask() names them identically, so keying a parameter off
-            // tensor->name alone makes the second mask OVERWRITE the first in m_model_inputs: both
-            // attention types then read a single parameter, and the windowed layers silently run
-            // against an unbanded mask. Disambiguate using the SWA layer set computed in
-            // compute_llm_params(), which classifies by mask tensor identity rather than by name.
-            //
-            // When no SWA layer was found there is only one mask in play, so the plain name is
-            // correct and no _swa parameter is created.
-            if (m_model_params.swa_layers.empty()) {
-                return "self_kq_mask";
-            }
-            return is_swa_mask(tensor) ? "self_kq_mask_swa" : "self_kq_mask";
-        }
-        return tensor->name;
     }
 
 private:
@@ -776,6 +771,8 @@ private:
     std::set<std::string> m_model_output_names;
     // The output set the compiled model was built from, for has_same_graph_io().
     std::set<std::string> m_built_output_names;
+    bool m_kv_only_outputs = false;
+    std::map<std::string, const ggml_tensor *> m_host_gather_rows;
     std::vector<NodeInfo> m_node_info_list;
     std::map<ggml_tensor *, int> m_node_dynamic_dims;
     std::set<const ggml_tensor *> m_kvcache_4d;

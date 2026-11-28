@@ -59,6 +59,8 @@ describe('getBitDepth', () => {
 	it('falls back to the leading precision digits', () => {
 		expect(getBitDepth('TQ1_0')).toBe(1);
 		expect(getBitDepth('MXFP4_MOE')).toBe(4);
+		expect(getBitDepth('NVFP4')).toBe(4);
+		expect(HuggingFaceService.extractQuantMeta('Inkling-2-Mini-NVFP4.gguf')?.quant).toBe('NVFP4');
 	});
 
 	it('returns null for unrecognized tokens', () => {

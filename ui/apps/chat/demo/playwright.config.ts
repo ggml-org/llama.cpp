@@ -16,6 +16,9 @@ if (existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
  *   DEMO_SERVER_ORIGIN  llama-server the UI proxies to (default: http://localhost:9931)
  *   DEMO_LLAMA_SERVER   llama-server binary started when none runs there (default: build/bin)
  *   DEMO_COLOR_SCHEME   light | dark (default: light)
+ *   DEMO_POLISH         0 for the plain screencast (default: the branded render, see polish.ts)
+ *   DEMO_STORYBOOK      ui | chat: also start that Storybook (Llama UI's or Llama Chat's), for story demos
+ *   DEMO_STORYBOOK_PORT port for it (default: 6007)
  */
 
 // Playwright clears outputDir when a run starts, so concurrent recordings each get
@@ -29,6 +32,10 @@ const SERVER_PORT = Number(new URL(SERVER_ORIGIN).port || 80);
 const LLAMA_SERVER =
 	process.env.DEMO_LLAMA_SERVER ??
 	resolve(import.meta.dirname, '../../../../build/bin/llama-server');
+const STORYBOOK = process.env.DEMO_STORYBOOK;
+
+// workers read it to open the stories
+process.env.DEMO_STORYBOOK_PORT ??= '6007';
 
 export const VIEWPORT = { height: 900, width: 1440 };
 /** Device pixel ratio the demos render and record at. */
@@ -82,7 +89,18 @@ export default defineConfig({
 			reuseExistingServer: true,
 			timeout: 120000,
 			url: `http://localhost:${UI_PORT}`
-		}
+		},
+		...(STORYBOOK
+			? [
+					{
+						command: `npx svelte-kit sync && npx storybook dev -p ${process.env.DEMO_STORYBOOK_PORT} --ci --exact-port`,
+						cwd: STORYBOOK === 'ui' ? resolve(UI_DIR, '../../lib/ui') : UI_DIR,
+						reuseExistingServer: true,
+						timeout: 120000,
+						url: `http://localhost:${process.env.DEMO_STORYBOOK_PORT}/iframe.html`
+					}
+				]
+			: [])
 	],
 	workers: 1
 });

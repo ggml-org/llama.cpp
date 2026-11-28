@@ -55,6 +55,7 @@ export * from './models-discover.constants';
 export * from './models-discover-download.constants';
 export * from './model-compatibility.constants';
 export * from './huggingface.constants';
+export * from './huggingface-account.constants';
 export * from './precision.constants';
 export * from './pwa.constants';
 export * from './routes.constants';

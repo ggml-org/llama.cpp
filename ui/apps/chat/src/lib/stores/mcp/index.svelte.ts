@@ -97,7 +97,7 @@ class MCPStore implements McpHealthHost {
 		);
 	}
 
-	/** Whether the Enable MCP setting is on. */
+	/** Whether the Enable MCP setting is on. Off by default; while off, no MCP server is connected. */
 	get isFeatureEnabled(): boolean {
 		return Boolean(settingsStore.config[SETTINGS_KEYS.ENABLE_MCP]);
 	}

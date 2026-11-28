@@ -9,6 +9,9 @@
 /** Label shown for the working-directory picker / `/cwd` slash command. */
 export const SET_WORKING_DIRECTORY_LABEL = 'Set working directory';
 
+/** Prefix of a hidden file or folder name (`.git`, `.config`). */
+export const HIDDEN_NAME_PREFIX = '.';
+
 export const GLOB = {
 	/** `C:`, the drive part of a Windows absolute path. */
 	DRIVE_PREFIX_REGEX: /^[A-Za-z]:/,
@@ -31,15 +34,28 @@ export const GLOB = {
 export const SEARCH = {
 	// Search tuning for the picker's file_glob_search calls.
 	DEBOUNCE_MS: 180,
+	// A typo-tolerant search runs only when the exact one finds nothing. Past
+	// the shallow walk it goes less deep than the exact search, as it sends one
+	// glob per pair of neighbouring query characters.
+	FUZZY_MAX_DEPTH: 3,
+	// One wrong, missing, extra or swapped character still matches.
+	FUZZY_MAX_EDITS: 1,
+	// Longer queries would send too many globs for the typo-tolerant search.
+	FUZZY_MAX_QUERY_LENGTH: 16,
+	// Shorter queries are too loose to tell a typo from another name.
+	FUZZY_MIN_QUERY_LENGTH: 4,
 	LIMIT: 100,
-	// Home-relative globs descend deeper than path navigation, which only
-	// needs the direct children of the parent.
-	MAX_DEPTH: 6,
+	// A plain name is searched anywhere under home down to this depth; path
+	// navigation only needs the direct children of the parent.
+	MAX_DEPTH: 4,
 	MAX_RESULTS_SHOWN: 20,
 	NATIVE_LIMIT: 20,
 	// Native folder-picker resolution searches a shallow, bounded window.
 	NATIVE_MAX_DEPTH: 4,
-	PATH_NAV_MAX_DEPTH: 1
+	PATH_NAV_MAX_DEPTH: 1,
+	// A plain name is searched this deep first: the walk is fast, and the
+	// server's result cap cannot crowd the nearest folders out of it.
+	SHALLOW_DEPTH: 2
 } as const;
 
 export const FILE_GLOB_SEARCH_PICKERS = {

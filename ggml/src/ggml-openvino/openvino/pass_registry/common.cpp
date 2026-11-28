@@ -4,6 +4,7 @@
 #include "ggml-openvino/openvino/decoder.h"
 #include "ggml-openvino/openvino/pass/fuse_argsort_topk.h"
 #include "ggml-openvino/openvino/pass/fuse_to_conv.h"
+#include "ggml-openvino/openvino/pass/keep_cache_results.h"
 #include "ggml-openvino/openvino/pass/kv_state_seq_axis.h"
 #include "ggml-openvino/openvino/pass/mark_decompression_convert_constant_folding.h"
 #include "ggml-openvino/openvino/pass/mark_dequantization_subgraph.h"
@@ -21,11 +22,18 @@ GraphTraits analyze_graph(const GgmlDecoder & decoder) {
     traits.device = ggml_openvino_is_npu() ? Device::NPU : ggml_openvino_is_gpu() ? Device::GPU : Device::CPU;
     traits.is_static = decoder.is_static();
     traits.is_stateful = decoder.is_stateful();
+    traits.kv_only_outputs = decoder.is_kv_only_outputs();
+    if (traits.kv_only_outputs) {
+        traits.cache_output_names = decoder.get_cache_output_names();
+    }
     return traits;
 }
 
 void register_common_passes(ov::pass::Manager & manager, const GraphTraits & traits) {
-    (void) traits;
+    // First, so the other passes do not work on the layers it removes.
+    if (traits.kv_only_outputs) {
+        manager.register_pass<pass::KeepCacheResults>(traits.cache_output_names);
+    }
     manager.register_pass<ov::pass::MarkCompressedFloatConstants>();
     // Marks the Convert/Subtract/Multiply nodes of our GatherMatmul dequantization chain
     // (make_int4_weights/make_int8_weights, for_gather_matmul=true) with disable_constant_folding,

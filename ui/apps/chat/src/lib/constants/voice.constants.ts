@@ -117,6 +117,10 @@ export const VOICE_DICTATION_MODEL_LABEL = {
 	automatic: 'Transcribes dictation, picked automatically. Click to keep it',
 	chosen: 'Transcribes dictation. Click to pick automatically',
 	current: 'transcribes dictation',
+	/** The phone menu's keep on the model Automatic picked. */
+	keep: 'Keep for dictation',
+	/** The phone menu's way back from a chosen model to Automatic. */
+	pickAutomatically: 'Pick dictation model automatically',
 	use: 'Use for dictation'
 } as const;
 

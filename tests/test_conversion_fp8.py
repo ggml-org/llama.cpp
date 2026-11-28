@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import tempfile
+import traceback
 import unittest
 
 import numpy as np
@@ -46,10 +47,24 @@ class OffsetNormModel(Qwen2MoeModel):
         yield from super().modify_tensors(data_torch, name, bid)
 
 
+class ReorderedRowsModel(Qwen2MoeModel):
+    model_arch = gguf.MODEL_ARCH.QWEN2MOE
+
+    def modify_tensors(self, data_torch, name, bid):
+        if name.endswith("q_proj.weight"):
+            data_torch = data_torch.flip(0)
+        yield from super().modify_tensors(data_torch, name, bid)
+
+
 class TestFP8Conversion(unittest.TestCase):
     def convert(self, model_class, tensors, eager=False, check_lazy=False, scan_nvfp4=False, ftype=gguf.LlamaFileType.GUESSED, hparams_override=None, **kwargs):
         with tempfile.TemporaryDirectory() as directory:
-            return self._convert(Path(directory), model_class, tensors, eager, check_lazy, scan_nvfp4, ftype, hparams_override, **kwargs)
+            try:
+                return self._convert(Path(directory), model_class, tensors, eager, check_lazy, scan_nvfp4, ftype, hparams_override, **kwargs)
+            except Exception as e:
+                # traceback locals keep the safetensors mmap open, which blocks cleanup on Windows
+                traceback.clear_frames(e.__traceback__)
+                raise
 
     def _convert(self, path, model_class, tensors, eager, check_lazy, scan_nvfp4, ftype, hparams_override, **kwargs):
         hparams = {
@@ -90,7 +105,7 @@ class TestFP8Conversion(unittest.TestCase):
             self.assertEqual(reads, [])
         model.prepare_tensors()
         if check_lazy:
-            deferred = {name for name, tensor in tensors.items() if tensor.numel() != 1 or name.endswith((".weight", ".bias"))}
+            deferred = {name for name, tensor in tensors.items() if name in model.model_tensors and (tensor.numel() != 1 or name.endswith((".weight", ".bias")))}
             self.assertFalse(deferred.intersection(reads), f"Materialized during preparation: {reads}")
             for name, info in model.gguf_writer.tensors[0].items():
                 if name.endswith((".weight", ".bias")):
@@ -115,13 +130,9 @@ class TestFP8Conversion(unittest.TestCase):
                     }
                     result = self.convert(Qwen2MoeModel, tensors, check_lazy=True, scan_nvfp4=scan_nvfp4)
                     dtype, data = result["blk.0.attn_q.weight"]
-                    if channel_scale:
-                        self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
-                        np.testing.assert_array_equal(data, weight.float().numpy() * 0.25)
-                    else:
-                        self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
-                        np.testing.assert_array_equal(gguf.dequantize(data, dtype), weight.float().numpy())
-                        np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25])
+                    self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
+                    np.testing.assert_array_equal(gguf.dequantize(data, dtype), weight.float().numpy())
+                    np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25, 0.25] if channel_scale else [0.25])
 
     def test_mixed_compressed_fp8_block_scale(self):
         name = "model.layers.0.self_attn.q_proj.weight"
@@ -167,6 +178,63 @@ class TestFP8Conversion(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, message):
                     self.convert(Qwen2MoeModel, tensors, hparams_override={"quantization_config": config})
 
+    def test_channel_scales_follow_rope_permutation(self):
+        for n_head, n_kv_head in ((1, 1), (2, 1)):
+            for proj in ("q", "k"):
+                n_rows = 8 if proj == "q" else 8 * n_kv_head // n_head
+                rows = [0, 4, 1, 5, 2, 6, 3, 7] if n_head == 1 else ([0, 2, 1, 3, 4, 6, 5, 7] if proj == "q" else [0, 2, 1, 3])
+                weight = torch.arange(n_rows * 8, dtype=torch.float32).reshape(n_rows, 8).to(torch.float8_e4m3fn)
+                for channel_scale in (False, True):
+                    scales = (torch.arange(1, n_rows + 1, dtype=torch.float32).reshape(n_rows, 1) / 8) if channel_scale else torch.tensor([0.25])
+                    for eager in (False, True):
+                        with self.subTest(proj=proj, n_head=n_head, channel_scale=channel_scale, eager=eager):
+                            name = f"model.layers.0.self_attn.{proj}_proj.weight"
+                            hparams = {"hidden_size": 8, "num_attention_heads": n_head, "num_key_value_heads": n_kv_head}
+                            result = self.convert(LlamaModel, {name: weight, name + "_scale": scales}, eager=eager,
+                                                  check_lazy=not eager, hparams_override=hparams)
+                            target = f"blk.0.attn_{proj}"
+                            dtype, data = result[target + ".weight"]
+                            self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
+                            actual_scale = result[target + ".scale"][1]
+                            np.testing.assert_array_equal(actual_scale, scales.numpy().flatten()[rows] if channel_scale else [0.25])
+                            np.testing.assert_array_equal(gguf.dequantize(data, dtype) * actual_scale.reshape(-1, 1), (weight.float() * scales).numpy()[rows])
+
+    def test_channel_scales_follow_projection_split(self):
+        name = "model.layers.0.linear_attn.in_proj_qkvz.weight"
+        for n_v_heads, qkv_rows, z_rows in (
+            (2, [0, 1, 8, 9, 2, 3, 10, 11, 4, 5, 12, 13], [6, 7, 14, 15]),
+            (4, [0, 1, 12, 13, 2, 3, 14, 15, 4, 5, 6, 7, 16, 17, 18, 19], [8, 9, 10, 11, 20, 21, 22, 23]),
+        ):
+            n_rows = len(qkv_rows) + len(z_rows)
+            weight = torch.arange(n_rows * 4, dtype=torch.float32).reshape(n_rows, 4).to(torch.float8_e4m3fn)
+            hparams = {"mtp_num_hidden_layers": 1, "linear_key_head_dim": 2, "linear_value_head_dim": 2,
+                       "linear_num_key_heads": 2, "linear_num_value_heads": n_v_heads}
+            for channel_scale in (False, True):
+                scales = torch.arange(1, n_rows + 1, dtype=torch.float32).reshape(n_rows, 1) / 32 if channel_scale else torch.tensor([0.25])
+                expected = (weight.float() * scales).numpy()
+                for eager in (False, True):
+                    with self.subTest(n_v_heads=n_v_heads, channel_scale=channel_scale, eager=eager):
+                        result = self.convert(Qwen3NextModel, {name: weight, name + "_scale": scales}, eager=eager,
+                                              check_lazy=not eager, hparams_override=hparams)
+                        for target, rows in (("blk.0.attn_qkv", qkv_rows), ("blk.0.attn_gate", z_rows)):
+                            dtype, data = result[target + ".weight"]
+                            self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
+                            actual_scale = result[target + ".scale"][1]
+                            np.testing.assert_array_equal(actual_scale, scales.numpy().flatten()[rows] if channel_scale else [0.25])
+                            np.testing.assert_array_equal(gguf.dequantize(data, dtype) * actual_scale.reshape(-1, 1), expected[rows])
+
+    def test_channel_scales_unknown_transform_fallback(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        weight = torch.arange(16, dtype=torch.float32).reshape(4, 4).to(torch.float8_e4m3fn)
+        scales = torch.tensor([0.125, 0.25, 0.5, 1.]).reshape(4, 1)
+        for eager in (False, True):
+            with self.subTest(eager=eager):
+                result = self.convert(ReorderedRowsModel, {name: weight, name + "_scale": scales}, eager=eager, check_lazy=not eager)
+                dtype, data = result["blk.0.attn_q.weight"]
+                self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
+                np.testing.assert_array_equal(data, (weight.float() * scales).flip(0).numpy())
+                self.assertNotIn("blk.0.attn_q.scale", result)
+
     def test_mla_scale_fallback(self):
         weight = torch.arange(16, dtype=torch.float32).reshape(4, 4).to(torch.float8_e4m3fn)
         prefix = "model.layers.0.self_attn."
@@ -181,6 +249,71 @@ class TestFP8Conversion(unittest.TestCase):
                 np.testing.assert_array_equal(result["blk.0.attn_k_b.weight"][1], (weight.float()[:2].T * 0.25).numpy()[None])
                 np.testing.assert_array_equal(result["blk.0.attn_v_b.weight"][1], (weight.float()[2:] * 0.25).numpy()[None])
 
+    def test_block_scales_rejected(self):
+        name = "model.layers.0.mlp.down_proj.weight"
+        weight = torch.ones((4, 16)).to(torch.float8_e4m3fn)
+        for block, shape in (((4, 4), (1, 4)), ((2, 8), (2, 2)), ((1, 16), (4, 1)), ((4, 16), (1, 1))):
+            scales = torch.arange(1, int(np.prod(shape)) + 1, dtype=torch.float32).reshape(shape) / 8
+            for method in ("compressed-tensors", "fp8", "modelopt"):
+                config = {"quant_method": method}
+                suffix = "_scale"
+                if method == "compressed-tensors":
+                    config.update(format="float-quantized", config_groups={"group_0": {"weights": {"type": "float", "num_bits": 8, "strategy": "block", "block_structure": list(block)}}})
+                elif method == "fp8":
+                    config["weight_block_size"] = list(block)
+                    suffix = "_scale_inv"
+                elif shape in ((4, 1), (1, 1)):
+                    continue
+                tensors = {name: weight, name + suffix: scales}
+                for eager in (False, True):
+                    with self.subTest(block=block, method=method, eager=eager):
+                        kwargs = {"eager": eager, "hparams_override": {"quantization_config": config}}
+                        with self.assertRaisesRegex(ValueError, "unsupported block/group scale"):
+                            self.convert(LlamaModel, tensors, **kwargs)
+                        if method != "modelopt":
+                            result = self.convert(LlamaModel, tensors, ftype=gguf.LlamaFileType.MOSTLY_F16, **kwargs)
+                            expected = scales.repeat_interleave(block[0], 0).repeat_interleave(block[1], 1)
+                            np.testing.assert_array_equal(result["blk.0.ffn_down.weight"][1], expected.numpy())
+
+    def test_channel_scale_layouts(self):
+        name = "model.layers.0.mlp.down_proj.weight"
+        weight = torch.ones((4, 16)).to(torch.float8_e4m3fn)
+        for shape in ((4,), (4, 1)):
+            scales = torch.arange(1, 5, dtype=torch.float32).reshape(shape) / 8
+            for eager in (False, True):
+                with self.subTest(shape=shape, eager=eager):
+                    config = {"quant_method": "compressed-tensors", "format": "float-quantized", "config_groups": {"group_0": {"weights": {"type": "float", "num_bits": 8, "strategy": "channel"}}}}
+                    result = self.convert(LlamaModel, {name: weight, name + "_scale": scales}, eager=eager, hparams_override={"quantization_config": config})
+                    self.assertEqual(result["blk.0.ffn_down.weight"][0], gguf.GGMLQuantizationType.F8_E4M3)
+                    np.testing.assert_array_equal(result["blk.0.ffn_down.scale"][1], scales.numpy().flatten())
+
+    def test_missing_weight_scale_rejected(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        for nvfp4 in (False, True):
+            for eager in (False, True):
+                for scale in (None, 1.0, 0.25):
+                    with self.subTest(nvfp4=nvfp4, eager=eager, scale=scale):
+                        if nvfp4:
+                            tensors = {
+                                name: torch.zeros((4, 32), dtype=torch.uint8),
+                                name + "_scale": torch.ones((4, 4)).to(torch.float8_e4m3fn),
+                            }
+                            scale_name = name + "_scale_2"
+                            config = {"quant_method": "modelopt", "quant_algo": "NVFP4"}
+                        else:
+                            tensors = {name: torch.ones((4, 4)).to(torch.float8_e4m3fn)}
+                            scale_name = name + "_scale"
+                            config = {"quant_method": "modelopt"}
+                        if scale is not None:
+                            tensors[scale_name] = torch.tensor([scale])
+                        kwargs = {"eager": eager, "hparams_override": {"quantization_config": config}}
+                        if scale is None:
+                            with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                                self.convert(Qwen2MoeModel, tensors, **kwargs)
+                        else:
+                            result = self.convert(Qwen2MoeModel, tensors, **kwargs)
+                            np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [scale])
+
     def test_output_type_override(self):
         name = "model.layers.0.self_attn.q_proj.weight"
         weight = torch.tensor([[1., -1.], [2., -2.]]).to(torch.float8_e4m3fn)
@@ -190,6 +323,10 @@ class TestFP8Conversion(unittest.TestCase):
                     tensors = {name: weight}
                     if scaled:
                         tensors[name + "_scale"] = torch.tensor([0.25])
+                    else:
+                        with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                            self.convert(ForcedF16Model, tensors, eager=eager)
+                        continue
                     result = self.convert(ForcedF16Model, tensors, eager=eager, check_lazy=not eager)
                     dtype, data = result["blk.0.attn_q.weight"]
                     self.assertEqual(dtype, gguf.GGMLQuantizationType.F16)
@@ -215,6 +352,10 @@ class TestFP8Conversion(unittest.TestCase):
                         tensors = {name: weight}
                         if scaled:
                             tensors[name + "_scale"] = torch.tensor([0.25])
+                        else:
+                            with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                                self.convert(Qwen3NextModel, tensors, eager=eager, hparams_override={"mtp_num_hidden_layers": 1})
+                            continue
                         result = self.convert(Qwen3NextModel, tensors, eager=eager, check_lazy=not eager, hparams_override={"mtp_num_hidden_layers": 1})
                         dtype, data = result[target]
                         self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
@@ -225,7 +366,7 @@ class TestFP8Conversion(unittest.TestCase):
         for shape in ((4,), (2, 2)):
             with self.subTest(shape=shape):
                 weight = torch.ones(shape, dtype=torch.float32).to(torch.float8_e4m3fn)
-                result = self.convert(OffsetNormModel, {"model.layers.0.input_layernorm.weight": weight}, check_lazy=True)
+                result = self.convert(OffsetNormModel, {"model.layers.0.input_layernorm.weight": weight, "model.layers.0.input_layernorm.weight_scale": torch.tensor([1.0])}, check_lazy=True)
                 dtype, data = result["blk.0.attn_norm.weight"]
                 self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
                 np.testing.assert_array_equal(data, np.full(shape, 2.))
@@ -248,6 +389,10 @@ class TestFP8Conversion(unittest.TestCase):
                         if scaled:
                             tensors[name + "_scale"] = torch.tensor([0.25])
                             tensors[name.removesuffix("weight") + "input_scale"] = torch.tensor([0.5])
+                        else:
+                            with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                                self.convert(Qwen2MoeModel, tensors, ftype=ftype, eager=eager)
+                            continue
                         result = self.convert(Qwen2MoeModel, tensors, ftype=ftype, eager=eager, check_lazy=not eager)
                         self.assertEqual(set(result), {"blk.0.attn_q.weight"})
                         dtype, data = result["blk.0.attn_q.weight"]
@@ -326,6 +471,10 @@ class TestFP8Conversion(unittest.TestCase):
                                 tensors[name + "_scale"] = torch.tensor([0.25])
                             elif other == "channel":
                                 tensors[name + "_scale"] = torch.full((4, 1), 0.5)
+                    if other == "unscaled":
+                        with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                            self.convert(Qwen2MoeModel, tensors, eager=eager)
+                        continue
                     result = self.convert(Qwen2MoeModel, tensors, eager=eager, check_lazy=not eager)
                     self.assertEqual(len(result), 3)
                     for proj in ("gate", "up", "down"):
@@ -349,11 +498,8 @@ class TestFP8Conversion(unittest.TestCase):
             np.testing.assert_array_equal(result[f"blk.0.ffn_{proj}_exps.scale"][1], [0.25, 0.5])
 
         unscaled = {name: tensor for name, tensor in tensors.items() if name.endswith(".weight")}
-        result = self.convert(Qwen2MoeModel, unscaled, check_lazy=True)
-        self.assertEqual(len(result), 3)
-        for dtype, data in result.values():
-            self.assertEqual(dtype, gguf.GGMLQuantizationType.F8_E4M3)
-            np.testing.assert_array_equal(gguf.dequantize(data, dtype), np.ones((2, 4, 4)))
+        with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+            self.convert(Qwen2MoeModel, unscaled, check_lazy=True)
 
     def test_fp8_as_q8(self):
         name = "model.layers.0.self_attn.q_proj.weight"
@@ -387,6 +533,59 @@ class TestFP8Conversion(unittest.TestCase):
         result = self.convert(Qwen2MoeModel, {name: weight, name + "_scale_inv": torch.tensor([0.25])}, check_lazy=True)
         self.assertEqual(result["blk.0.attn_q.weight"][0], gguf.GGMLQuantizationType.F8_E4M3)
         np.testing.assert_array_equal(result["blk.0.attn_q.scale"][1], [0.25])
+
+    def test_fp8_as_q8_requires_source_scale(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        for dtype in (torch.float8_e4m3fn, torch.float8_e5m2):
+            for eager in (False, True):
+                with self.subTest(dtype=dtype, eager=eager):
+                    tensors = {name: torch.ones((4, 32)).to(dtype)}
+                    with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                        self.convert(Qwen2MoeModel, tensors, fp8_as_q8=True, eager=eager)
+
+    def test_nvfp4_writes_unit_scales(self):
+        for experts in (False, True):
+            with self.subTest(experts=experts):
+                names = ["model.layers.0.self_attn.q_proj.weight"]
+                targets = ["blk.0.attn_q"]
+                if experts:
+                    names = [f"model.layers.0.mlp.experts.{expert}.{proj}_proj.weight"
+                             for expert in range(2) for proj in ("gate", "up", "down")]
+                    targets = [f"blk.0.ffn_{proj}_exps" for proj in ("gate", "up", "down")]
+                tensors = {}
+                for name in names:
+                    tensors[name] = torch.zeros((2, 32), dtype=torch.uint8)
+                    tensors[name + "_scale"] = torch.ones((2, 4)).to(torch.float8_e4m3fn)
+                with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                    self.convert(Qwen2MoeModel, tensors, eager=True, scan_nvfp4=True)
+                for name in names:
+                    tensors[name + "_scale_2"] = torch.tensor([1.0])
+                    tensors[name.removesuffix("weight") + "input_scale"] = torch.tensor([1.0])
+                result = self.convert(Qwen2MoeModel, tensors, eager=True, scan_nvfp4=True)
+                for target in targets:
+                    np.testing.assert_array_equal(result[target + ".scale"][1], [1.0, 1.0] if experts else [1.0])
+                    self.assertNotIn(target + ".input_scale", result)
+
+    def test_nvfp4_requires_block_scale(self):
+        name = "model.layers.0.self_attn.q_proj.weight"
+        tensors = {name: torch.zeros((2, 32), dtype=torch.uint8), name + "_scale_2": torch.tensor([1.0])}
+        with self.assertRaisesRegex(ValueError, "source block scale .* is missing"):
+            self.convert(Qwen2MoeModel, tensors, hparams_override={"quantization_config": {"quant_method": "modelopt", "quant_algo": "NVFP4"}})
+
+    def test_fp8_writes_expert_unit_scales(self):
+        tensors = {}
+        for expert in range(2):
+            for proj in ("gate", "up", "down"):
+                name = f"model.layers.0.mlp.experts.{expert}.{proj}_proj.weight"
+                tensors[name] = torch.ones((4, 4)).to(torch.float8_e4m3fn)
+                tensors[name + "_scale"] = torch.tensor([1.0])
+                tensors[name.removesuffix("weight") + "input_scale"] = torch.tensor([1.0])
+        for eager in (False, True):
+            with self.subTest(eager=eager):
+                result = self.convert(Qwen2MoeModel, tensors, eager=eager, check_lazy=not eager)
+                for proj in ("gate", "up", "down"):
+                    np.testing.assert_array_equal(result[f"blk.0.ffn_{proj}_exps.scale"][1], [1.0, 1.0])
+                    self.assertNotIn(f"blk.0.ffn_{proj}_exps.input_scale", result)
 
 
 class TestInkling2PackedConversion(unittest.TestCase):
@@ -449,11 +648,12 @@ class TestInkling2PackedConversion(unittest.TestCase):
         decoded = packed.float() * torch.exp2(scales.float() - 127).repeat_interleave(32, -1)
         return {"": packed, "_scale": scales}, decoded
 
-    def packed_checkpoint(self):
+    def packed_checkpoint(self, n_ff=None):
         """Layer 0 is NVFP4, layer 1 is MXFP8. Returns the checkpoint tensors, the hf_quant_config groups and the expected GGUF tensors."""
+        n_ff = self.N_FF if n_ff is None else n_ff
         tensors, quant_groups, expected = {}, [], {}
-        w13_shape = (self.N_EXPERT, 2 * self.N_FF, self.N_EMBD)
-        w2_shape = (self.N_EXPERT, self.N_EMBD, self.N_FF)
+        w13_shape = (self.N_EXPERT, 2 * n_ff, self.N_EMBD)
+        w2_shape = (self.N_EXPERT, self.N_EMBD, n_ff)
         for layer, scheme in enumerate(("nvfp4_nearest", "mxfp8_nearest")):
             names = []
             for projection, shape, target in (("w13", w13_shape, "gate_up"), ("w2", w2_shape, "down")):
@@ -473,13 +673,16 @@ class TestInkling2PackedConversion(unittest.TestCase):
             quant_groups.append({"tensors": names, "weight_transform": scheme, "weight_scale_format": "amax_denominator", "weight_block_shape": block_shape})
         return tensors, quant_groups, expected
 
-    def converter(self, path, tensors, quant_groups, ftype=gguf.LlamaFileType.ALL_F32, eager=False):
+    def converter(self, path, tensors, quant_groups, ftype=gguf.LlamaFileType.ALL_F32, eager=False, n_ff=None, fp8_as_q8=False, quant_config=None):
         """Writes the checkpoint to path and returns an Inkling2Model on it."""
-        hp = {"model_type": "inkling2_text", "architectures": ["Inkling2ForCausalLM"], "num_hidden_layers": 2, "hidden_size": self.N_EMBD, "moe_intermediate_size": self.N_FF, "n_routed_experts": self.N_EXPERT, "layer_types": ["hybrid_sliding", "hybrid"]}
+        n_ff = self.N_FF if n_ff is None else n_ff
+        hp = {"model_type": "inkling2_text", "architectures": ["Inkling2ForCausalLM"], "num_hidden_layers": 2, "hidden_size": self.N_EMBD, "moe_intermediate_size": n_ff, "n_routed_experts": self.N_EXPERT, "layer_types": ["hybrid_sliding", "hybrid"]}
+        if quant_config is not None:
+            hp["quantization_config"] = quant_config
         (path / "config.json").write_text(json.dumps(hp))
         (path / "hf_quant_config.json").write_text(json.dumps({"model": {"parameter_groups": quant_groups}}))
         save_file(tensors, path / "model.safetensors")
-        return Inkling2Model(path, ftype, path / "unused.gguf", hparams=hp, eager=eager)
+        return Inkling2Model(path, ftype, path / "unused.gguf", hparams=hp, eager=eager, fp8_as_q8=fp8_as_q8)
 
     def test_lookup_semantics(self):
         """The converter decode tables agree with torch.float8_e4m3fn; bytes 127 and 255 are NaN; E2M1 code 8 is -0."""
@@ -489,22 +692,24 @@ class TestInkling2PackedConversion(unittest.TestCase):
         self.assertTrue(np.signbit(_E2M1[8]))
 
     def test_mixed_schemes_and_streaming_outtypes(self):
-        """Both schemes convert bit-exact to every outtype, lazily, in chunks of at most 128 rows."""
+        """Explicit outtypes dequantize both schemes bit-exact, lazily, in chunks of at most 128 rows."""
         tensors, quant_groups, expected = self.packed_checkpoint()
         outtypes = (
-            (gguf.LlamaFileType.GUESSED, gguf.GGMLQuantizationType.F16),
             (gguf.LlamaFileType.ALL_F32, gguf.GGMLQuantizationType.F32),
             (gguf.LlamaFileType.MOSTLY_F16, gguf.GGMLQuantizationType.F16),
             (gguf.LlamaFileType.MOSTLY_BF16, gguf.GGMLQuantizationType.BF16),
+            (gguf.LlamaFileType.MOSTLY_Q8_0, gguf.GGMLQuantizationType.Q8_0),
         )
+        quant_config = {"quant_method": "modelopt", "quant_algo": "NVFP4"}
         for eager in (False, True):
             for ftype, qtype in outtypes:
                 with self.subTest(eager=eager, outtype=qtype), tempfile.TemporaryDirectory() as directory:
                     path = Path(directory)
-                    model = self.converter(path, tensors, quant_groups, ftype, eager)
+                    model = self.converter(path, tensors, quant_groups, ftype, eager, quant_config=quant_config)
                     with self.assertLogs("hf-to-gguf", level="WARNING") as logs:
                         model.prepare_tensors()
                     self.assertTrue(any("[32, 32]" in m and "[1, 32]" in m for m in logs.output))
+                    self.assertFalse(model._is_nvfp4)
                     infos = model.gguf_writer.tensors[0]
                     self.assertEqual(infos.keys(), expected.keys())
                     for name, info in infos.items():
@@ -518,6 +723,83 @@ class TestInkling2PackedConversion(unittest.TestCase):
                             self.assertLessEqual(load_chunk().shape[0], 128)
                         reference = gguf.quantize(expected[name], qtype)
                         self.assertEqual(self.written_bytes(info.tensor, path / "tensor.bin"), reference.tobytes(), name)
+
+    def test_auto_preserves_nvfp4_and_fp8_as_q8(self):
+        """--outtype auto repacks NVFP4 experts lazily with per-expert scales; --fp8-as-q8 stores MXFP8 as Q8_0."""
+        n_ff = 192
+        tensors, quant_groups, expected = self.packed_checkpoint(n_ff=n_ff)
+        for eager in (False, True):
+            for fp8_as_q8 in (False, True):
+                with self.subTest(eager=eager, fp8_as_q8=fp8_as_q8), tempfile.TemporaryDirectory() as directory:
+                    path = Path(directory)
+                    model = self.converter(path, tensors, quant_groups, gguf.LlamaFileType.GUESSED, eager, n_ff=n_ff, fp8_as_q8=fp8_as_q8)
+                    with self.assertLogs("hf-to-gguf", level="WARNING"):
+                        model.prepare_tensors()
+                    self.assertTrue(model._is_nvfp4)
+                    infos = model.gguf_writer.tensors[0]
+                    expected_keys = set(expected.keys()) | {"blk.0.ffn_gate_up_exps.scale", "blk.0.ffn_down_exps.scale"}
+                    self.assertEqual(infos.keys(), expected_keys)
+                    for target in ("gate_up", "down"):
+                        w_name = f"blk.0.ffn_{target}_exps.weight"
+                        s_name = f"blk.0.ffn_{target}_exps.scale"
+                        w_info, s_info = infos[w_name], infos[s_name]
+                        self.assertEqual(w_info.dtype, gguf.GGMLQuantizationType.NVFP4)
+                        self.assertEqual(tuple(w_info.shape), expected[w_name].shape)
+                        self.assertIsInstance(w_info.tensor, gguf.LazyChunkedTensor)
+                        self.assertEqual(len(w_info.tensor._chunks), self.N_EXPERT)
+                        with self.assertRaises(TypeError):
+                            np.asarray(w_info.tensor)
+                        raw = np.frombuffer(self.written_bytes(w_info.tensor, path / "tensor.bin"), dtype=np.uint8)
+                        byte_shape = (expected[w_name].shape[0], expected[w_name].shape[1], expected[w_name].shape[2] // 64 * 36)
+                        dequant = gguf.dequantize(raw.reshape(byte_shape), gguf.GGMLQuantizationType.NVFP4)
+                        scale = np.asarray(s_info.tensor, dtype=np.float32)
+                        self.assertEqual(s_info.dtype, gguf.GGMLQuantizationType.F32)
+                        self.assertEqual(tuple(s_info.shape), (self.N_EXPERT,))
+                        np.testing.assert_array_equal(dequant * scale[:, None, None], expected[w_name])
+
+                        mxfp8_name = f"blk.1.ffn_{target}_exps.weight"
+                        mxfp8_info = infos[mxfp8_name]
+                        expected_qtype = gguf.GGMLQuantizationType.Q8_0 if fp8_as_q8 else gguf.GGMLQuantizationType.F16
+                        self.assertEqual(mxfp8_info.dtype, expected_qtype)
+                        reference = gguf.quantize(expected[mxfp8_name], expected_qtype)
+                        self.assertEqual(self.written_bytes(mxfp8_info.tensor, path / "tensor.bin"), reference.tobytes(), mxfp8_name)
+
+    def test_auto_falls_back_when_nvfp4_cols_not_multiple_of_64(self):
+        """NVFP4 projections whose row width is not a multiple of 64 fall back to dequantization on --outtype auto."""
+        tensors, quant_groups, _ = self.packed_checkpoint(n_ff=160)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            model = self.converter(path, tensors, quant_groups, gguf.LlamaFileType.GUESSED, n_ff=160)
+            with self.assertLogs("hf-to-gguf", level="WARNING") as logs:
+                model.prepare_tensors()
+            self.assertTrue(any("not a multiple of 64" in m for m in logs.output))
+            infos = model.gguf_writer.tensors[0]
+            self.assertEqual(infos["blk.0.ffn_gate_up_exps.weight"].dtype, gguf.GGMLQuantizationType.NVFP4)
+            self.assertIn("blk.0.ffn_gate_up_exps.scale", infos)
+            self.assertEqual(infos["blk.0.ffn_down_exps.weight"].dtype, gguf.GGMLQuantizationType.F16)
+            self.assertNotIn("blk.0.ffn_down_exps.scale", infos)
+
+    def test_auto_nvfp4_rejects_invalid_scales(self):
+        """Native NVFP4 preservation rejects negative or NaN block scales and invalid outer scales."""
+        for bad_byte in (0x80, 0x7F, 0xFF):
+            tensors, quant_groups, _ = self.packed_checkpoint(n_ff=192)
+            name = quant_groups[0]["tensors"][0]
+            tensors[name + "_scale"].view(torch.uint8)[1, 0, 0] = bad_byte
+            with self.subTest(bad_byte=hex(bad_byte)), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory)
+                model = self.converter(path, tensors, quant_groups, gguf.LlamaFileType.GUESSED, n_ff=192)
+                model.prepare_tensors()
+                tensor = model.gguf_writer.tensors[0]["blk.0.ffn_gate_up_exps.weight"].tensor
+                with self.assertRaisesRegex(ValueError, r"w13_weight_scale expert 1"):
+                    self.written_bytes(tensor, path / "tensor.bin")
+        for suffix, bad_val in (("_amax", -1.0), ("_amax", float("nan")), ("_outer_scale_denominator", 0.0)):
+            tensors, quant_groups, _ = self.packed_checkpoint(n_ff=192)
+            name = quant_groups[0]["tensors"][0]
+            tensors[name + suffix][-1] = bad_val
+            with self.subTest(suffix=suffix, bad_val=bad_val), tempfile.TemporaryDirectory() as directory:
+                model = self.converter(Path(directory), tensors, quant_groups, gguf.LlamaFileType.GUESSED, n_ff=192)
+                with self.assertRaisesRegex(ValueError, "Inkling2:"):
+                    model.prepare_tensors()
 
     def test_projection_and_companions_in_separate_shards(self):
         """A packed weight and its scale, amax and denominator can be in different safetensors shards."""
@@ -756,9 +1038,8 @@ class TestQwen4ExpPleScale(unittest.TestCase):
                     self.assertEqual(dtype, gguf.GGMLQuantizationType.F32)
                     np.testing.assert_array_equal(data, [0.25])
 
-        result = self.convert(scaled=False)
-        self.assertEqual(set(result), {self.TABLE})
-        np.testing.assert_array_equal(result[self.TABLE][1], raw)
+        with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+            self.convert(scaled=False)
 
     def test_scale_is_folded_into_other_types(self):
         values = torch.cat(self.SHARDS).numpy()
@@ -767,13 +1048,14 @@ class TestQwen4ExpPleScale(unittest.TestCase):
             ({"ftype": gguf.LlamaFileType.MOSTLY_F16}, gguf.GGMLQuantizationType.F16),
             ({"fp8_as_q8": True}, gguf.GGMLQuantizationType.F16),
         ):
-            for scaled in (False, True):
-                with self.subTest(scaled=scaled, **kwargs):
-                    result = self.convert(scaled=scaled, **kwargs)
-                    self.assertEqual(set(result), {self.TABLE})
-                    dtype, data = result[self.TABLE]
-                    self.assertEqual(dtype, qtype)
-                    np.testing.assert_array_equal(data, values * (0.25 if scaled else 1.))
+            with self.subTest(**kwargs):
+                result = self.convert(**kwargs)
+                self.assertEqual(set(result), {self.TABLE})
+                dtype, data = result[self.TABLE]
+                self.assertEqual(dtype, qtype)
+                np.testing.assert_array_equal(data, values * 0.25)
+                with self.assertRaisesRegex(ValueError, "source weight scale is missing"):
+                    self.convert(scaled=False, **kwargs)
 
 
 if __name__ == "__main__":

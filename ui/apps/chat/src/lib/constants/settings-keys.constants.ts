@@ -46,6 +46,7 @@ export const SETTINGS_KEYS = {
 	// Display
 	PASTE_LONG_TEXT_TO_FILE_LEN: 'pasteLongTextToFileLen',
 	PDF_AS_IMAGE: 'pdfAsImage',
+	PDF_DPI: 'pdfDpi',
 	// Performance
 	PRE_ENCODE_CONVERSATION: 'preEncodeConversation',
 	PRESENCE_PENALTY: 'presence_penalty',

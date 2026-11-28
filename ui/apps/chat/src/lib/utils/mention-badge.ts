@@ -85,6 +85,15 @@ export function splitMentionSegments(value: string): MentionTextSegment[] {
 	return segments;
 }
 
+/**
+ * Collapse every `[name](file://path)` mention to its `name`, dropping the
+ * path. Used where a mention must read as plain text (a conversation title)
+ * rather than render as a badge.
+ */
+export function stripMentionLinks(value: string): string {
+	return value.replace(fileMentionLinkRe(MENTION_LINK_SCAN_FLAGS), (_match, name: string) => name);
+}
+
 export function getMentionBadgeIconPaths(path: string): readonly string[] {
 	return path.endsWith(DIRECTORY_PATH_SUFFIX)
 		? MENTION_BADGE_FOLDER_ICON_PATHS

@@ -39,6 +39,13 @@ export {
 	buildSiblingInfoMap
 } from './branching';
 
+// Conversation traces (sharing to Hugging Face)
+export {
+	buildConversationTrace,
+	buildTracePreview,
+	type ConversationTraceOptions
+} from './conversation-trace';
+
 // Code
 export {
 	highlightCode,
@@ -125,6 +132,7 @@ export {
 } from './formatters';
 
 // IME utilities
+export { hasPointerMoved } from './has-pointer-moved';
 export { isIMEComposing } from './is-ime-composing';
 export { shouldTypeToFocus } from './type-to-focus';
 
@@ -235,9 +243,13 @@ export {
 export {
 	splitPathQuery,
 	toHomeRelativeQuery,
+	toScopeSeparators,
 	buildCaseInsensitiveGlob,
+	buildFuzzyGlobs,
+	fuzzyDistance,
 	buildGlobSearchArgs,
 	rankEntries,
+	isHiddenPath,
 	joinPath,
 	highlightMatch,
 	type PathQuery
@@ -246,7 +258,7 @@ export {
 export { resolveTabTarget, resolveTabView, type TabView } from './chat-tabs';
 
 // Shared `file_glob_search` runner with a short-lived result cache
-export { runGlobSearch, runGlobSearchWithChildren } from './glob-search';
+export { runFolderSearch, runGlobSearch, runGlobSearchWithChildren } from './glob-search';
 
 // Mention-token detection (for the `@`-triggered file/folder mention picker)
 export {
@@ -257,7 +269,13 @@ export {
 
 // Slash-command token detection (for the `/`-triggered command picker)
 export {
+	type CommandToken,
 	findCommandToken,
+	insertCwdCommand,
+	isCommandDismissed,
+	locateCwdCommand,
+	removeCommandToken,
+	replaceWithCwdCommand,
 	takeCommandDismissSnapshot,
 	type CommandDismissSnapshot
 } from './command-token';
@@ -277,6 +295,7 @@ export {
 	getMentionBadgeIconPaths,
 	getMentionBadgeLabel,
 	splitMentionSegments,
+	stripMentionLinks,
 	buildMentionInsertion
 } from './mention-badge';
 

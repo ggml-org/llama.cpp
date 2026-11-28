@@ -1455,12 +1455,8 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
             ggml_row_size(v->type, kv_size*n_embd_v_gqa)*sinfo.s0);
 }
 
-static bool is_type_scaled(ggml_type type) {
-    return type == GGML_TYPE_F8_E4M3;
-}
-
 ggml_tensor * llama_kv_cache::get_k_scale(int32_t il) const {
-    if (!is_type_scaled(type_k())) {
+    if (!ggml_needs_scale(type_k())) {
         return nullptr;
     }
 
@@ -1470,7 +1466,7 @@ ggml_tensor * llama_kv_cache::get_k_scale(int32_t il) const {
 }
 
 ggml_tensor * llama_kv_cache::get_v_scale(int32_t il) const {
-    if (!is_type_scaled(type_v())) {
+    if (!ggml_needs_scale(type_v())) {
         return nullptr;
     }
 
@@ -2252,7 +2248,7 @@ ggml_tensor * llama_kv_cache::build_rope_shift(
     const int64_t n_embd_head_k = hparams.n_embd_head_k(il);
     const int64_t n_cells       = ggml_nelements(k)/n_embd_k_gqa;
 
-    if (!ggml_is_quantized(k->type) && k->type != GGML_TYPE_F8_E4M3 && !rot && !rp.k_norm) {
+    if (!ggml_is_quantized(k->type) && !ggml_needs_scale(k->type) && !rot && !rp.k_norm) {
         // we rotate only the n_rot dimensions
         ggml_tensor * k_rope =
             ggml_view_3d(ctx, k,

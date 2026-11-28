@@ -30,6 +30,7 @@
 	import { usePwa } from '#lib/hooks/use-pwa.svelte.ts';
 	import { useSidebarReveal } from '#lib/hooks/use-sidebar-reveal.svelte.ts';
 	import { RouterService } from '#lib/services/router.service.ts';
+	import { startHuggingFace } from '#lib/stores/huggingface.svelte.ts';
 	import {
 		chatStore,
 		conversationsStore,
@@ -48,7 +49,7 @@
 	import { browser } from '$app/env';
 	import { afterNavigate, goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ModeWatcher } from 'mode-watcher';
+	import { mode, ModeWatcher } from 'mode-watcher';
 	import { untrack } from 'svelte';
 	import { onMount } from 'svelte';
 	import { fade } from 'svelte/transition';
@@ -213,6 +214,9 @@
 
 	onMount(() => {
 		updateFavicon();
+
+		startHuggingFace();
+
 		// snapshot of every backend running stream on first load, populates the sidebar spinners
 		// so the user sees each conv that has a live inference, even ones not opened yet
 		void chatStore.syncRemoteRunningStreams();
@@ -467,7 +471,7 @@
 
 	<ModeWatcher />
 
-	<Toaster closeButton richColors />
+	<Toaster closeButton richColors theme={mode.current} />
 
 	{#if dropImport.isDragOver}
 		<DropImportOverlay />

@@ -198,9 +198,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1(ggml_backend_cuda_con
     ggml_cuda_flash_attn_ext_mma_f16_case<DKQ, DV, 64/ncols2, ncols2, type_K, type_V>(ctx, dst);
 }
 
-template <int DKQ, int DV, ggml_type type_K, ggml_type type_V>
-static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
-    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+static int ggml_cuda_flash_attn_ext_mma_f16_get_ncols2(const int cc, const ggml_tensor * dst) {
     const ggml_tensor * KQV     = dst;
     const ggml_tensor * Q       = dst->src[0];
     const ggml_tensor * K       = dst->src[1];
@@ -230,89 +228,68 @@ static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_con
         }
     }
 
+    if (!use_gqa_opt) {
+        return 1;
+    }
+
     GGML_ASSERT(Q->ne[2] % K->ne[2] == 0);
     const int gqa_ratio = Q->ne[2] / K->ne[2];
 
-    // On Volta the GQA optimizations aren't as impactful vs. minimizing wasted compute:
-    if (cc == GGML_CUDA_CC_VOLTA) {
-        if (use_gqa_opt && gqa_ratio % 8 == 0) {
-            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8, type_K, type_V>(ctx, dst);
-            return;
-        }
+    const int ncols2_max = Q->ne[0] == 320 ? 32 : ((Q->ne[0] == 576 || Q->ne[0] == 192) ? 16 : 8);
 
-        if (use_gqa_opt && gqa_ratio % 4 == 0) {
-            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 4, type_K, type_V>(ctx, dst);
-            return;
+    // On Volta and RDNA it is preferable to minimize wasted compute vs. duplicate I/O for the mask:
+    if (cc == GGML_CUDA_CC_VOLTA || (amd_wmma_available(cc) && gqa_ratio % 2 == 0)) {
+        int ncols2 = 1;
+        while (gqa_ratio % (2*ncols2) == 0 && ncols2 < ncols2_max) {
+            ncols2 *= 2;
         }
+        return ncols2;
+    }
 
-        if constexpr (DKQ <= 256) {
-            if (use_gqa_opt && gqa_ratio % 2 == 0) {
-                ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 2, type_K, type_V>(ctx, dst);
-                return;
+    int ncols2 = 1;
+    while (gqa_ratio > ncols2 && ncols2 < ncols2_max) {
+        ncols2 *= 2;
+    }
+
+    // For large batches use the ncols2 with the least head padding, ties go to the larger ncols2.
+    // The sparse variants only exist for ncols2 == 8.
+    if (ncols2_max == 8 && gqa_ratio > 4 && GGML_CUDA_CC_IS_NVIDIA(cc) &&
+            Q->ne[1] >= 32 && ggml_get_op_params_i32(dst, 4) == 0) {
+        const auto padded = [&](const int n) { return (gqa_ratio + n - 1) / n * n; };
+        for (const int n : {4, 2}) {
+            if (padded(n) < padded(ncols2)) {
+                ncols2 = n;
             }
+        }
+    }
+    return ncols2;
+}
 
-            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 1, type_K, type_V>(ctx, dst);
-            return;
-        } else {
+template <int DKQ, int DV, ggml_type type_K, ggml_type type_V>
+static void ggml_cuda_flash_attn_ext_mma_f16_switch_ncols2(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
+    const int cc = ggml_cuda_info().devices[ggml_cuda_get_device()].cc;
+
+    const int ncols2 = ggml_cuda_flash_attn_ext_mma_f16_get_ncols2(cc, dst);
+
+    switch (ncols2) {
+        case 8:
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8, type_K, type_V>(ctx, dst);
+            break;
+        case 4:
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 4, type_K, type_V>(ctx, dst);
+            break;
+        case 2:
+            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 2, type_K, type_V>(ctx, dst);
+            break;
+        case 1:
+            if constexpr (DKQ <= 256) {
+                ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 1, type_K, type_V>(ctx, dst);
+                break;
+            } else {
+                GGML_ABORT("fatal error");
+            }
+        default:
             GGML_ABORT("fatal error");
-        }
-    }
-
-    // On RDNA it is preferable to minimize wasted compute vs. duplicate I/O for the mask.
-    if (amd_wmma_available(cc)) {
-        if (use_gqa_opt && gqa_ratio % 8 == 0) {
-            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8, type_K, type_V>(ctx, dst);
-            return;
-        }
-
-        if (use_gqa_opt && gqa_ratio % 4 == 0) {
-            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 4, type_K, type_V>(ctx, dst);
-            return;
-        }
-
-        if (use_gqa_opt && gqa_ratio % 2 == 0) {
-            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 2, type_K, type_V>(ctx, dst);
-            return;
-        }
-    }
-
-    if (use_gqa_opt && gqa_ratio > 4) {
-        // For large batches use the ncols2 with the least head padding, ties go to the larger ncols2.
-        // The sparse variants only exist for ncols2 == 8.
-        int ncols2 = 8;
-        if (GGML_CUDA_CC_IS_NVIDIA(cc) && Q->ne[1] >= 32 && ggml_get_op_params_i32(dst, 4) == 0) {
-            const auto padded = [&](const int n) { return (gqa_ratio + n - 1) / n * n; };
-            for (const int n : {4, 2}) {
-                if (padded(n) < padded(ncols2)) {
-                    ncols2 = n;
-                }
-            }
-        }
-
-        if (ncols2 == 2) {
-            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 2, type_K, type_V>(ctx, dst);
-        } else if (ncols2 == 4) {
-            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 4, type_K, type_V>(ctx, dst);
-        } else {
-            ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 8, type_K, type_V>(ctx, dst);
-        }
-        return;
-    }
-
-    if (use_gqa_opt && gqa_ratio > 2) {
-        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 4, type_K, type_V>(ctx, dst);
-        return;
-    }
-
-    if (use_gqa_opt && gqa_ratio > 1) {
-        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 2, type_K, type_V>(ctx, dst);
-        return;
-    }
-
-    if constexpr (DKQ <= 256) {
-        ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<DKQ, DV, 1, type_K, type_V>(ctx, dst);
-    } else {
-        GGML_ABORT("fatal error");
     }
 }
 
@@ -617,16 +594,16 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     return BEST_FATTN_KERNEL_NONE;
 #endif// FLASH_ATTN_AVAILABLE
 
-    if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
-        return BEST_FATTN_KERNEL_NONE;
-    }
-
     const ggml_tensor * KQV   = dst;
     const ggml_tensor * Q     = dst->src[0];
     const ggml_tensor * K     = dst->src[1];
     const ggml_tensor * V     = dst->src[2];
     const ggml_tensor * mask  = dst->src[3];
     const ggml_tensor * kv_rows = dst->src[5];
+
+    if (!ggml_validate_flash_attn_ext_indexed_bias(dst)) {
+        return BEST_FATTN_KERNEL_NONE;
+    }
 
     // with kv_rows the kernel iterates over the mask columns
     const int64_t n_kv = kv_rows ? kv_rows->ne[0] : K->ne[1];
@@ -708,6 +685,20 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_NONE;
     }
 
+    // the tile and vec kernels implement the indexed bias, the mma kernel does not
+    if (ggml_flash_attn_ext_has_indexed_bias(dst)) {
+        float logit_softcap;
+        memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
+        if (Q->ne[0] != 128 && !(Q->ne[0] == 64 && logit_softcap == 0.0f)) {
+            return BEST_FATTN_KERNEL_NONE;
+        }
+        if (logit_softcap == 0.0f && Q->ne[1] == 1 && n_kv % FATTN_KQ_STRIDE == 0 &&
+                ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type)) {
+            return BEST_FATTN_KERNEL_VEC;
+        }
+        return BEST_FATTN_KERNEL_TILE;
+    }
+
     if (mask && mask->ne[2] != 1) {
         // the kv_rows mask is compacted per sequence, it has no head dimension
         if (kv_rows) {
@@ -721,7 +712,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         }
     }
 
-    // only the MMA kernel reads K/V through kv_rows
+    // without a bias only the MMA kernel reads K/V through kv_rows
     if (kv_rows) {
         return GGML_CUDA_CC_IS_NVIDIA(cc) && turing_mma_available(cc) && mask && Q->ne[0] != 40 && Q->ne[0] != 72 ?
             BEST_FATTN_KERNEL_MMA_F16 : BEST_FATTN_KERNEL_NONE;
@@ -761,20 +752,16 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 
-    const int ncols2_max = Q->ne[0] == 320 ? 32 : ((Q->ne[0] == 576 || Q->ne[0] == 192) ? 16 : 8);
-    int gqa_ratio_eff = 1;
-    while (max_bias == 0.0f && (!mask || mask->ne[2] == 1) && gqa_ratio % (2*gqa_ratio_eff) == 0 && gqa_ratio_eff < ncols2_max) {
-        gqa_ratio_eff *= 2;
-    }
+    const int ncols2 = ggml_cuda_flash_attn_ext_mma_f16_get_ncols2(cc, dst);
 
     // the tile kernel for DKQ=576 only has the ncols2 = 4 and 16 variants
     const best_fattn_kernel tile_kernel = Q->ne[0] == 576 && gqa_ratio % 4 != 0 ? BEST_FATTN_KERNEL_NONE : BEST_FATTN_KERNEL_TILE;
 
     if (volta_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
-        if (can_use_vector_kernel && Q->ne[1] * gqa_ratio_eff <= 2) {
+        if (can_use_vector_kernel && Q->ne[1] * ncols2 <= 2) {
             return BEST_FATTN_KERNEL_VEC;
         }
-        if (Q->ne[1] * gqa_ratio_eff <= 16) {
+        if (Q->ne[1] * ncols2 <= 16) {
             return tile_kernel; // On Volta tensor cores are only faster for sufficiently large matrices.
         }
         return BEST_FATTN_KERNEL_MMA_F16;
@@ -787,23 +774,23 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // AMD MFMA needs a certain minimum batch size to outscale the tile kernel for large head sizes.
     if (amd_mfma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
-        if ((Q->ne[0] <= 64 && Q->ne[1] * gqa_ratio_eff > 8)) {
+        if ((Q->ne[0] <= 64 && Q->ne[1] * ncols2 > 8)) {
             return BEST_FATTN_KERNEL_MMA_F16;
         }
-        if ((Q->ne[0] <= 128 && Q->ne[1] * gqa_ratio_eff > 16)) {
+        if ((Q->ne[0] <= 128 && Q->ne[1] * ncols2 > 16)) {
             return BEST_FATTN_KERNEL_MMA_F16;
         }
-        if ((Q->ne[0] <= 256 && Q->ne[1] * gqa_ratio_eff > 64)) {
+        if ((Q->ne[0] <= 256 && Q->ne[1] * ncols2 > 64)) {
             return BEST_FATTN_KERNEL_MMA_F16;
         }
-        if (Q->ne[0] > 256 && gqa_opt_applies && Q->ne[1] * gqa_ratio_eff > 128) {
+        if (Q->ne[0] > 256 && gqa_opt_applies && Q->ne[1] * ncols2 > 128) {
             return BEST_FATTN_KERNEL_MMA_F16;
         }
     }
 
     // AMD WMMA is faster than the tile kernel if the wide tiles with high arithmetic intensity can be utilized.
     if ((amd_wmma_available(cc) && gqa_opt_applies && Q->ne[0] <= 256) && Q->ne[0] != 40 && Q->ne[0] != 72 &&
-            Q->ne[1] * gqa_ratio_eff > (Q->ne[0] <= 128 ? 8 : 16)) {
+            Q->ne[1] * ncols2 > (Q->ne[0] <= 128 ? 8 : 16)) {
         return BEST_FATTN_KERNEL_MMA_F16;
     }
 

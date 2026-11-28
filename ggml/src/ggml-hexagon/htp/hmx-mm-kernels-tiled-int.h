@@ -625,9 +625,8 @@ static inline void int_hmx_asym_alpha_beta_wb(
         HVX_Vector * restrict v_alpha_h_out,
         HVX_Vector * restrict v_beta_h_out) {
 
-    const HVX_Vector v12M_sf = Q6_V_vsplat_R(0x4B400000);
-    HVX_Vector v_a_bias      = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(vd_qf, v_scale_q6_qf), v12M_sf));
-    HVX_Vector v_b_bias      = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(vm_qf, v_scale_q6_qf), v12M_sf));
+    HVX_Vector v_a_bias      = hvx_vec_i32_from_qf32_rnd(Q6_Vqf32_vmpy_Vqf32Vqf32(vd_qf, v_scale_q6_qf));
+    HVX_Vector v_b_bias      = hvx_vec_i32_from_qf32_rnd(Q6_Vqf32_vmpy_Vqf32Vqf32(vm_qf, v_scale_q6_qf));
     *v_alpha_h_out           = Q6_Vh_vshuffe_VhVh(v_a_bias, v_a_bias);
     *v_beta_h_out            = Q6_Vh_vshuffe_VhVh(v_b_bias, v_b_bias);
 }
@@ -709,7 +708,6 @@ static inline void rescale_iq2_xxs_weight_superblock_impl(
     const HVX_Vector v_abs_mask_sf = Q6_V_vsplat_R(0x7fffffff);
     const HVX_Vector v_one_w       = Q6_V_vsplat_R(1);
     const HVX_Vector v_one_s8      = Q6_Vb_vsplat_R(1);
-    const HVX_Vector v12M_sf       = Q6_V_vsplat_R(0x4B400000);
     const HVX_Vector v_nib_lut     = hvx_vmem(iq2xxs_vtcm_lut);
 
     HVX_Vector v_max_sf = Q6_V_vzero();
@@ -757,7 +755,7 @@ static inline void rescale_iq2_xxs_weight_superblock_impl(
 
             HVX_Vector v_ls      = Q6_Vw_vadd_VwVw(Q6_Vw_vasl_VwR(Q6_Vuw_vlsr_VuwR(v_sgn_cur, IQ2XXS_SCALE_SHIFT), 1), v_one_w);
             HVX_Vector v_ls_qf   = hvx_vec_f32_to_qf32(Q6_Vsf_equals_Vw(v_ls));
-            HVX_Vector v_m_bias  = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(v_d_sc_qf, v_ls_qf), v12M_sf));
+            HVX_Vector v_m_bias  = hvx_vec_i32_from_qf32_rnd(Q6_Vqf32_vmpy_Vqf32Vqf32(v_d_sc_qf, v_ls_qf));
             HVX_Vector v_alpha_h = Q6_Vh_vshuffe_VhVh(v_m_bias, v_m_bias);
 
             #pragma clang loop pipeline(disable) unroll(disable)
@@ -1053,12 +1051,10 @@ static inline void quantize_f16_quad_step_to_u8_sm(
         HVX_Vector v_inv2_qf,
         HVX_Vector v_inv3_qf,
         HVX_Vector v_one_f16,
-        HVX_Vector v_bias_u8,
         HVX_Vector v_min_u8,
         HVX_Vector v_max_u8) {
 
 #if __HVX_ARCH__ >= 81
-    (void) v_bias_u8;
     (void) v_min_u8;
     (void) v_max_u8;
 
@@ -1088,19 +1084,19 @@ static inline void quantize_f16_quad_step_to_u8_sm(
     HVX_VectorPair vp3 = Q6_Wqf32_vmpy_VhfVhf(Q6_Vh_vshuff_Vh(vh3), v_one_f16);
 
     {
-        HVX_Vector y0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp0), v_inv0_qf), v_bias_u8));
-        HVX_Vector y1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp1), v_inv1_qf), v_bias_u8));
-        HVX_Vector y2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp2), v_inv2_qf), v_bias_u8));
-        HVX_Vector y3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp3), v_inv3_qf), v_bias_u8));
+        HVX_Vector y0 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp0), v_inv0_qf));
+        HVX_Vector y1 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp1), v_inv1_qf));
+        HVX_Vector y2 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp2), v_inv2_qf));
+        HVX_Vector y3 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_lo_W(vp3), v_inv3_qf));
         HVX_Vector vh01 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y1, y0), v_min_u8), v_max_u8);
         HVX_Vector vh23 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y3, y2), v_min_u8), v_max_u8);
         ((HVX_Vector *) (tile_row_base + (size_t) (kt + 0) * HTP_MM_HMX_TILE_SIZE))[rg] = Q6_Vb_vpacke_VhVh(vh23, vh01);
     }
     {
-        HVX_Vector y0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp0), v_inv0_qf), v_bias_u8));
-        HVX_Vector y1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp1), v_inv1_qf), v_bias_u8));
-        HVX_Vector y2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp2), v_inv2_qf), v_bias_u8));
-        HVX_Vector y3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp3), v_inv3_qf), v_bias_u8));
+        HVX_Vector y0 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp0), v_inv0_qf));
+        HVX_Vector y1 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp1), v_inv1_qf));
+        HVX_Vector y2 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp2), v_inv2_qf));
+        HVX_Vector y3 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_Vqf32Vqf32(Q6_V_hi_W(vp3), v_inv3_qf));
         HVX_Vector vh01 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y1, y0), v_min_u8), v_max_u8);
         HVX_Vector vh23 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y3, y2), v_min_u8), v_max_u8);
         ((HVX_Vector *) (tile_row_base + (size_t) (kt + 1) * HTP_MM_HMX_TILE_SIZE))[rg] = Q6_Vb_vpacke_VhVh(vh23, vh01);
@@ -1189,7 +1185,6 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_sm_
         hmx_pack_hf_quad_to_u8_cm_pair(tile_dst_base, step * 2, rg, hf0, hf1, hf2, hf3);
     }
 #else
-    const HVX_Vector v_bias_u8 = Q6_V_vsplat_R(0x4B400080); // 12582912.0f + 128.0f
     const HVX_Vector v_min_u8  = Q6_Vh_vsplat_R(1);
     const HVX_Vector v_max_u8  = Q6_Vh_vsplat_R(255);
 
@@ -1200,10 +1195,10 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_sm_
         HVX_Vector vx2 = hvx_vmem(p2_base + off);
         HVX_Vector vx3 = hvx_vmem(p3_base + off);
 
-        HVX_Vector y0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx0, v_inv0), v_bias_u8));
-        HVX_Vector y1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx1, v_inv1), v_bias_u8));
-        HVX_Vector y2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx2, v_inv2), v_bias_u8));
-        HVX_Vector y3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx3, v_inv3), v_bias_u8));
+        HVX_Vector y0 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx0, v_inv0));
+        HVX_Vector y1 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx1, v_inv1));
+        HVX_Vector y2 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx2, v_inv2));
+        HVX_Vector y3 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx3, v_inv3));
 
         HVX_Vector vh01 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y1, y0), v_min_u8), v_max_u8);
         HVX_Vector vh23 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y3, y2), v_min_u8), v_max_u8);
@@ -1288,7 +1283,6 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_sm(
     HVX_Vector v_inv2 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax2, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax2), v_127), Q6_V_vzero());
     HVX_Vector v_inv3 = Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax3, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax3), v_127), Q6_V_vzero());
 
-    const HVX_Vector v_bias_u8 = Q6_V_vsplat_R(0x4B400080); // 12582912.0f + 128.0f
     const HVX_Vector v_min_u8  = Q6_Vh_vsplat_R(1);
     const HVX_Vector v_max_u8  = Q6_Vh_vsplat_R(255);
 
@@ -1298,10 +1292,10 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_sm(
         HVX_Vector vx2 = hvx_vmem(p2 + c);
         HVX_Vector vx3 = hvx_vmem(p3 + c);
 
-        HVX_Vector y0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx0, v_inv0), v_bias_u8));
-        HVX_Vector y1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx1, v_inv1), v_bias_u8));
-        HVX_Vector y2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx2, v_inv2), v_bias_u8));
-        HVX_Vector y3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx3, v_inv3), v_bias_u8));
+        HVX_Vector y0 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx0, v_inv0));
+        HVX_Vector y1 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx1, v_inv1));
+        HVX_Vector y2 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx2, v_inv2));
+        HVX_Vector y3 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx3, v_inv3));
 
         HVX_Vector vh01 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y1, y0), v_min_u8), v_max_u8);
         HVX_Vector vh23 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y3, y2), v_min_u8), v_max_u8);
@@ -1323,10 +1317,10 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f32_to_u8_sm(
             vx2 = Q6_V_vmux_QVV(mask, hvx_vmem(p2 + c), Q6_V_vzero());
             vx3 = Q6_V_vmux_QVV(mask, hvx_vmem(p3 + c), Q6_V_vzero());
         }
-        HVX_Vector y0 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx0, v_inv0), v_bias_u8));
-        HVX_Vector y1 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx1, v_inv1), v_bias_u8));
-        HVX_Vector y2 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx2, v_inv2), v_bias_u8));
-        HVX_Vector y3 = Q6_Vsf_equals_Vqf32(Q6_Vqf32_vadd_Vqf32Vsf(Q6_Vqf32_vmpy_VsfVsf(vx3, v_inv3), v_bias_u8));
+        HVX_Vector y0 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx0, v_inv0));
+        HVX_Vector y1 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx1, v_inv1));
+        HVX_Vector y2 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx2, v_inv2));
+        HVX_Vector y3 = hmx_qf32_to_i32_zp128(Q6_Vqf32_vmpy_VsfVsf(vx3, v_inv3));
 
         HVX_Vector vh01 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y1, y0), v_min_u8), v_max_u8);
         HVX_Vector vh23 = Q6_Vh_vmin_VhVh(Q6_Vh_vmax_VhVh(Q6_Vh_vpacke_VwVw(y3, y2), v_min_u8), v_max_u8);
@@ -1406,7 +1400,6 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f16_to_u8_sm_
     HVX_Vector v_inv2_qf = hvx_vec_f32_to_qf32(Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax2, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax2), v_127), Q6_V_vzero()));
     HVX_Vector v_inv3_qf = hvx_vec_f32_to_qf32(Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax3, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax3), v_127), Q6_V_vzero()));
 
-    const HVX_Vector v_bias_u8 = Q6_V_vsplat_R(0x4B400080);
     const HVX_Vector v_min_u8  = Q6_Vh_vsplat_R(1);
     const HVX_Vector v_max_u8  = Q6_Vh_vsplat_R(255);
 
@@ -1418,7 +1411,7 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f16_to_u8_sm_
         HVX_Vector vh3 = hvx_vmem(p3_base + off);
         quantize_f16_quad_step_to_u8_sm(tile_dst_base, step * 2, rg, vh0, vh1, vh2, vh3,
                                         v_inv0_qf, v_inv1_qf, v_inv2_qf, v_inv3_qf,
-                                        v_one_f16, v_bias_u8, v_min_u8, v_max_u8);
+                                        v_one_f16, v_min_u8, v_max_u8);
     }
 }
 
@@ -1503,7 +1496,6 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f16_to_u8_sm(
     HVX_Vector v_inv2_qf = hvx_vec_f32_to_qf32(Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax2, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax2), v_127), Q6_V_vzero()));
     HVX_Vector v_inv3_qf = hvx_vec_f32_to_qf32(Q6_V_vmux_QVV(Q6_Q_vcmp_gt_VsfVsf(vmax3, v_eps), hvx_vec_mul_f32_f32(hvx_vec_inverse_f32(vmax3), v_127), Q6_V_vzero()));
 
-    const HVX_Vector v_bias_u8 = Q6_V_vsplat_R(0x4B400080);
     const HVX_Vector v_min_u8  = Q6_Vh_vsplat_R(1);
     const HVX_Vector v_max_u8  = Q6_Vh_vsplat_R(255);
 
@@ -1512,7 +1504,7 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f16_to_u8_sm(
         HVX_Vector vh1 = hvx_vmem(p1 + c);
         HVX_Vector vh2 = hvx_vmem(p2 + c);
         HVX_Vector vh3 = hvx_vmem(p3 + c);
-        quantize_f16_quad_step_to_u8_sm(tile_row_base, c >> 5, rg, vh0, vh1, vh2, vh3, v_inv0_qf, v_inv1_qf, v_inv2_qf, v_inv3_qf, v_one_f16, v_bias_u8, v_min_u8, v_max_u8);
+        quantize_f16_quad_step_to_u8_sm(tile_row_base, c >> 5, rg, vh0, vh1, vh2, vh3, v_inv0_qf, v_inv1_qf, v_inv2_qf, v_inv3_qf, v_one_f16, v_min_u8, v_max_u8);
     }
     for (uint32_t c = c_end_full; c < k_end; c += 64) {
         HVX_Vector vh0 = Q6_V_vzero();
@@ -1527,7 +1519,7 @@ static __attribute__((noinline)) void quantize_act_superblock_quad_f16_to_u8_sm(
             vh2 = Q6_V_vmux_QVV(mask, hvx_vmem(p2 + c), Q6_V_vzero());
             vh3 = Q6_V_vmux_QVV(mask, hvx_vmem(p3 + c), Q6_V_vzero());
         }
-        quantize_f16_quad_step_to_u8_sm(tile_row_base, c >> 5, rg, vh0, vh1, vh2, vh3, v_inv0_qf, v_inv1_qf, v_inv2_qf, v_inv3_qf, v_one_f16, v_bias_u8, v_min_u8, v_max_u8);
+        quantize_f16_quad_step_to_u8_sm(tile_row_base, c >> 5, rg, vh0, vh1, vh2, vh3, v_inv0_qf, v_inv1_qf, v_inv2_qf, v_inv3_qf, v_one_f16, v_min_u8, v_max_u8);
     }
 }
 

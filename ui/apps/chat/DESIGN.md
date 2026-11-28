@@ -715,6 +715,9 @@ here; if something really is missing, add it here first.
 - **Sizes:** Tailwind's 4px spacing scale. Icons are Lucide, `size-icon-md` (16px), or
   `size-icon-sm` (14px) in compact controls. Controls are `h-control-sm`, `h-control-md` or
   `h-control-lg` (32, 36, 40px).
+- **Sharing:** anything that shares out of the app (an action, a button, a dialog title) uses
+  one icon, Lucide's `Share`: a box with an arrow leaving it (`SHARE_ICON`). Never `Share2`,
+  the three joined dots.
 - **Surfaces:** one surface utility per element (`card-surface`, `matte-float`, `matte-key`,
   `matte-well`), never raw `shadow-*`, `border-*` and `backdrop-blur-*` combinations.
 - **Tokens:** read a semantic token directly. A component token is only for a value the

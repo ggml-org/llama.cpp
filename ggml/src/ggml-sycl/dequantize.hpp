@@ -1423,11 +1423,13 @@ static void dequantize_block_q6_K_reorder(const void * __restrict__ vx, dst_t * 
     const int8_t     sc0   = reinterpret_cast<const int8_t *>(scales_ptr + 8 * ip + eh0 / 16)[0];
     const uint8_t *  ql4   = ql_ptr + 64 * ip + (eh0 & 63);
     const uint8_t *  qh4   = qh_ptr + 32 * ip + (eh0 & 31);
+    // f32 like dequantize_block_q6_K: a half d would round the products in half precision
+    const float      dv    = *d;
 
     sycl::vec<dst_t, 4> v;
 #pragma unroll
     for (int j = 0; j < 4; ++j) {
-        v[j] = *d * sc0 * ((int8_t) (((ql4[j] >> shift) & 0xF) | ((((qh4[j] >> qb) & 3)) << 4)) - 32);
+        v[j] = dv * sc0 * ((int8_t) (((ql4[j] >> shift) & 0xF) | ((((qh4[j] >> qb) & 3)) << 4)) - 32);
     }
     *reinterpret_cast<sycl::vec<dst_t, 4> *>(yy + 128 * ip + eh0) = v;
 }

@@ -2,6 +2,7 @@ set(TARGET llama-ui)
 
 set(LLAMA_UI_HF_BUCKET "ggml-org/llama-ui" CACHE STRING "Hugging Face bucket name for prebuilt UI assets")
 set(LLAMA_UI_GZIP      ON                  CACHE BOOL   "Apply gzip compress to assets to save bandwidth")
+set(LLAMA_UI_HUGGING_FACE OFF              CACHE BOOL   "Include sharing conversations to Hugging Face, and its sign-in, in a UI built from source (the prebuilt UI has them)")
 
 # Backward compat: forward old var to new one
 if(DEFINED LLAMA_BUILD_WEBUI)
@@ -79,6 +80,7 @@ add_custom_target(llama-ui-assets ALL
         "-DHF_ENABLED=${LLAMA_USE_PREBUILT_UI}"
         "-DBUILD_UI=${LLAMA_BUILD_UI}"
         "-DLLAMA_UI_GZIP=${LLAMA_UI_GZIP}"
+        "-DLLAMA_UI_HUGGING_FACE=${LLAMA_UI_HUGGING_FACE}"
         -P "${PROJECT_SOURCE_DIR}/scripts/ui-assets.cmake"
     COMMENT "Provisioning UI assets"
     VERBATIM

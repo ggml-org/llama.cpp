@@ -10,6 +10,7 @@
 		X
 	} from '@lucide/svelte';
 	import { ActionIcon, KeyboardShortcutInfo, ModelOrgAvatar } from '#lib/components/app/index.ts';
+	import { ModelsDiscoverDetailsContainer } from '#lib/components/app/models/discover/index.ts';
 	import {
 		CONVERSATION_SEARCH_CONTENT_DEBOUNCE_MS,
 		CONVERSATION_SEARCH_CONTENT_LIMIT,
@@ -77,6 +78,8 @@
 	let query = $state('');
 	let highlighted = $state(0);
 	let inputRef = $state<HTMLInputElement | null>(null);
+	/** The Hub repo picked from the results, shown in place of them. */
+	let selectedModel = $state<SearchEntry | null>(null);
 
 	const needle = $derived(query.trim().toLowerCase());
 	const limit = $derived(
@@ -157,11 +160,10 @@
 		if (open && isDiscoverEnabled) untrack(() => void modelsDiscoverStore.fetch());
 	});
 
-	/** A Hub repo as a result; picking it opens Discover on that repo. */
+	/** A Hub repo as a result; picking it shows the repo's details under the search. */
 	function modelEntry(model: HfModelInfo, section: string): SearchEntry {
 		const range = modelsDiscoverStore.cachedSizeRangeFor(model.id);
-
-		return {
+		const entry: SearchEntry = {
 			icon: DISCOVER_ICON,
 			id: `${section}-${model.id}`,
 			label: model.id,
@@ -170,8 +172,16 @@
 				: `${HuggingFaceService.formatDownloads(model.downloads)} downloads`,
 			// the model's own org, the way the model cards show it
 			org: orgOf(HuggingFaceService.getBaseModels(model)[0]) || orgOf(model.id),
-			run: () => close(() => uiStore.openModelsDiscover(model.id))
+			run: () => (selectedModel = entry)
 		};
+
+		return entry;
+	}
+
+	/** Back from a picked repo to the results it was picked from. */
+	function clearSelectedModel() {
+		selectedModel = null;
+		inputRef?.focus();
 	}
 
 	const suggestedEntries = $derived.by((): SearchEntry[] =>
@@ -307,6 +317,9 @@
 		// while an IME is composing, Enter confirms a candidate and the arrows move through them
 		if (isIMEComposing(event)) return;
 
+		// a picked repo replaces the results: there is nothing to move through or open
+		if (selectedModel) return;
+
 		if (event.key === KeyboardKey.ARROW_DOWN) {
 			event.preventDefault();
 			move(1);
@@ -323,6 +336,7 @@
 		if (!nextOpen) {
 			query = '';
 			highlighted = 0;
+			selectedModel = null;
 		}
 
 		open = nextOpen;
@@ -349,18 +363,82 @@
 	</span>
 {/snippet}
 
+{#snippet row(entry: SearchEntry, index: number | null, isActive: boolean)}
+	<button
+		aria-selected={isActive}
+		class="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body-sm transition-colors max-md:rounded-xl max-md:py-3 max-md:text-body {isActive
+			? 'bg-accent text-accent-foreground'
+			: ''}"
+		id={index === null ? undefined : `search-result-${index}`}
+		onclick={entry.run}
+		onmousemove={() => {
+			if (index !== null) highlighted = index;
+		}}
+		role="option"
+		tabindex={-1}
+		type="button"
+	>
+		{#if entry.org && HuggingFaceService.isEnabled()}
+			<ModelOrgAvatar class="shrink-0" org={entry.org} size="size-icon-md" />
+		{:else}
+			<entry.icon class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+		{/if}
+
+		{#if entry.snippet}
+			<span class="flex min-w-0 flex-1 flex-col">
+				<span class="truncate">{entry.label}</span>
+
+				<span class="truncate text-caption text-muted-foreground">
+					{entry.snippet.before}<mark class="bg-transparent font-medium text-foreground"
+						>{entry.snippet.match}</mark
+					>{entry.snippet.after}
+				</span>
+			</span>
+		{:else}
+			<span class="min-w-0 flex-1 truncate">{entry.label}</span>
+		{/if}
+
+		{#if entry.pinned}
+			<Pin aria-label="Pinned" class="{ICON_CLASS_SM} shrink-0 text-muted-foreground" />
+		{/if}
+
+		{#if entry.meta}
+			<span class="max-w-2/5 shrink-0 truncate text-caption text-muted-foreground">
+				{entry.meta}
+			</span>
+		{/if}
+
+		{#if entry.keys && !deviceStore.isMobile}
+			<KeyboardShortcutInfo class="opacity-100" keys={entry.keys} />
+		{/if}
+
+		{#if index !== null}
+			<CornerDownLeft
+				class="{ICON_CLASS_SM} shrink-0 max-md:hidden text-muted-foreground {isActive
+					? 'opacity-100'
+					: 'opacity-0'}"
+			/>
+		{/if}
+	</button>
+{/snippet}
+
 {#snippet search()}
 	<div class="border-b border-border/30 px-4 py-3 dark:border-border/20">
 		<div class="flex items-center gap-2">
 			<input
 				bind:this={inputRef}
 				bind:value={query}
-				aria-activedescendant={entries.length > 0 ? `search-result-${activeIndex}` : undefined}
+				aria-activedescendant={entries.length > 0 && !selectedModel
+					? `search-result-${activeIndex}`
+					: undefined}
 				aria-controls="search-results"
 				aria-expanded="true"
 				autocomplete="off"
 				class="h-10 min-w-0 flex-1 border-0 bg-transparent px-1 text-title font-normal outline-none placeholder:text-muted-foreground focus:outline-none focus-visible:ring-0"
-				oninput={() => (highlighted = 0)}
+				oninput={() => {
+					highlighted = 0;
+					selectedModel = null;
+				}}
 				onkeydown={handleKeydown}
 				placeholder="Search"
 				role="combobox"
@@ -377,100 +455,74 @@
 		</div>
 	</div>
 
-	<div class="min-h-0 flex-1 overflow-y-auto p-2" id="search-results" role="listbox">
-		{#each sections as section, sectionIndex (section.title)}
-			{@const offset = sections
-				.slice(0, sectionIndex)
-				.reduce((total, previous) => total + previous.entries.length, 0)}
+	{#if selectedModel}
+		<!-- the picked repo stays in sight; picking it again goes back to the results -->
+		<div class="border-b border-border/30 p-2 dark:border-border/20" role="listbox">
+			{@render row({ ...selectedModel, run: clearSelectedModel }, null, true)}
+		</div>
 
-			<div class="flex flex-col gap-0.5 {sectionIndex > 0 ? 'mt-3' : ''}" role="group">
-				<p class="flex items-center gap-1.5 px-2.5 pt-1 pb-1.5 text-label-sm text-muted-foreground">
-					{section.title}
+		<!-- the details pane leaves its right edge to its host, as Discover pads it -->
+		<div class="min-h-0 flex-1 overflow-y-auto pr-6">
+			<ModelsDiscoverDetailsContainer compact modelId={selectedModel.label} />
+		</div>
+	{:else}
+		<div class="min-h-0 flex-1 overflow-y-auto p-2" id="search-results" role="listbox">
+			{#each sections as section, sectionIndex (section.title)}
+				{@const offset = sections
+					.slice(0, sectionIndex)
+					.reduce((total, previous) => total + previous.entries.length, 0)}
 
-					{#if section.loading}
-						<Loader2 aria-label="Searching" class="{ICON_CLASS_XS} animate-spin" />
-					{/if}
-				</p>
-
-				{#each section.entries as entry, entryIndex (entry.id)}
-					{@const index = offset + entryIndex}
-					{@const isActive = index === activeIndex && !deviceStore.isMobile}
-
-					<!-- a phone has no keyboard to move a highlight with: no row is lit there -->
-					<button
-						aria-selected={isActive}
-						class="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-body-sm transition-colors max-md:rounded-xl max-md:py-3 max-md:text-body {isActive
-							? 'bg-accent text-accent-foreground'
-							: ''}"
-						id="search-result-{index}"
-						onclick={entry.run}
-						onmousemove={() => (highlighted = index)}
-						role="option"
-						tabindex={-1}
-						type="button"
+				<div class="flex flex-col gap-0.5 {sectionIndex > 0 ? 'mt-3' : ''}" role="group">
+					<p
+						class="flex items-center gap-1.5 px-2.5 pt-1 pb-1.5 text-label-sm text-muted-foreground"
 					>
-						{#if entry.org && HuggingFaceService.isEnabled()}
-							<ModelOrgAvatar class="shrink-0" org={entry.org} size="size-icon-md" />
-						{:else}
-							<entry.icon class="{ICON_CLASS_DEFAULT} shrink-0 text-muted-foreground" />
+						{section.title}
+
+						{#if section.loading}
+							<Loader2 aria-label="Searching" class="{ICON_CLASS_XS} animate-spin" />
 						{/if}
+					</p>
 
-						{#if entry.snippet}
-							<span class="flex min-w-0 flex-1 flex-col">
-								<span class="truncate">{entry.label}</span>
+					{#each section.entries as entry, entryIndex (entry.id)}
+						{@const index = offset + entryIndex}
+						{@const isActive = index === activeIndex && !deviceStore.isMobile}
 
-								<span class="truncate text-caption text-muted-foreground">
-									{entry.snippet.before}<mark class="bg-transparent font-medium text-foreground"
-										>{entry.snippet.match}</mark
-									>{entry.snippet.after}
-								</span>
-							</span>
-						{:else}
-							<span class="min-w-0 flex-1 truncate">{entry.label}</span>
-						{/if}
-
-						{#if entry.pinned}
-							<Pin aria-label="Pinned" class="{ICON_CLASS_SM} shrink-0 text-muted-foreground" />
-						{/if}
-
-						{#if entry.meta}
-							<span class="max-w-2/5 shrink-0 truncate text-caption text-muted-foreground">
-								{entry.meta}
-							</span>
-						{/if}
-
-						{#if entry.keys && !deviceStore.isMobile}
-							<KeyboardShortcutInfo class="opacity-100" keys={entry.keys} />
-						{/if}
-
-						<CornerDownLeft
-							class="{ICON_CLASS_SM} shrink-0 max-md:hidden text-muted-foreground {isActive
-								? 'opacity-100'
-								: 'opacity-0'}"
-						/>
-					</button>
-				{/each}
-			</div>
-		{:else}
-			<p class="px-3 py-12 text-center text-body-sm text-muted-foreground">{emptyMessage}</p>
-		{/each}
-	</div>
+						<!-- a phone has no keyboard to move a highlight with: no row is lit there -->
+						{@render row(entry, index, isActive)}
+					{/each}
+				</div>
+			{:else}
+				<p class="px-3 py-12 text-center text-body-sm text-muted-foreground">{emptyMessage}</p>
+			{/each}
+		</div>
+	{/if}
 
 	<div
 		class="flex items-center gap-5 border-t border-border/30 px-4 py-2.5 text-caption text-muted-foreground max-md:hidden dark:border-border/20"
 	>
-		{@render hint('Close', ['Esc'])}
+		{#if selectedModel}
+			{@render hint('Back', ['Esc'])}
+		{:else}
+			{@render hint('Close', ['Esc'])}
 
-		{@render hint('Navigate', [ArrowUp, ArrowDown])}
+			{@render hint('Navigate', [ArrowUp, ArrowDown])}
 
-		<span class="ml-auto">{@render hint('Open', [CornerDownLeft])}</span>
+			<span class="ml-auto">{@render hint('Open', [CornerDownLeft])}</span>
+		{/if}
 	</div>
 {/snippet}
 
 <!-- like every dialog, a phone shows it full screen -->
 <Dialog.Root onOpenChange={handleOpenChange} {open}>
 	<Dialog.Content
-		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-2xl! md:w-[calc(100%-2rem)] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
+		class="top-[12%] flex h-[min(36rem,76dvh)]! w-full max-w-3xl! md:w-[calc(100%-2rem)] translate-y-0 flex-col gap-0 overflow-hidden rounded-xl p-0"
+		onEscapeKeydown={(event) => {
+			// Esc steps back from a picked repo before it closes the search
+			if (!selectedModel) return;
+
+			event.preventDefault();
+			clearSelectedModel();
+		}}
 		onOpenAutoFocus={(event) => {
 			event.preventDefault();
 			inputRef?.focus();

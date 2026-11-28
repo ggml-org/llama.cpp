@@ -3,9 +3,9 @@
 	few models in reach (loaded, favorite, recent), each marked when it is the chat's or the
 	dictation's, and a row that opens all models as a page, in groups of the
 	same rows. Tapping a model switches the chat to it, loading it if need be, as on a desktop;
-	holding it opens its menu, as a held chat row does: unload it, or open its details over the
-	sheet. A search shows its results in place; it stays at the sheet's foot, under the reasoning
-	effort as the desktop picker has it.
+	holding it opens its menu, as a held chat row does: unload it, use it for dictation when it
+	hears, or open its details over the sheet. A search shows its results in place; it stays at
+	the sheet's foot, under the reasoning effort as the desktop picker has it.
 -->
 <script lang="ts">
 	import ModelAvatar from '../ModelAvatar.svelte';
@@ -22,7 +22,7 @@
 	} from '@ggml-org/llama-ui/app/sheets';
 	import { SHEET_CONTENT_CLASS } from '@ggml-org/llama-ui/constants';
 	import * as Drawer from '@ggml-org/llama-ui/ui/drawer';
-	import { Check, Info, Loader2, Mic, MoreHorizontal, PowerOff } from '@lucide/svelte';
+	import { Check, Info, Loader2, Mic, MicOff, MoreHorizontal, PowerOff } from '@lucide/svelte';
 	import DropdownMenuActions from '#lib/components/app/navigation/DropdownMenuActions.svelte';
 	import {
 		MODELS_SHEET_GROUP_KEYS,
@@ -30,7 +30,8 @@
 		ROW_LONG_PRESS_MS,
 		SETTINGS_KEYS,
 		SHEET_AUTO_HEIGHT_CLASS,
-		SHEET_FULL_HEIGHT_CLASS
+		SHEET_FULL_HEIGHT_CLASS,
+		VOICE_DICTATION_MODEL_LABEL
 	} from '#lib/constants/index.ts';
 	import { ModelsSheetPage } from '#lib/enums/index.ts';
 	import { useLongPress } from '#lib/hooks/use-long-press.svelte.ts';
@@ -195,6 +196,25 @@
 					onclick: () => void modelsStore.status.unload(model)
 				});
 			}
+		}
+
+		// as the desktop row's microphone: a router model that hears can be chosen to transcribe
+		// dictation (the one Automatic picked is kept so), and the chosen one can hand the choice
+		// back to Automatic
+		if (serverStore.isRouterMode && voiceStore.roleOf(model) !== null) {
+			const dictates = voiceStore.isDictationModel(model);
+			const chosen = dictates && !voiceStore.dictationIsAutomatic;
+
+			let label: string = VOICE_DICTATION_MODEL_LABEL.use;
+
+			if (chosen) label = VOICE_DICTATION_MODEL_LABEL.pickAutomatically;
+			else if (dictates) label = VOICE_DICTATION_MODEL_LABEL.keep;
+
+			actions.push({
+				icon: chosen ? MicOff : Mic,
+				label,
+				onclick: () => voiceStore.toggleDictation(model)
+			});
 		}
 
 		actions.push({
@@ -376,16 +396,19 @@
 			{/if}
 		</SheetPages>
 
-		<!-- the reasoning effort, then the search at the sheet's foot, in the chat form's own
-		     surface and shape -->
-		<div class="shrink-0 px-2 pt-2 pb-[max(0.5rem,var(--safe-area-bottom))]">
+		<!-- the reasoning effort, then the search at the sheet's foot: a plain text field in the chat
+		     form's shape; both keep the lists' gutter -->
+		<div class="flex shrink-0 flex-col gap-3 px-4 pt-2 pb-[max(0.5rem,var(--safe-area-bottom))]">
+			<!-- a search gives the sheet to its results: the reasoning row steps aside until it is
+			     cleared, and stays mounted so its levels are as they were left -->
 			{#if hasEffort}
-				<ModelsSelectorReasoning variant="list" />
+				<div class={isSearching ? 'hidden' : 'contents'}>
+					<ModelsSelectorReasoning variant="list" />
+				</div>
 			{/if}
 
 			<SearchInput
-				class="chat-form-surface overflow-hidden rounded-(--chat-form-single-row-radius)"
-				inputClass="h-12 max-md:h-12 border-0 bg-transparent shadow-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
+				inputClass="h-12 max-md:h-12 rounded-(--chat-form-single-row-radius)"
 				onInput={(value) => onSearchChange?.(value)}
 				onKeyDown={handleSearchKeyDown}
 				placeholder={MODELS_SHEET_TEXT.SEARCH_PLACEHOLDER}

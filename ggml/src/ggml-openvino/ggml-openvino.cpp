@@ -31,9 +31,6 @@
 #include <openvino/runtime/intel_npu/level_zero/level_zero.hpp>
 #include <openvino/runtime/properties.hpp>
 #include <openvino/runtime/tensor.hpp>
-#include <algorithm>
-#include <map>
-#include <set>
 #include <string>
 #include <tuple>
 #include <vector>
@@ -98,8 +95,6 @@ struct ggml_backend_openvino_buffer_context {
     std::map<const void *, uint64_t> weight_fingerprints;
     std::vector<ggml_openvino_source_mapping> source_mappings;
 
-    // Used for re-allocation on device for kvcache
-    void * data_prev = nullptr;
     // data is in the weight buffer registry
     bool weight_registered = false;
 
@@ -149,10 +144,7 @@ struct ggml_backend_openvino_buffer_context {
             // commits/zeroes it eagerly (fully resident). For such large buffers, reserve
             // demand-zero pages instead (no L0, no memset) so they stay non-resident. KV and small
             // I/O buffers keep the L0 host tensor for zero-copy import (decode throughput).
-            const bool strict_mmap = device_name == "NPU" &&
-                                     ggml_openvino_npu_raw_weight_cache_enabled() &&
-                                     ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") &&
-                                     ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
+            const bool strict_mmap = device_name == "NPU" && ggml_openvino_self_contained_mmap_enabled();
             // 2 GiB keeps a large-context KV cache (~1 GiB at ctx 8K) on L0 while the bigger prefill
             // compute buffer still goes lazy.
             const size_t lazy_host_threshold =
@@ -391,12 +383,6 @@ static bool is_stateful_enabled() {
     return ggml_openvino_getenv_int("GGML_OPENVINO_STATEFUL_EXECUTION") != 0;
 }
 
-static bool is_self_contained_mmap_enabled() {
-    return ggml_openvino_is_npu() && ggml_openvino_npu_raw_weight_cache_enabled() &&
-           ggml_openvino_getenv_int("GGML_OPENVINO_SELF_CONTAINED_MMAP") &&
-           ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR");
-}
-
 // Stores extra as the tensor's extra, deleting the one it replaces
 static void ggml_openvino_set_extra(ggml_backend_openvino_buffer_context * ctx,
                                     ggml_tensor * tensor,
@@ -431,7 +417,6 @@ static bool ggml_openvino_swap_buffer_context(ggml_backend_buffer_t buffer,
 }
 
 static enum ggml_status ggml_backend_openvino_buffer_init_tensor(ggml_backend_buffer_t buffer, ggml_tensor * tensor) {
-    // GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
     // Put kvcache on device memory for GPU (NPU memory is too small even for kvcache). Same for the speculative
@@ -505,7 +490,6 @@ static void ggml_backend_openvino_buffer_memset_tensor(ggml_backend_buffer_t buf
                                                        uint8_t value,
                                                        size_t offset,
                                                        size_t size) {
-    // GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
     GGML_ASSERT(tensor != nullptr && tensor->data != nullptr);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
@@ -617,7 +601,6 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
                                                     const void * data,
                                                     size_t offset,
                                                     size_t size) {
-    // GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
     GGML_ASSERT(tensor != nullptr && tensor->data != nullptr);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
@@ -642,10 +625,9 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
     bool is_supported_weight_shape = is_2d || (tensor->ne[3] == 1 && ggml_is_quantized(tensor->type));
 
     if (is_weight_buffer && is_full_tensor_set && is_supported_weight_shape) {
-        if (ggml_openvino_is_npu() && ggml_openvino_npu_raw_weight_cache_enabled() &&
-            ggml_openvino_getenv_str("GGML_OPENVINO_COMPILED_MODEL_CACHE_DIR")) {
+        if (ggml_openvino_npu_weightless_cache_enabled()) {
             // Keep raw bytes for cache fingerprint validation and compile fallback; the imported
-            // self-contained blob supplies the runtime weights, so eager requant is unnecessary.
+            // blob supplies the runtime weights, so eager requant is unnecessary.
             memcpy(tensor->data, data, size);
             return;
         }
@@ -653,32 +635,15 @@ static void ggml_backend_openvino_buffer_set_tensor(ggml_backend_buffer_t buffer
             auto result = process_weight_tensor(tensor, data, tensor->data);
             result.weight_node->set_friendly_name(tensor->name);
 
-            // const auto & layout = result.layout;
             ggml_openvino_extra_base * extra;
 
             // Quantized path with extracted weight/scale/zp tensors
             if (result.is_quantized()) {
                 extra = new ggml_openvino_quantized_weight_extra(std::move(result.weights), std::move(result.scales),
                                                                  std::move(result.zp), result.weight_node);
-
-                // if (layout.is_requant) {
-                //     GGML_LOG_DEBUG("%s: requantized %s to %s (u%d, block_size=%ld)\n", __func__, tensor->name,
-                //                    extra_quant_type_name(layout.requant_type.value()), layout.is_u4 ? 4 : 8,
-                //                    layout.weights_per_block);
-                // } else {
-                //     int64_t n_blocks = ggml_nelements(tensor) / layout.weights_per_block;
-                //     GGML_LOG_DEBUG("%s: extracted quantized weight node for %s (u%d, %zu weights, %ld blocks)\n",
-                //                    __func__, tensor->name, layout.is_u4 ? 4 : 8, layout.weights_size, n_blocks);
-                // }
             } else {
                 // F16/F32/BF16 weight or F16-requant
                 extra = new ggml_openvino_weight_extra(std::move(result.weights), result.weight_node);
-
-                // if (layout.total_size > 0) {
-                //     GGML_LOG_DEBUG("%s: requantized %s to F16\n", __func__, tensor->name);
-                // } else {
-                //     GGML_LOG_DEBUG("%s: created shared-memory weight node for %s\n", __func__, tensor->name);
-                // }
             }
 
             ggml_openvino_set_extra(ctx, tensor, extra);
@@ -804,7 +769,6 @@ static void ggml_backend_openvino_buffer_get_tensor(ggml_backend_buffer_t buffer
                                                     void * data,
                                                     size_t offset,
                                                     size_t size) {
-    // GGML_LOG_DEBUG("%s: buffer usage=%d, tensor name=%s\n", __func__, buffer->usage, tensor->name);
     GGML_ASSERT(tensor != nullptr && tensor->data != nullptr);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
@@ -843,7 +807,6 @@ static void ggml_backend_openvino_buffer_get_tensor(ggml_backend_buffer_t buffer
 static bool ggml_backend_openvino_buffer_cpy_tensor(ggml_backend_buffer_t buffer,
                                                     const ggml_tensor * src,
                                                     ggml_tensor * dst) {
-    // GGML_LOG_DEBUG("%s: src tensor name=%s, dst tensor name=%s\n", __func__, src->name, dst->name);
     GGML_ASSERT(src != nullptr && dst != nullptr);
     ggml_backend_openvino_buffer_context * ctx = (ggml_backend_openvino_buffer_context *) buffer->context;
 
@@ -978,7 +941,7 @@ static size_t ggml_backend_openvino_buffer_type_get_alloc_size(ggml_backend_buff
                                                                const ggml_tensor * tensor) {
     GGML_UNUSED(buft);
 
-    if (is_self_contained_mmap_enabled()) {
+    if (ggml_openvino_self_contained_mmap_enabled()) {
         return ggml_nbytes(tensor);
     }
 
@@ -1178,7 +1141,6 @@ static void ggml_backend_openvino_free(ggml_backend_t backend) {
             // reuses it instead of recompiling against zeroed weights.
             if (!ggml_openvino_weight_buffers_released()) {
                 cache->graphs.clear();
-                ov_clear_imported_blobs();
                 std::lock_guard<std::mutex> fingerprints_lock(g_fallback_fingerprints_mutex);
                 g_fallback_fingerprints.clear();
             }
@@ -1455,7 +1417,7 @@ static void ggml_backend_openvino_device_get_props(ggml_backend_dev_t dev, ggml_
     props->caps = {
         /* .async                 = */ false,
         /* .host_buffer           = */ false,
-        /* .buffer_from_host_ptr  = */ is_self_contained_mmap_enabled(),
+        /* .buffer_from_host_ptr  = */ ggml_openvino_self_contained_mmap_enabled(),
         /* .events                = */ false,
         /* .mmap_support          = */ true,
         /* .fast_async_host_input = */ false,
@@ -1685,6 +1647,13 @@ static bool cpy_output_view_is_supported(const ggml_tensor * op) {
            GgmlOvDecoder::is_gdn_snapshot_writeback(op) || GgmlOvDecoder::is_ssm_state_writeback(op);
 }
 
+// SET_ROWS writes whole rows of a contiguous destination. Other destination views (e.g. a permuted view of a
+// state tensor) are supported only for the recognized cache writes.
+static bool set_rows_output_view_is_supported(const ggml_tensor * op) {
+    return op->view_src == nullptr || ggml_nbytes(op) == 0 || ggml_is_contiguous(op) ||
+           GgmlOvDecoder::is_column_set_rows(op) || GgmlOvDecoder::is_conv_state_snapshot_writeback(op);
+}
+
 static bool mul_mat_id_requires_large_tmp(const ggml_tensor * op) {
     const ggml_tensor * as = op->src[0];
     const ggml_tensor * ids = op->src[2];
@@ -1794,6 +1763,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         }
         if (op->op == GGML_OP_SET_ROWS && op->src[0]->type == GGML_TYPE_BF16) {
             return {false, "SET_ROWS with BF16 src0 is not supported"};
+        }
+        if (op->op == GGML_OP_SET_ROWS && !set_rows_output_view_is_supported(op)) {
+            return {false, "SET_ROWS with non-contiguous output view is not supported"};
         }
         if (op->ne[0] == 256 && (op->src[0]->type == GGML_TYPE_Q4_K || op->src[0]->type == GGML_TYPE_Q5_K ||
                                  op->src[0]->type == GGML_TYPE_Q4_1 || op->src[0]->type == GGML_TYPE_Q5_1)) {
@@ -2045,6 +2017,9 @@ static ggml_openvino_op_support is_op_supported_case(const ggml_tensor * op) {
         if (op->src[0] != nullptr && op->src[0]->ne[2] <= 1) {
             return {false, "MUL_MAT_ID with single-expert or empty ne[2] <= 1 (ne[2]=" +
                            std::to_string(op->src[0]->ne[2]) + ") is not supported"};
+        }
+        if (op->src[1] != nullptr && op->src[1]->type == GGML_TYPE_BF16) {
+            return {false, "MUL_MAT_ID with a BF16 src1 is not supported"};
         }
         // The GPU plugin's GatherMatmul returns wrong values for the layouts test-backend-ops
         // produces: it builds a rank-4 input layout ([n_used, n_tokens, k, 1]) instead of rank 3
@@ -2332,10 +2307,6 @@ static ggml_openvino_op_support ggml_backend_openvino_device_supports_op_impl(gg
         if (!supported) {
             return {false, "op " + std::string(ggml_op_name(op->op)) + " has no op translator"};
         }
-        static std::set<ggml_op> ops_not_support_view_input{};
-        if (ops_not_support_view_input.find(op->op) != ops_not_support_view_input.end() && has_view_op_input(op)) {
-            return {false, "op " + std::string(ggml_op_name(op->op)) + " with VIEW input is not supported"};
-        }
     }
     }
 
@@ -2438,6 +2409,10 @@ struct supports_op_tally {
 }  // namespace
 
 static bool ggml_backend_openvino_device_supports_op(ggml_backend_dev_t dev, const ggml_tensor * op) {
+    if (ggml_get_src_scale(op, 0)) {
+        return false;
+    }
+
     auto res = ggml_backend_openvino_device_supports_op_impl(dev, op);
     const bool supported = res.is_supported;
     if (!supported) {
