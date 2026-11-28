@@ -3,8 +3,11 @@
 #include "../tools/server/server-chat.h"
 #include "../tools/server/server-common.h"
 #include "../tools/server/server-decision.h"
+#include "../tools/server/server-models.h"
 #include "../tools/server/server-schema.h"
 #include "../tools/server/server-slot-sched.h"
+
+#include <cpp-httplib/httplib.h>
 
 #include <algorithm>
 #include <cmath>
@@ -937,6 +940,110 @@ static void test_pcm_f32_to_s16(testing & t) {
     t.assert_true ("empty",          pcm_f32_to_s16(nullptr, 0).empty());
 }
 
+static void test_proxy_response_headers(testing & t) {
+    common_params params;
+    params.hostnames = {"127.0.0.1"};
+    params.port = 0;
+    params.ui = false;
+    params.n_threads_http = 2;
+
+    server_http_context child;
+    if (!child.init(params)) {
+        t.assert_true("initialize child", false);
+        return;
+    }
+    child.get("/.*", [](const server_http_req & req) {
+        auto res = std::make_unique<server_http_res>();
+        res->headers["Connection"] = "close";
+        res->headers["Keep-Alive"] = "timeout=99";
+        res->headers["X-End-To-End"] = "preserved";
+        res->content_type = "text/plain";
+        res->data = "response";
+        if (req.path == "/tokens") {
+            res->headers["Connection"] = "close, X-First";
+            res->headers["cOnNeCtIoN"] = "X-Second,,\t X-ThIrD \t,";
+            res->headers["X-First"] = "private";
+            res->headers["x-second"] = "private";
+            res->headers["X-Third"] = "private";
+            res->headers["X-First-Suffix"] = "preserved";
+            res->headers["Proxy-Connection"] = "keep-alive";
+            res->headers["TE"] = "trailers";
+            res->headers["Upgrade"] = "example/1";
+        } else if (req.path == "/stream") {
+            res->content_type = "text/event-stream";
+            res->next = [first = true](std::string & out) mutable {
+                out = first ? "data: first\n\n" : "data: second\n\n";
+                const bool more = first;
+                first = false;
+                return more;
+            };
+        } else if (req.path == "/empty") {
+            res->status = 204;
+            res->data.clear();
+        }
+        return res;
+    });
+    child.is_ready = true;
+    if (!child.start()) {
+        t.assert_true("start child", false);
+        return;
+    }
+
+    server_http_context router;
+    if (!router.init(params)) {
+        t.assert_true("initialize router", false);
+        return;
+    }
+    router.get("/.*", [&](const server_http_req & req) {
+        return std::make_unique<server_http_proxy>("GET", "http", "127.0.0.1", child.port, req.path,
+                req.headers, req.body, req.files, req.should_stop, 5, 5);
+    });
+    router.is_ready = true;
+    if (!router.start()) {
+        t.assert_true("start router", false);
+        return;
+    }
+
+    httplib::Client client("127.0.0.1", router.port);
+    client.set_keep_alive(true);
+    client.set_read_timeout(5);
+    int connections = 0;
+    client.set_socket_options([&](socket_t) { ++connections; });
+    for (const std::string path : {"/plain", "/stream", "/tokens", "/empty", "/plain"}) {
+        auto res = client.Get(path);
+        t.assert_true(path + " response", bool(res));
+        if (!res) {
+            continue;
+        }
+        t.assert_equal(path + " status", path == "/empty" ? 204 : 200, res->status);
+        t.assert_true(path + " no child Connection", !res->has_header("Connection"));
+        t.assert_true(path + " router Keep-Alive", res->get_header_value("Keep-Alive") != "timeout=99");
+        t.assert_true(path + " connection remains open", client.is_socket_open());
+        t.assert_equal(path + " reuses client connection", 1, connections);
+        t.assert_equal(path + " end-to-end header", std::string("preserved"), res->get_header_value("X-End-To-End"));
+        for (const char * name : {"X-First", "X-Second", "X-Third", "Proxy-Connection", "TE", "Upgrade"}) {
+            t.assert_true(path + " strips " + name, !res->has_header(name));
+        }
+        if (path == "/tokens") {
+            t.assert_equal("exact connection option match", std::string("preserved"), res->get_header_value("X-First-Suffix"));
+        }
+        const std::string body = path == "/stream" ? "data: first\n\ndata: second\n\n" : path == "/empty" ? "" : "response";
+        t.assert_equal(path + " body", body, res->body);
+        if (path == "/stream") {
+            t.assert_equal("stream content type", std::string("text/event-stream"), res->get_header_value("Content-Type"));
+        }
+    }
+    auto res = client.Get("/plain", httplib::Headers{{"Connection", "close"}});
+    t.assert_true("client close response", bool(res));
+    if (res) {
+        t.assert_equal("honor client close", std::string("close"), res->get_header_value("Connection"));
+    }
+    t.assert_true("client connection closed", !client.is_socket_open());
+    res = client.Get("/plain");
+    t.assert_true("request after client close", bool(res));
+    t.assert_equal("new connection after client close", 2, connections);
+}
+
 int main(int argc, char ** argv) {
     testing t;
 
@@ -966,6 +1073,7 @@ int main(int argc, char ** argv) {
     t.test("stop_strings",    test_stop_strings);
     t.test("speech_convert",  test_speech_convert);
     t.test("pcm_f32_to_s16",  test_pcm_f32_to_s16);
+    t.test("proxy_response_headers", test_proxy_response_headers);
 
     return t.summary();
 }
