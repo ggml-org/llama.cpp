@@ -113,6 +113,31 @@ struct batch_builder {
 static void test_init(testing & t) {
     llama_vocab vocab;
 
+    t.test("embedding_setter_order", [&](testing & t) {
+        for (bool reverse : { false, true }) {
+            batch_builder bb;
+            const llama_pos pos = 0;
+            for (int i = 0; i < 2; ++i) {
+                t.assert_equal(i, bb.b.add_token(i));
+                t.assert_true(bb.b.set_token_pos(i, &pos));
+                t.assert_true(bb.b.set_output(i, true));
+            }
+            for (int k = 0; k < 2; ++k) {
+                const int i = reverse ? 1 - k : k;
+                const auto row = bb.row(i, bb.n_embd);
+                t.assert_true(bb.b.set_token_embd(i, { row.data(), 1, bb.n_embd }));
+            }
+            llama_batch_allocr ba(1);
+            t.assert_true(ba.init(bb.b, vocab, false));
+            for (int i = 0; i < 2; ++i) {
+                const auto row = bb.row(i, bb.n_embd);
+                for (uint32_t k = 0; k < bb.n_embd; ++k) {
+                    t.assert_equal(row[k], ba.get_batch().embd[i*bb.n_embd + k]);
+                }
+            }
+        }
+    });
+
     t.test("rejects_n_seq_max_too_large", [&](testing & t) {
         batch_builder bb(2, nullptr, LLAMA_MAX_SEQ + 1);
         bb.add(0, {0}, true);
