@@ -126,6 +126,15 @@ struct common_params_context {
 //       this is a side-effect that should be avoided
 bool common_params_parse(int argc, char ** argv, common_params & params, llama_example ex, void(*print_usage)(int, char **) = nullptr);
 
+// print the option words for this tool in help order
+void common_params_print_bash_completion_options(common_params_context & ctx_arg);
+
+// print the Bash function that completes option names and file arguments
+void common_print_bash_completion_helper();
+
+// append application-specific completions to --completion-bash
+void common_set_bash_completion(void (*callback)());
+
 // load all backends and print the list of available (non-CPU) devices to stdout
 void common_print_available_devices();
 

@@ -1024,7 +1024,7 @@ static void common_params_print_usage(common_params_context & ctx_arg) {
     print_section("example-specific params", specific_options);
 }
 
-static void common_params_print_completion(common_params_context & ctx_arg) {
+void common_params_print_bash_completion_options(common_params_context & ctx_arg) {
     std::vector<common_arg *> common_options;
     std::vector<common_arg *> sampling_options;
     std::vector<common_arg *> spec_options;
@@ -1042,17 +1042,10 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
         }
     }
 
-    printf("_llama_completions() {\n");
-    printf("    local cur prev opts\n");
-    printf("    COMPREPLY=()\n");
-    printf("    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
-    printf("    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n\n");
-
-    printf("    opts=\"");
     auto print_options = [](const std::vector<common_arg *> & options) {
         for (const common_arg * opt : options) {
-            for (const char * arg : opt->args) {
-                printf("%s ", arg);
+            for (const auto & arg : opt->get_args()) {
+                printf("%s ", arg.c_str());
             }
         }
     };
@@ -1061,8 +1054,14 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
     print_options(sampling_options);
     print_options(spec_options);
     print_options(specific_options);
-    printf("\"\n\n");
+}
 
+void common_print_bash_completion_helper() {
+    printf("_llama_complete_options() {\n");
+    printf("    local cur prev opts=\"$1\"\n");
+    printf("    COMPREPLY=()\n");
+    printf("    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n");
+    printf("    prev=\"${COMP_WORDS[COMP_CWORD-1]}\"\n\n");
     printf("    case \"$prev\" in\n");
     printf("        --model|-m)\n");
     printf("            COMPREPLY=( $(compgen -f -X '!*.gguf' -- \"$cur\") $(compgen -d -- \"$cur\") )\n");
@@ -1082,6 +1081,21 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
     printf("            ;;\n");
     printf("    esac\n");
     printf("}\n\n");
+}
+
+static void (*app_bash_completion)() = nullptr;
+
+void common_set_bash_completion(void (*callback)()) {
+    app_bash_completion = callback;
+}
+
+static void common_params_print_completion(common_params_context & ctx_arg) {
+    common_print_bash_completion_helper();
+
+    printf("_llama_completions() {\n");
+    printf("    _llama_complete_options '");
+    common_params_print_bash_completion_options(ctx_arg);
+    printf("'\n}\n\n");
 
     std::set<std::string> executables = {
         "llama-batched",
@@ -1133,6 +1147,9 @@ static void common_params_print_completion(common_params_context & ctx_arg) {
 
     for (const auto& exe : executables) {
         printf("complete -F _llama_completions %s\n", exe.c_str());
+    }
+    if (app_bash_completion) {
+        app_bash_completion();
     }
 }
 
@@ -1456,7 +1473,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.completion = true;
         }
-    ));
+    ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_DOWNLOAD}));
     add_opt(common_arg(
         {"--server-base"}, "URL",
         string_format("connect to this server instead of starting a new one, example: 'http://localhost:9931' (default: none)"),
