@@ -65,6 +65,38 @@ def test_with_and_without_draft():
     assert res.body["tokens"] == tokens_no_draft
 
 
+def test_reuse_seed_on_first_draft_rejection(monkeypatch, tmp_path):
+    request = {
+        "prompt": "I believe the meaning of life is",
+        "temperature": 0.0,
+        "n_predict": 16,
+        "ignore_eos": True,
+        "return_tokens": True,
+    }
+    draft = server.model_draft
+    server.model_draft = None
+    server.spec_type = None
+    server.start()
+    reference = server.make_request("POST", "/completion", data=request)
+    server.stop()
+    assert reference.status_code == 200
+    assert len(reference.body["tokens"]) == request["n_predict"]
+
+    monkeypatch.setenv("LLAMA_ARG_SPEC_DRAFT_P_MIN", "2.0")
+    log_path = tmp_path / "draft.log"
+    server.log_path = str(log_path)
+    server.debug = True
+    server.model_draft = draft
+    server.spec_type = "draft-simple"
+    server.start()
+    result = server.make_request("POST", "/completion", data=request)
+    server.stop()
+    assert result.status_code == 200
+    assert result.body["tokens"] == reference.body["tokens"]
+    assert result.body["timings"].get("draft_n", 0) == 0
+    assert "reusing draft seed at pos" in log_path.read_text(encoding="utf-8", errors="replace")
+
+
 def test_different_draft_min_draft_max():
     global server
     test_values = [
