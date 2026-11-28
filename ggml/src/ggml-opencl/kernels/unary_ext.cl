@@ -74,6 +74,7 @@ kernel void kernel_##NAME##_f16_nc(                                       \
     }                                                                   \
 }
 
+UNARY_EXT(log,          log(x),                                            log(x))
 UNARY_EXT(sgn,          sign(x),                                           sign(x))
 UNARY_EXT(step,         x > 0.0f ? 1.0f : 0.0f,                            select((float4)0.0f, (float4)1.0f, x > 0.0f))
 UNARY_EXT(elu,          x > 0.0f ? x : expm1(x),                           select(expm1(x), x, x > 0.0f))
