@@ -710,10 +710,17 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
     // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
     const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
 
+    const bool is_quant_kv = ggml_is_quantized(K->type) || ggml_is_quantized(V->type);
+    const bool is_bf16_kv  = !is_quant_kv && (K->type == GGML_TYPE_BF16 || V->type == GGML_TYPE_BF16);
+    const bool kv_prefer_vec =
+        (is_quant_kv || (is_bf16_kv && gqa_ratio <= 6)) &&
+        K->type != GGML_TYPE_F32 && V->type != GGML_TYPE_F32 &&
+        ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr;
+
     // If Turing tensor cores are available, use them:
     if (turing_mma_available(cc)) {
         if (can_use_vector_kernel) {
-            if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
+            if (!kv_prefer_vec) {
                 // the sparse gather exists only in the MMA kernel: (DKQ, DV, 1, 8) with GQA > 4
                 const bool sparse_decode = gqa_opt_applies && gqa_ratio > 4 &&
                     ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(K->ne[0], V->ne[0], 1, 8) &&
@@ -784,7 +791,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
 
     // If there are no tensor cores available, use the generic tile kernel:
     if (can_use_vector_kernel) {
-        if (!ggml_is_quantized(K->type) && !ggml_is_quantized(V->type)) {
+        if (!kv_prefer_vec) {
             if (Q->ne[1] == 1) {
                 if (!gqa_opt_applies) {
                     return BEST_FATTN_KERNEL_VEC;
