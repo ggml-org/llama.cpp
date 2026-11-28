@@ -2113,32 +2113,27 @@ bool mtmd_subcontext::encode(mtmd_subctx_encode_params * params) {
         case PROJECTOR_TYPE_HUNYUANVL:
         case PROJECTOR_TYPE_HY_V4_FLASH:
             {
-                // resize position embedding on CPU, using bilinear with sf=(target+0.1)/n_grid
+                // HunyuanVL-style 2D position interpolation, but the source pos
+                // embedding has 128^2+1 rows (extra SigLIP row) - drop the +1 row
+                // and interpolate over the first 16384 positions.
                 GGML_ASSERT(model.position_embeddings != nullptr);
                 ggml_tensor * src_t   = model.position_embeddings;
-                GGML_ASSERT(ggml_is_matrix(src_t) && src_t->type == GGML_TYPE_F32);
                 const int64_t n_embd  = src_t->ne[0];
-                const int64_t n_pos   = src_t->ne[1];            // = n_grid * n_grid
-                const int     n_grid  = (int)std::lround(std::sqrt((double)n_pos));
-                GGML_ASSERT((int64_t)n_grid * n_grid == n_pos);
-                const int     out_w   = pos_w;                    // pw
-                const int     out_h   = pos_h;                    // ph
+                const int64_t n_pos   = 128 * 128;
+                GGML_ASSERT(src_t->ne[1] >= n_pos);
+                const int     n_grid  = 128;
+                const int     out_w   = pos_w;
+                const int     out_h   = pos_h;
 
-                // Pull weight to host.
                 std::vector<float> src(n_embd * n_pos);
-                ggml_backend_tensor_get(src_t, src.data(), 0, ggml_nbytes(src_t));
+                ggml_backend_tensor_get(src_t, src.data(), 0, n_embd * n_pos * 4);
 
-                // Output layout matches ggml_new_tensor_2d(F32, n_embd, out_h*out_w):
-                //   ne[0] = n_embd (fastest), ne[1] = out_h*out_w
-                //   dst[(y*out_w + x) * n_embd + c]
-                std::vector<float> dst((size_t)n_embd * out_h * out_w);
+                std::vector<float> dst((size_t) n_embd * out_h * out_w);
 
                 const float sx = (float)(out_w + 0.1f) / (float)n_grid;
                 const float sy = (float)(out_h + 0.1f) / (float)n_grid;
 
                 for (int y = 0; y < out_h; ++y) {
-                    // Match ggml_compute_forward_upscale_f32 pixel-center
-                    // convention (align_corners=False): src_y = (y+0.5)/sy - 0.5.
                     const float fy = ((float)y + 0.5f) / sy - 0.5f;
                     int y0 = (int)std::floor(fy);
                     int y1 = y0 + 1;
