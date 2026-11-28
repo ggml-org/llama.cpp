@@ -703,6 +703,131 @@ static test_result test_inputless_splits_scheduling(ggml_backend_t gpu, ggml_bac
     return ok;
 }
 
+static bool count_copy_cb(ggml_backend_t, const ggml_tensor *, ggml_tensor *, ggml_cgraph *, void * user_data) {
+    (*(int *) user_data)++;
+    return false;
+}
+
+// host weights read by every pass, like the weights of a looped layer
+// each split must get its own copy: one copy callback per split, and the compute buffer does not grow with the passes
+static test_result test_host_weight_read_by_several_splits(ggml_backend_t gpu, ggml_backend_t cpu, int64_t tensor_len) {
+    const std::vector<ggml_backend_t> backends = { gpu, cpu };
+
+    ggml_init_params params_static = {
+        /*.mem_size   =*/ 2*ggml_tensor_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+
+    ggml_context_ptr ctx_cpu(ggml_init(params_static));
+
+    ggml_tensor * wa = ggml_new_tensor_1d(ctx_cpu.get(), GGML_TYPE_F32, tensor_len);
+    ggml_set_name(wa, "wa");
+
+    ggml_tensor * wb = ggml_new_tensor_1d(ctx_cpu.get(), GGML_TYPE_F32, tensor_len);
+    ggml_set_name(wb, "wb");
+
+    ggml_backend_buffer_ptr buf_cpu(ggml_backend_alloc_ctx_tensors(ctx_cpu.get(), cpu));
+    GGML_ASSERT(buf_cpu != nullptr);
+    ggml_backend_buffer_set_usage(buf_cpu.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+
+    if (ggml_backend_supports_buft(gpu, ggml_backend_buffer_get_type(buf_cpu.get()))) {
+        return skip("%s reads the CPU buffer directly, no copy is made", ggml_backend_name(gpu));
+    }
+
+    ggml_context_ptr ctx_gpu(ggml_init(params_static));
+
+    ggml_tensor * zero_gpu = ggml_new_tensor_1d(ctx_gpu.get(), GGML_TYPE_F32, tensor_len);
+    ggml_set_name(zero_gpu, "zero_gpu");
+
+    ggml_backend_buffer_ptr buf_gpu(ggml_backend_alloc_ctx_tensors(ctx_gpu.get(), gpu));
+    GGML_ASSERT(buf_gpu != nullptr);
+
+    std::vector<float> data(tensor_len);
+
+    std::fill(data.begin(), data.end(), 0.0f);
+    ggml_backend_tensor_set(zero_gpu, data.data(), 0, ggml_nbytes(zero_gpu));
+
+    std::fill(data.begin(), data.end(), 1.0f);
+    ggml_backend_tensor_set(wa, data.data(), 0, ggml_nbytes(wa));
+
+    std::fill(data.begin(), data.end(), 2.0f);
+    ggml_backend_tensor_set(wb, data.data(), 0, ggml_nbytes(wb));
+
+    const size_t graph_size = 64;
+
+    size_t buf_size_one_pass = 0;
+
+    for (int n_pass : { 1, 3 }) {
+        ggml_backend_sched_ptr sched = create_test_scheduler(backends, graph_size, /*use_device_host_buft =*/ false);
+
+        int n_copy_cb = 0;
+        ggml_backend_sched_set_copy_callback(sched.get(), count_copy_cb, &n_copy_cb);
+
+        ggml_init_params params_compute = {
+            /*.mem_size   =*/ (graph_size + 8)*ggml_tensor_overhead() + ggml_graph_overhead_custom(graph_size, false),
+            /*.mem_buffer =*/ nullptr,
+            /*.no_alloc   =*/ true,
+        };
+        ggml_context_ptr ctx_compute(ggml_init(params_compute));
+
+        ggml_cgraph * gf = ggml_new_graph_custom(ctx_compute.get(), graph_size, /*grads =*/ false);
+        std::vector<ggml_tensor *> nodes;
+
+        // start from a computed tensor, so that every pass has the same live tensors
+        ggml_tensor * cur = ggml_add(ctx_compute.get(), zero_gpu, zero_gpu);
+        nodes.push_back(cur);
+        // wa + wa reads the same weight twice in one split, it must still get one copy
+        for (int p = 0; p < n_pass; p++) {
+            ggml_tensor * waa = ggml_add(ctx_compute.get(), wa, wa);
+            nodes.push_back(waa);
+            cur = ggml_add(ctx_compute.get(), cur, waa);
+            nodes.push_back(cur);
+            cur = ggml_add(ctx_compute.get(), cur, wb);
+            nodes.push_back(cur);
+        }
+        ggml_set_name(cur, "out");
+        ggml_set_output(cur);
+        ggml_build_forward_expand(gf, cur);
+
+        ggml_backend_sched_reset(sched.get());
+        for (ggml_tensor * node : nodes) {
+            ggml_backend_sched_set_tensor_backend(sched.get(), node, gpu);
+        }
+
+        if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+            return fail("n_pass = %d: failed to allocate the graph", n_pass);
+        }
+
+        if (ggml_backend_sched_graph_compute(sched.get(), gf) != GGML_STATUS_SUCCESS) {
+            return fail("n_pass = %d: failed to compute the graph", n_pass);
+        }
+
+        const float expected = 4.0f*n_pass;
+        ggml_backend_tensor_get(cur, data.data(), 0, ggml_nbytes(cur));
+        for (int64_t i = 0; i < tensor_len; i++) {
+            if (data[i] != expected) {
+                return fail("n_pass = %d: out[%" PRId64 "] = %f, expected %f", n_pass, i, data[i], expected);
+            }
+        }
+
+        const size_t buf_size = ggml_backend_sched_get_buffer_size(sched.get(), gpu);
+        note("n_pass = %d: %s compute buffer = %zu bytes", n_pass, ggml_backend_name(gpu), buf_size);
+
+        if (n_copy_cb != 2*n_pass) {
+            return fail("n_pass = %d: copy callback ran %d times, expected %d", n_pass, n_copy_cb, 2*n_pass);
+        }
+
+        if (n_pass == 1) {
+            buf_size_one_pass = buf_size;
+        } else if (buf_size > buf_size_one_pass) {
+            return fail("n_pass = %d: compute buffer = %zu bytes, %zu bytes with one pass", n_pass, buf_size, buf_size_one_pass);
+        }
+    }
+
+    return TEST_OK;
+}
+
 // Test that all async backends transmit their activations to the following async backend correctly. No user inputs tested.
 static test_result test_chain_all_backends(const std::vector<ggml_backend_t> & backends, int64_t tensor_len, int32_t sleep_us,
         bool use_device_host_buft) {
@@ -1091,6 +1216,13 @@ int main(int argc, char ** argv) {
                 for (int tensor_len : { 2, 2048, 4096, 8192, 1600}) {
                     case_begin("test_inputless_splits_scheduling      %-8s sleep_us = %6d, tensor_len = %4d", name_backend, sleep_us, tensor_len);
                     case_end(test_inputless_splits_scheduling(backend, cpu, tensor_len, sleep_us, use_device_host_buft));
+                }
+            }
+
+            if (!use_device_host_buft) {
+                for (int tensor_len : { 2, 4096 }) {
+                    case_begin("test_host_weight_read_by_several_splits %-8s tensor_len = %4d", name_backend, tensor_len);
+                    case_end(test_host_weight_read_by_several_splits(backend, cpu, tensor_len));
                 }
             }
 
