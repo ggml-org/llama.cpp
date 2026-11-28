@@ -59,9 +59,9 @@ void rope_norm(const uint i0, const uint i1, const uint i2, const uint i3, rope_
 
     const uint iw = i0 - p.n_offs; // relative idx
 
-    const float theta_base = rope_data_pos[i2] * pow(p.theta_scale, iw/2.0f);
+    const float theta_base = rope_data_pos[p.pos_offset + i2] * pow(p.theta_scale, iw/2.0f);
 
-    const float freq_factor = p.has_ff != 0 ? rope_data_ff[iw/2] : 1.0f;
+    const float freq_factor = p.has_ff != 0 ? rope_data_ff[p.ff_offset + iw/2] : 1.0f;
 
     float cos_theta, sin_theta;
     rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p);
@@ -98,9 +98,9 @@ void rope_neox(const uint i0, const uint i1, const uint i2, const uint i3, rope_
 
     const uint iw = i0 - p.n_offs; // relative idx
 
-    const float theta_base = rope_data_pos[i2] * pow(p.theta_scale, iw/2.0f);
+    const float theta_base = rope_data_pos[p.pos_offset + i2] * pow(p.theta_scale, iw/2.0f);
 
-    const float freq_factor = p.has_ff != 0 ? rope_data_ff[iw/2] : 1.0f;
+    const float freq_factor = p.has_ff != 0 ? rope_data_ff[p.ff_offset + iw/2] : 1.0f;
 
     float cos_theta, sin_theta;
     rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p);
@@ -146,30 +146,30 @@ void rope_multi(const uint i0, const uint i1, const uint i2, const uint i3, rope
     float theta_base = 0.0;
     if (p.is_imrope != 0) {
         if (sector % 3 == 1 && sector < 3 * p.sections[1]) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 1]*pow(p.theta_scale, iw/2.0f);
+            theta_base = rope_data_pos[p.pos_offset + i2 + p.ne02 * 1]*pow(p.theta_scale, iw/2.0f);
         } else if (sector % 3 == 2 && sector < 3 * p.sections[2]) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 2]*pow(p.theta_scale, iw/2.0f);
+            theta_base = rope_data_pos[p.pos_offset + i2 + p.ne02 * 2]*pow(p.theta_scale, iw/2.0f);
         } else if (sector % 3 == 0 && sector < 3 * p.sections[0]) {
-            theta_base = rope_data_pos[i2]*pow(p.theta_scale, iw/2.0f);
+            theta_base = rope_data_pos[p.pos_offset + i2]*pow(p.theta_scale, iw/2.0f);
         } else {
-            theta_base = rope_data_pos[i2 + p.ne02 * 3]*pow(p.theta_scale, iw/2.0f);
+            theta_base = rope_data_pos[p.pos_offset + i2 + p.ne02 * 3]*pow(p.theta_scale, iw/2.0f);
         }
     } else {
         if (sector < p.sections[0]) {
-            theta_base = rope_data_pos[i2]*pow(p.theta_scale, iw/2.0f);
+            theta_base = rope_data_pos[p.pos_offset + i2]*pow(p.theta_scale, iw/2.0f);
         }
         else if (sector >= p.sections[0] && sector < sec_w) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 1]*pow(p.theta_scale, iw/2.0f);
+            theta_base = rope_data_pos[p.pos_offset + i2 + p.ne02 * 1]*pow(p.theta_scale, iw/2.0f);
         }
         else if (sector >= sec_w && sector < sec_w + p.sections[2]) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 2]*pow(p.theta_scale, iw/2.0f);
+            theta_base = rope_data_pos[p.pos_offset + i2 + p.ne02 * 2]*pow(p.theta_scale, iw/2.0f);
         }
         else if (sector >= sec_w + p.sections[2]) {
-            theta_base = rope_data_pos[i2 + p.ne02 * 3]*pow(p.theta_scale, iw/2.0f);
+            theta_base = rope_data_pos[p.pos_offset + i2 + p.ne02 * 3]*pow(p.theta_scale, iw/2.0f);
         }
     }
 
-    const float freq_factor = p.has_ff != 0 ? rope_data_ff[iw/2] : 1.0f;
+    const float freq_factor = p.has_ff != 0 ? rope_data_ff[p.ff_offset + iw/2] : 1.0f;
 
     float cos_theta, sin_theta;
     rope_yarn(theta_base / freq_factor, iw, cos_theta, sin_theta, p);
@@ -197,14 +197,14 @@ void rope_vision(const uint i0, const uint i1, const uint i2, const uint i3, rop
     float theta_base = 0.0;
     if (sector < p.sections[0]) {
         const uint p0 = sector;
-        theta_base = rope_data_pos[i2]*pow(p.theta_scale, p0);
+        theta_base = rope_data_pos[p.pos_offset + i2]*pow(p.theta_scale, p0);
     }
     else if (sector >= p.sections[0] && sector < sec_w) {
         const uint p0 = sector - p.sections[0];
-        theta_base = rope_data_pos[i2 + p.ne02]*pow(p.theta_scale, p0);
+        theta_base = rope_data_pos[p.pos_offset + i2 + p.ne02]*pow(p.theta_scale, p0);
     }
 
-    const float freq_factor = p.has_ff != 0 ? rope_data_ff[i0/2] : 1.0f;
+    const float freq_factor = p.has_ff != 0 ? rope_data_ff[p.ff_offset + i0/2] : 1.0f;
 
     float cos_theta, sin_theta;
     rope_yarn(theta_base / freq_factor, i0, cos_theta, sin_theta, p);

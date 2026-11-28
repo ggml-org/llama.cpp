@@ -12028,7 +12028,7 @@ static vk_op_rope_push_constants ggml_vk_make_rope_constants(const ggml_tensor *
         (uint32_t)src0->ne[2],
         nb01, nb02, nb03,
         nb11, nb12, nb13,
-        0, 0, // a_offset, d_offset filled in by init_pushconst_tensor_offsets
+        0, 0, 0, 0, // tensor offsets filled in by init_pushconst_tensor_offsets
     };
 
     return rope;
@@ -12156,11 +12156,12 @@ void ggml_vk_rms_norm(ggml_backend_vk_context * ctx, vk_context& subctx, const s
 
         tensors[0] = rms->src[0];
         tensors[1] = other_src;
-        tensors[2] = mul;
+        // Binding 2 is unused.
         tensors[3] = rope->src[1]; // pos
         tensors[4] = rope->src[2]; // ff
-        tensors[5] = cgraph->nodes[node_idx + ctx->num_additional_fused_ops]; // dst
-        tensors[6] = do_set_rows ? tensors[5]->src[1] : nullptr;
+        ggml_tensor * rope_dst = cgraph->nodes[node_idx + ctx->num_additional_fused_ops];
+        tensors[5] = rope_dst;
+        tensors[6] = do_set_rows ? rope_dst->src[1] : nullptr;
         const uint32_t set_rows_stride = do_set_rows ? tensors[5]->nb[1] / ggml_type_size(tensors[5]->type) : 0;
 
         vk_op_rms_norm_mul_rope_push_constants pc;
@@ -12200,10 +12201,16 @@ void ggml_vk_rms_norm(ggml_backend_vk_context * ctx, vk_context& subctx, const s
             GGML_ASSERT(buf[i] != nullptr);
         }
 
-        // a_offset is unused (the fused path reads from shared memory), but the rope/set_rows dst can be misaligned.
-        // Round the binding offset down to the storage buffer alignment; the in-element shift goes in pc.rope.d_offset.
-        pc.rope.d_offset = get_misalign_bytes(ctx, tensors[5]) / ggml_type_size(tensors[5]->type);
-        offset[5] &= ~(size_t(ctx->device->properties.limits.minStorageBufferOffsetAlignment) - 1);
+        init_pushconst_tensor_offsets(ctx, pc.bin, src0, src1, nullptr, nullptr, dst);
+        // The RoPE input is in shared memory.
+        init_pushconst_tensor_offsets(ctx, pc.rope, nullptr, tensors[3], tensors[4], tensors[6], rope_dst);
+
+        const size_t alignment_mask = ctx->device->properties.limits.minStorageBufferOffsetAlignment - 1;
+        offset[0] &= ~alignment_mask;
+        offset[1] &= ~alignment_mask;
+        offset[3] &= ~alignment_mask;
+        offset[4] &= ~alignment_mask;
+        offset[5] &= ~alignment_mask;
 
         std::array<uint32_t, 3> elements;
         elements = { (uint32_t)rms->src[0]->ne[1], (uint32_t)rms->src[0]->ne[2], (uint32_t)rms->src[0]->ne[3] };
@@ -15462,6 +15469,11 @@ bool ggml_vk_can_fuse_rms_norm_mul_rope(ggml_backend_vk_context * ctx, const str
         return false;
     }
 
+    const ggml_tensor *weight = mul->src[0] == rms ? mul->src[1] : mul->src[0];
+    if (weight->type != GGML_TYPE_F32 || !ggml_is_contiguous_rows(weight)) {
+        return false;
+    }
+
     // noncontig tensors aren't tested, and don't seem common in practice
     if (!ggml_is_contiguous(rms) ||
         !ggml_is_contiguous(mul) ||
@@ -15469,8 +15481,9 @@ bool ggml_vk_can_fuse_rms_norm_mul_rope(ggml_backend_vk_context * ctx, const str
         return false;
     }
 
-    // only norm/neox are handled in the shader
-    if (mode != GGML_ROPE_TYPE_NEOX && mode != GGML_ROPE_TYPE_NORMAL) {
+    // only norm/neox/mrope/imrope are handled in the shader
+    if (mode != GGML_ROPE_TYPE_NEOX && mode != GGML_ROPE_TYPE_NORMAL &&
+        mode != GGML_ROPE_TYPE_MROPE && mode != GGML_ROPE_TYPE_IMROPE) {
         return false;
     }
 

@@ -38,6 +38,7 @@ layout (binding = 6) readonly buffer R_I {uvec2 rope_data_i[];}; // indices for 
 #define GGML_ROPE_TYPE_NEOX   2
 #define GGML_ROPE_TYPE_MROPE  8
 #define GGML_ROPE_TYPE_VISION 24
+#define GGML_ROPE_TYPE_IMROPE 40
 
 #elif RMS_NORM_ADD_FUSION
 
@@ -194,6 +195,8 @@ void rms_norm(uint num_iters) {
                     rope_neox(t, row, channel, samp, rp);
                 } else if (rp.rope_mode == GGML_ROPE_TYPE_NORMAL) {
                     rope_norm(t, row, channel, samp, rp);
+                } else if (rp.rope_mode == GGML_ROPE_TYPE_MROPE || rp.rope_mode == GGML_ROPE_TYPE_IMROPE) {
+                    rope_multi(t, row, channel, samp, rp);
                 }
             }
 #endif

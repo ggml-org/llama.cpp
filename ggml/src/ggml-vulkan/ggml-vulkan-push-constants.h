@@ -574,6 +574,8 @@ struct vk_op_rope_push_constants {
     uint32_t nb13;
     uint32_t a_offset;
     uint32_t d_offset;
+    uint32_t pos_offset;
+    uint32_t ff_offset;
 };
 
 static_assert(sizeof(vk_op_rope_push_constants) <= 128, "sizeof(vk_op_rope_push_constants) must be <= 128");
@@ -1230,11 +1232,11 @@ template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * 
 }
 
 template <> inline void init_pushconst_tensor_offsets(ggml_backend_vk_context * ctx, vk_op_rope_push_constants &p, const ggml_tensor * src0, const ggml_tensor * src1, const ggml_tensor * src2, const ggml_tensor * src3, ggml_tensor * dst) {
-    p.a_offset = get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type);
-    p.d_offset = get_misalign_bytes(ctx, dst)  / ggml_type_size(dst->type);
+    p.a_offset = src0 ? get_misalign_bytes(ctx, src0) / ggml_type_size(src0->type) : 0;
+    p.d_offset = get_misalign_bytes(ctx, dst) / ggml_type_size(dst->type);
+    p.pos_offset = get_misalign_bytes(ctx, src1) / ggml_type_size(src1->type);
+    p.ff_offset = src2 ? get_misalign_bytes(ctx, src2) / ggml_type_size(src2->type) : 0;
 
-    GGML_UNUSED(src1);
-    GGML_UNUSED(src2);
     GGML_UNUSED(src3);
 }
 
