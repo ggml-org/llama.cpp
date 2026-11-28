@@ -2,6 +2,7 @@
 #include "common.h"
 
 #include <cmath>
+#include <limits>
 #include <map>
 #include <stdexcept>
 #include <string>
@@ -47,15 +48,22 @@ class common_chat_schema_builder {
     }
 
     // a fractional bound is rounded inwards, towards the integers it still admits
+    // a bound outside int64_t does not restrict an int64_t, so it is clamped to the unbounded value
     static int64_t get_bound(const common_json & schema, const std::string & key, const std::string & path, bool round_up) {
         const common_json & value = schema.at(key);
-        if (value.is_number_integer()) {
-            return value.get<int64_t>();
-        }
         if (!value.is_number()) {
             fail(path, key + " must be a number");
         }
         double d = value.get<double>();
+        if (d >= 9223372036854775807.0) {
+            return std::numeric_limits<int64_t>::max();
+        }
+        if (d <= -9223372036854775808.0) {
+            return std::numeric_limits<int64_t>::min();
+        }
+        if (value.is_number_integer()) {
+            return value.get<int64_t>();
+        }
         return (int64_t) (round_up ? std::ceil(d) : std::floor(d));
     }
 
