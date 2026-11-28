@@ -1972,6 +1972,11 @@ class TextModel(ModelBase):
     def set_vocab(self):
         self._set_vocab_gpt2()
 
+    def _set_eog_token_ids(self):
+        eos_ids = gguf.Metadata.load_generation_config(self.dir_model).get("eos_token_id")
+        if isinstance(eos_ids, list):
+            self.gguf_writer.add_eog_token_ids(eos_ids)
+
     def prepare_metadata(self, vocab_only: bool):
         super().prepare_metadata(vocab_only=vocab_only)
 
@@ -2001,6 +2006,7 @@ class TextModel(ModelBase):
         if not self.ple_only:
             logger.info("Set model tokenizer")
             self.set_vocab()
+            self._set_eog_token_ids()
 
     def set_gguf_parameters(self):
         self.gguf_writer.add_block_count(self.block_count)
