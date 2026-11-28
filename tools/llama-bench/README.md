@@ -41,7 +41,7 @@ options:
 test parameters:
   -m, --model <filename>                    (default: models/7B/ggml-model-q4_0.gguf)
   -hf, -hfr, --hf-repo <user>/<model>[:quant] Hugging Face model repository; quant is optional, case-insensitive
-                                            default to Q4_K_M, or falls back to the first file in the repo if Q4_K_M doesn't exist.
+                                            default to Q4_K_M, then Q8_0, or falls back to the first file in the repo if neither exists.
                                             example: ggml-org/GLM-4.7-Flash-GGUF:Q4_K_M
                                             (default: unused)
   -hff, --hf-file <file>                    Hugging Face model file. If specified, it will override the quant in --hf-repo
