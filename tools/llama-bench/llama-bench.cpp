@@ -1323,6 +1323,23 @@ struct cmd_params_instance {
     }
 };
 
+static bool needs_model_fit(const cmd_params_instance & inst) {
+    return inst.fit_target != cmd_params_defaults.fit_params_target[0] ||
+           inst.fit_min_ctx != cmd_params_defaults.fit_params_min_ctx[0];
+}
+
+static bool equal_depth_layout(const cmd_params_instance & a, const cmd_params_instance & b) {
+    // n_batch also sets the chunk size in test_prompt().
+    return !needs_model_fit(a) && !needs_model_fit(b) && a.equal_mparams(b) &&
+           a.type_k == b.type_k && a.type_v == b.type_v && a.flash_attn == b.flash_attn &&
+           a.no_kv_offload == b.no_kv_offload && a.embeddings == b.embeddings &&
+           a.no_op_offload == b.no_op_offload && a.n_batch == b.n_batch && a.n_ubatch == b.n_ubatch;
+}
+
+static bool can_share_depth_state(const cmd_params_instance & a, const cmd_params_instance & b) {
+    return a.n_depth > 0 && a.n_depth == b.n_depth && equal_depth_layout(a, b);
+}
+
 static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_params & params) {
     std::vector<cmd_params_instance> instances;
 
@@ -2163,10 +2180,21 @@ struct sql_printer : public printer {
 };
 
 struct ctx_state {
+    const cmd_params_instance * source = nullptr;
     int depth = 0; // in tokens
 
     std::vector<uint8_t> buf; // the llama_context state buffer
 };
+
+static void clear_cstate(ctx_state & cstate) {
+    cstate.source = nullptr;
+    cstate.depth = 0;
+    std::vector<uint8_t>().swap(cstate.buf);
+}
+
+static bool has_full_depth(llama_memory_t mem, int depth) {
+    return llama_memory_seq_pos_min(mem, 0) == 0 && llama_memory_seq_pos_max(mem, 0) == depth - 1;
+}
 
 static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads) {
     llama_set_n_threads(ctx, n_threads, n_threads);
@@ -2310,7 +2338,7 @@ int llama_bench(int argc, char ** argv) {
         p_err->print_header(params);
     }
 
-    std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
+    const std::vector<cmd_params_instance> params_instances = get_cmd_params_instances(params);
 
     llama_model *               lmodel    = nullptr;
     const cmd_params_instance * prev_inst = nullptr;
@@ -2329,13 +2357,30 @@ int llama_bench(int argc, char ** argv) {
         auto mparams = inst.to_llama_mparams();
         auto cparams = inst.to_llama_cparams();
 
-        bool do_fit = inst.fit_target != cmd_params_defaults.fit_params_target[0] ||
-                      inst.fit_min_ctx != cmd_params_defaults.fit_params_min_ctx[0];
+        const bool do_fit = needs_model_fit(inst);
+        const auto has_later_depth_use = [&](const cmd_params_instance & source) {
+            if (source.n_depth <= 0) {
+                return false;
+            }
+            for (size_t j = params_idx; j < params_count; ++j) {
+                const auto & next = params_instances[j];
+                // A snapshot cannot survive an incompatible layout or a model reload.
+                if (!equal_depth_layout(inst, next)) {
+                    break;
+                }
+                if (can_share_depth_state(source, next)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        const bool need_host_state_later = !do_fit && has_later_depth_use(inst);
 
         std::vector<float> fit_tensor_split(llama_max_devices(), 0.0f);
         std::vector<llama_model_tensor_buft_override> fit_overrides(llama_max_tensor_buft_overrides(), {nullptr, nullptr});
 
         if (do_fit) {
+            clear_cstate(cstate);
             // free the previous model so fit sees full free VRAM
             if (lmodel) {
                 llama_model_free(lmodel);
@@ -2366,6 +2411,7 @@ int llama_bench(int argc, char ** argv) {
 
         // keep the same model between tests when possible
         if (!lmodel || !prev_inst || !inst.equal_mparams(*prev_inst)) {
+            clear_cstate(cstate);
             if (lmodel) {
                 llama_model_free(lmodel);
             }
@@ -2376,6 +2422,11 @@ int llama_bench(int argc, char ** argv) {
                 return 1;
             }
             prev_inst = &inst;
+        }
+
+        if (cstate.source && (!equal_depth_layout(*cstate.source, inst) ||
+                (cstate.depth != inst.n_depth && !has_later_depth_use(*cstate.source)))) {
+            clear_cstate(cstate);
         }
 
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
@@ -2403,7 +2454,8 @@ int llama_bench(int argc, char ** argv) {
             t.n_ubatch = n_tokens_max;
         }
 
-        llama_memory_clear(llama_get_memory(ctx), false);
+        llama_memory_t mem = llama_get_memory(ctx);
+        llama_memory_clear(mem, false);
 
         // cool off before the test
         if (params.delay) {
@@ -2460,25 +2512,48 @@ int llama_bench(int argc, char ** argv) {
             }
         }
 
+        // Reuse only caches that can keep the full prefix while the benchmark appends tokens.
+        bool reuse_depth_in_place = t.n_depth > 0 && mem && llama_memory_can_shift(mem) && llama_get_causal_attn(ctx) &&
+            !llama_model_has_encoder(lmodel) && !llama_model_is_recurrent(lmodel) &&
+            !llama_model_is_hybrid(lmodel) && !llama_model_is_diffusion(lmodel) && llama_model_n_swa(lmodel) == 0;
+
         for (int i = 0; i < params.reps; i++) {
-            llama_memory_clear(llama_get_memory(ctx), false);
+            bool is_cached = false;
+            bool restored_from_host = false;
+            if (reuse_depth_in_place && i > 0) {
+                is_cached = llama_memory_seq_rm(mem, 0, t.n_depth, -1) && has_full_depth(mem, t.n_depth);
+                if (!is_cached) {
+                    fprintf(stderr, "%s: cannot restore depth in place, falling back to a host snapshot\n", __func__);
+                    reuse_depth_in_place = false;
+                }
+            }
+            if (!is_cached) {
+                llama_memory_clear(mem, false);
+            }
 
             if (t.n_depth > 0) {
-                bool is_cached = t.n_depth == cstate.depth;
-
-                if (is_cached) {
-                    // if previously we have computed at this depth, just restore the state
-                    const size_t ret = llama_state_seq_set_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
-                    if (ret == 0) {
-                        // if the old state is incompatible with the current context - reprocess from scratch
-                        is_cached = false;
+                if (!is_cached && mem && cstate.source && t.n_depth == cstate.depth &&
+                        (cstate.source == &inst || can_share_depth_state(*cstate.source, inst))) {
+                    const size_t n_read = llama_state_seq_set_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
+                    restored_from_host = n_read == cstate.buf.size() &&
+                        (!reuse_depth_in_place || has_full_depth(mem, t.n_depth));
+                    is_cached = restored_from_host;
+                    if (!is_cached) {
+                        fprintf(stderr, "%s: cannot restore depth from host snapshot, recomputing prefix\n", __func__);
+                        clear_cstate(cstate);
+                        llama_memory_clear(mem, false);
+                    } else if (!need_host_state_later && (reuse_depth_in_place || i + 1 == params.reps)) {
+                        clear_cstate(cstate);
+                        if (params.progress) {
+                            fprintf(stderr, "llama-bench: benchmark %d/%zu: host snapshot released\n", params_idx, params_count);
+                        }
                     }
                 }
 
                 if (!is_cached) {
                     if (params.progress) {
-                        fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d\n", params_idx, params_count,
-                                i + 1, params.reps);
+                        fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d%s\n", params_idx, params_count,
+                                i + 1, params.reps, reuse_depth_in_place ? " (in-place prefill)" : "");
                     }
                     bool res = test_prompt(ctx, t.n_depth, t.n_batch, t.n_threads);
                     if (!res) {
@@ -2488,15 +2563,26 @@ int llama_bench(int argc, char ** argv) {
                         exit(1);
                     }
 
-                    // store the context state for reuse in later runs
-                    cstate.depth = t.n_depth;
-                    cstate.buf.resize(llama_state_seq_get_size(ctx, 0));
-                    llama_state_seq_get_data(ctx, cstate.buf.data(), cstate.buf.size(), 0);
-                } else {
-                    if (params.progress) {
-                        fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d (cached)\n", params_idx, params_count,
-                                i + 1, params.reps);
+                    const bool save_host_state = need_host_state_later || (!reuse_depth_in_place && i + 1 < params.reps);
+                    if (mem && save_host_state) {
+                        clear_cstate(cstate);
+                        const size_t size = llama_state_seq_get_size(ctx, 0);
+                        cstate.buf.resize(size);
+                        if (size > 0 && llama_state_seq_get_data(ctx, cstate.buf.data(), size, 0) == size) {
+                            cstate.source = &inst;
+                            cstate.depth = t.n_depth;
+                            if (params.progress) {
+                                fprintf(stderr, "llama-bench: benchmark %d/%zu: host snapshot saved (%zu bytes)\n",
+                                        params_idx, params_count, size);
+                            }
+                        } else {
+                            clear_cstate(cstate);
+                            fprintf(stderr, "%s: cannot save depth to host snapshot\n", __func__);
+                        }
                     }
+                } else if (params.progress) {
+                    fprintf(stderr, "llama-bench: benchmark %d/%zu: depth run %d/%d (%s)\n", params_idx, params_count,
+                            i + 1, params.reps, restored_from_host ? "cached" : "reused in place");
                 }
             }
 
