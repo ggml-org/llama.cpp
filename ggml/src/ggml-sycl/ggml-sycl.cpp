@@ -14,6 +14,7 @@
 #include <array>
 #include <assert.h>
 #include <atomic>
+#include <thread>
 #include <cctype>
 #include <cinttypes>
 #include <cstddef>
@@ -747,6 +748,8 @@ struct ggml_backend_sycl_buffer_context {
     optimize_feature opt_feature;
     std::vector<ggml_tensor_extra_gpu *> tensor_extras;
     host_staging staging;
+    // pinned block for get_tensor, one slot per download worker
+    char * download_staging = nullptr;
     bool is_usm_system;
 
     ggml_backend_sycl_buffer_context(int device, void * dev_ptr, queue_ptr stream, bool is_usm_system) :
@@ -772,6 +775,10 @@ struct ggml_backend_sycl_buffer_context {
 
     ~ggml_backend_sycl_buffer_context() {
         drop_host_staging();
+        if (download_staging != nullptr) {
+            sycl::free(download_staging, *stream);
+            download_staging = nullptr;
+        }
         if (dev_ptr != nullptr) {
             ggml_sycl_set_device(device);
             if (is_usm_system)
@@ -980,6 +987,54 @@ catch (sycl::exception const &exc) {
   std::exit(1);
 }
 
+// Reads go through a pinned block, as a copy into pageable memory is slow, and the caller often hands over fresh
+// memory, where the first write to each 4 KiB page takes a page fault. Each worker owns one slot and loops over the
+// chunks: queue the device copy, touch the destination pages while it is in flight, wait, copy out. So the faults
+// overlap the transfer and run on several threads. Returns false when the pinned block is not available.
+static bool ggml_sycl_buffer_download_staged(ggml_backend_sycl_buffer_context * ctx, char * dst, const char * src,
+                                             size_t size) {
+    constexpr size_t min_size = 64*1024;
+    constexpr size_t chunk    = 1*1024*1024;
+    constexpr size_t n_max    = 4;
+    constexpr size_t page     = 4096;
+    if (size < min_size) {
+        return false;
+    }
+    sycl::queue & q = *ctx->stream;
+    if (ctx->download_staging == nullptr) {
+        ctx->download_staging = (char *) sycl::malloc_host(n_max * chunk, q);
+        if (ctx->download_staging == nullptr) {
+            return false;
+        }
+    }
+    const size_t n_chnk = (size + chunk - 1) / chunk;
+    const size_t n_work = std::min(n_max, n_chnk);
+
+    std::atomic<size_t> next{ 0 };
+    auto work = [&](size_t w) {
+        char * stage = ctx->download_staging + w * chunk;
+        for (size_t i = next++; i < n_chnk; i = next++) {
+            const size_t off = i * chunk;
+            const size_t n   = std::min(chunk, size - off);
+            sycl::event  ev  = q.memcpy(stage, src + off, n);
+            for (size_t j = 0; j < n; j += page) {
+                ((volatile char *) dst)[off + j] = 0;
+            }
+            ev.wait_and_throw();
+            memcpy(dst + off, stage, n);
+        }
+    };
+    std::vector<std::thread> workers;
+    for (size_t w = 1; w < n_work; ++w) {
+        workers.emplace_back(work, w);
+    }
+    work(0);
+    for (auto & t : workers) {
+        t.join();
+    }
+    return true;
+}
+
 static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
                                                 const ggml_tensor *tensor,
                                                 void *data, size_t offset,
@@ -992,9 +1047,11 @@ static void ggml_backend_sycl_buffer_get_tensor(ggml_backend_buffer_t buffer,
     ggml_sycl_set_device(ctx->device);
     auto stream = dpct::dev_mgr::instance().get_device(ctx->device).default_queue();
 
-    SYCL_CHECK(CHECK_TRY_ERROR(
-        stream.memcpy(data, (const char *)tensor->data + offset, size)
-            .wait()));
+    if (!ggml_sycl_buffer_download_staged(ctx, (char *) data, (const char *) tensor->data + offset, size)) {
+        SYCL_CHECK(CHECK_TRY_ERROR(
+            stream.memcpy(data, (const char *)tensor->data + offset, size)
+                .wait()));
+    }
 }
 catch (sycl::exception const &exc) {
   std::cerr << exc.what() << "Exception caught at file:" << __FILE__
@@ -6698,8 +6755,62 @@ static int ggml_sycl_try_gdn_cache_fusion(const ggml_cgraph * cgraph, int node_i
         return 0;
     }
 
+    // replay: the kernel reads the pending inputs (src[6..8]) while it writes the cache, so they must not share memory
+    const auto overlaps = [](const ggml_tensor * x, const ggml_tensor * y) {
+        const char * x0 = (const char *) x->data;
+        const char * y0 = (const char *) y->data;
+        return x0 < y0 + ggml_nbytes(y) && y0 < x0 + ggml_nbytes(x);
+    };
+    for (int s = 6; s <= 8; ++s) {
+        if (gdn->src[s] != nullptr && overlaps(gdn->src[s], dst)) {
+            return 0;
+        }
+    }
+
     fused_state_cpy.data        = (float *) dst->data; // rollback group 0 (newest)
     fused_state_cpy.slot_stride = K > 1 ? (int64_t) (dst->nb[2] / sizeof(float)) : 0;
+
+    // replay (not KDA): the next 4 real nodes may store the k, v, g, beta inputs into the pending rows
+    if (gdn->src[6] != nullptr && gdn->src[3]->ne[0] == 1) {
+        float * in_dst[4];
+        int64_t in_nb2[4];
+        int64_t in_nb3[4];
+        int     skip_in = skip;
+        int     n_in    = 0;
+        for (int j = node_idx + skip + 1; n_in < 4 && j < cgraph->n_nodes; ++j) {
+            const ggml_tensor * n = cgraph->nodes[j];
+            if (ggml_sycl_is_view_or_noop(n) || (n->flags & GGML_TENSOR_FLAG_COMPUTE) == 0) {
+                continue;
+            }
+            const ggml_tensor * in = gdn->src[1 + n_in];
+            const ggml_tensor * s0 = n->src[0];
+            const ggml_tensor * d  = n->src[1];
+            // the cpy reads the whole input, directly or through a view of the same data
+            const bool whole_in = s0 == in || (s0 != nullptr && s0->data == in->data && ggml_are_same_shape(s0, in) &&
+                                               ggml_are_same_stride(s0, in));
+            if (n->op != GGML_OP_CPY || (n->flags & GGML_TENSOR_FLAG_OUTPUT) || !whole_in ||
+                d->type != GGML_TYPE_F32 || d->data == nullptr || !ggml_are_same_shape(d, in) ||
+                d->nb[0] != sizeof(float) || d->nb[1] != d->ne[0]*sizeof(float) ||
+                d->nb[2] != d->ne[0]*d->ne[1]*sizeof(float) ||
+                overlaps(d, gdn->src[6]) || overlaps(d, gdn->src[7]) || overlaps(d, gdn->src[8])) {
+                break;
+            }
+            in_dst[n_in] = (float *) d->data;
+            in_nb2[n_in] = d->nb[2] / sizeof(float);
+            in_nb3[n_in] = d->nb[3] / sizeof(float);
+            skip_in      = j - node_idx;
+            ++n_in;
+        }
+        if (n_in == 4) {
+            for (int c = 0; c < 4; ++c) {
+                fused_state_cpy.in_dst[c] = in_dst[c];
+                fused_state_cpy.in_nb2[c] = in_nb2[c];
+                fused_state_cpy.in_nb3[c] = in_nb3[c];
+            }
+            skip = skip_in;
+        }
+    }
+
     return skip;
 }
 
@@ -7759,8 +7870,8 @@ static bool do_ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, cons
         case GGML_OP_OPT_STEP_SGD:
             return true;
         case GGML_OP_GATED_DELTA_NET:
-            // replay of pending tokens (op param 1) is not implemented
-            return ggml_get_op_params_i32(op, 1) == 0;
+            // replay of pending tokens (src[6..9]) always has a single state slot
+            return op->src[6] == nullptr || ggml_get_op_params_i32(op, 0) == 1;
         case GGML_OP_SSM_CONV:
             return op->type == GGML_TYPE_F32 &&
                    op->src[0]->type == GGML_TYPE_F32 &&
