@@ -57,6 +57,7 @@ struct llama_cparams {
 
     size_t moe_cache_size;
     float  moe_cache_cpu_share;
+    const char * moe_router_export_path; // path to shared-memory ring for MoE router top-k expert selections
 
     std::vector<bool> embeddings_layer_inp; // [n_layer()] extract input embeddings for layer
     bool embeddings_layer_inp_dev; // write enabled layer inputs to a device buffer instead of host

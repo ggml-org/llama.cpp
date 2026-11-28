@@ -139,6 +139,9 @@ struct llama_context {
     void set_nextn_layer_offset(int32_t offset);
     void set_causal_attn(bool value);
 
+    // MoE router export
+    void set_moe_router_export_path(const char * path);
+
     void set_adapters_lora(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
 
     bool adapters_lora_are_same(llama_adapter_lora ** adapters, size_t n_adapters, float * scales);
