@@ -11,6 +11,7 @@
 #include <Metal/Metal.h>
 
 #include <stdatomic.h>
+#include <mach/mach.h>
 
 #ifndef TARGET_OS_VISION
 #define TARGET_OS_VISION 0
@@ -1505,6 +1506,16 @@ void ggml_metal_device_get_memory(ggml_metal_device_t dev, size_t * free, size_t
         size_t cur = dev->mtl_device.currentAllocatedSize;
         // it's possible to allocate more than `recommendedMaxWorkingSetSize`
         *free      = *total > cur ? *total - cur : 0;
+
+        // memory is shared with the rest of the system, so do not report more than the OS has available
+        vm_statistics64_data_t vm;
+        mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+        mach_port_t host = mach_host_self();
+        if (host_statistics64(host, HOST_VM_INFO64, (host_info64_t) &vm, &count) == KERN_SUCCESS) {
+            const size_t avail = ((size_t) vm.free_count + vm.inactive_count) * vm_page_size;
+            *free = MIN(*free, avail);
+        }
+        mach_port_deallocate(mach_task_self(), host);
     } else {
         *free = 0;
         *total = 0;
