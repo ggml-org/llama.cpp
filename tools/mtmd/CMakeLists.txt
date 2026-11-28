@@ -7,7 +7,8 @@ set(MTMD_VIDEO ON CACHE BOOL "${MTMD_VIDEO_HELP}")
 
 if (MTMD_VIDEO AND NOT LLAMA_SUBPROCESS)
     message(STATUS "Disabling MTMD_VIDEO because LLAMA_SUBPROCESS is OFF")
-    set(MTMD_VIDEO OFF CACHE BOOL "${MTMD_VIDEO_HELP}" FORCE)
+    # Keep the requested cache value so re-enabling subprocesses restores video.
+    set(MTMD_VIDEO OFF)
 endif()
 
 find_package(Threads REQUIRED)
