@@ -3,6 +3,7 @@
 #include "../utils.h"
 #include "ggml-openvino/ggml-openvino-extra.h"
 
+#include <cstring>
 #include <memory>
 #include <openvino/op/abs.hpp>
 #include <openvino/op/add.hpp>
@@ -18,6 +19,7 @@
 #include <openvino/op/log.hpp>
 #include <openvino/op/multiply.hpp>
 #include <openvino/op/negative.hpp>
+#include <openvino/op/prelu.hpp>
 #include <openvino/op/relu.hpp>
 #include <openvino/op/round.hpp>
 #include <openvino/op/select.hpp>
@@ -58,6 +60,26 @@ OutputVector translate_unary_elu(const NodeContext & context) {
     num_inputs_check(context, 1, 1);
     auto input = process_view_input_new(context, 0);
     auto res = std::make_shared<ov::op::v0::Elu>(input, 1.0);
+    return rename_outputs_with_suffix({res}, context.get_name());
+}
+
+OutputVector translate_leaky_relu(const NodeContext & context) {
+    num_inputs_check(context, 1, 1);
+    auto input = process_view_input_new(context, 0);
+    const auto type = ggml_openvino_is_npu() ? input.get_element_type() : ov::element::f32;
+    ov::Output<ov::Node> x = input;
+    if (type != input.get_element_type()) {
+        x = std::make_shared<ov::op::v0::Convert>(input, type);
+    }
+
+    float negative_slope;
+    std::memcpy(&negative_slope, context.get_output_op_params(), sizeof(negative_slope));
+
+    auto slope = ov::op::v0::Constant::create(ov::element::f32, ov::Shape{}, {negative_slope});
+    ov::Output<ov::Node> res = std::make_shared<ov::op::v0::PRelu>(x, slope);
+    if (type != input.get_element_type()) {
+        res = std::make_shared<ov::op::v0::Convert>(res, input.get_element_type());
+    }
     return rename_outputs_with_suffix({res}, context.get_name());
 }
 

@@ -51,6 +51,7 @@ std::unordered_map<std::string, CreatorFunction> get_supported_ops() {
         {"GGML_OP_RMS_NORM",        op::translate_rms_norm                         },
         {"GGML_OP_NORM",            op::translate_norm                             },
         {"GGML_OP_L2_NORM",         op::translate_l2_norm                          },
+        {"GGML_OP_LEAKY_RELU",      op::translate_leaky_relu                       },
         {"GGML_OP_SUM_ROWS",        op::translate_sum_rows                         },
         {"GGML_OP_ROPE",            op::translate_rope                             },
         {"GGML_OP_SCALE",           op::translate_scale                            },
