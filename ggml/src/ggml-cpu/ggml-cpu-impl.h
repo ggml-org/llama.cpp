@@ -532,8 +532,44 @@ static __m256 __lasx_xvreplfr2vr_s(const float val) {
 // TODO: move to ggml-threading
 void ggml_barrier(struct ggml_threadpool * tp);
 
+// pool for a NUMA device, uses the dissemination barrier (OpenMP builds only)
+struct ggml_threadpool * ggml_threadpool_new_numa(struct ggml_threadpool_params * params);
+
 void ggml_threadpool_chunk_set(struct ggml_threadpool * tp, int value);
 int  ggml_threadpool_chunk_add(struct ggml_threadpool * tp, int value);
+
+// NUMA nodes present, WITHOUT initializing the NUMA state
+uint32_t ggml_numa_node_count(void);
+
+// set the calling thread's affinity through the threadpool helper, which caches the last mask per thread (Linux only)
+bool ggml_cpu_thread_set_affinity(const bool * mask);
+
+// Note: once we move threading into a separate C++ file
+// will use std::hardware_destructive_interference_size instead of hardcoding it here
+// and we'll use C++ attribute syntax.
+#define GGML_CACHE_LINE  64
+
+// Helpers for polling loops
+#if defined(__aarch64__) && ( defined(__clang__) || defined(__GNUC__) )
+static inline void ggml_thread_cpu_relax(void) {
+    __asm__ volatile("yield" ::: "memory");
+}
+#elif defined(__x86_64__)
+static inline void ggml_thread_cpu_relax(void) {
+    _mm_pause();
+}
+#elif defined(__riscv)
+static inline void ggml_thread_cpu_relax(void) {
+    #ifdef __riscv_zihintpause
+        __asm__ __volatile__ ("pause");
+    #else
+        /* Encoding of the pause instruction */
+        __asm__ __volatile__ (".4byte 0x100000F");
+    #endif
+}
+#else
+static inline void ggml_thread_cpu_relax(void) {;}
+#endif
 
 #ifdef __cplusplus
 }
